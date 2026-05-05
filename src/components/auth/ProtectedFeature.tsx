@@ -2,7 +2,6 @@ import { ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AuthModal } from "./AuthModal";
 
@@ -22,8 +21,9 @@ export function ProtectedFeature({
   onUpgrade,
 }: ProtectedFeatureProps) {
   const { t } = useTranslation();
-  const { isAuthenticated, user } = useAuthStore();
+  const { entitlement, isAuthenticated, user } = useAuthStore();
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const hasProEntitlement = entitlement?.tier === "PRO" && entitlement.status === "active";
 
   // Not authenticated
   if (!isAuthenticated || !user) {
@@ -33,16 +33,16 @@ export function ProtectedFeature({
 
     return (
       <>
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              🔒 {t('auth.authenticationRequired')}
-            </CardTitle>
-            <CardDescription>
+        <div className="gaming-panel p-6">
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              {t('auth.authenticationRequired')}
+            </h3>
+            <p className="text-sm text-muted-foreground">
               {t('auth.pleaseLoginToAccess', { feature: featureName })}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+            </p>
+          </div>
+          <div>
             <p className="text-sm text-muted-foreground mb-4">
               {t('auth.createAccountOrLogin')}
             </p>
@@ -53,8 +53,8 @@ export function ProtectedFeature({
             >
               {t('auth.loginSignup')}
             </Button>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
         <AuthModal
           open={authModalOpen}
@@ -66,42 +66,42 @@ export function ProtectedFeature({
   }
 
   // Authenticated but needs PRO
-  if (requiresPro && user.tier !== "PRO") {
+  if (requiresPro && !hasProEntitlement) {
     if (fallback) {
       return <>{fallback}</>;
     }
 
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold flex items-center justify-between">
             <span className="flex items-center gap-2">
-              ⭐ PRO Feature
+              {t('protectedFeature.proFeature')}
             </span>
             <Badge variant="default">PRO</Badge>
-          </CardTitle>
-          <CardDescription>
-            Upgrade to PRO to access {featureName}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            {t('protectedFeature.upgradeDescription', { feature: featureName })}
+          </p>
+        </div>
+        <div>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              This feature is available exclusively for PRO subscribers:
+              {t('protectedFeature.exclusiveDescription')}
             </p>
             <ul className="list-disc list-inside space-y-2 text-sm">
-              <li>Manual clip extraction</li>
-              <li>YouTube Shorts composition (9:16)</li>
-              <li>Custom thumbnail generation</li>
-              <li>Advanced video editing</li>
-              <li>No watermarks on exports</li>
+              <li>{t('protectedFeature.features.manualClipExtraction')}</li>
+              <li>{t('protectedFeature.features.youtubeShortsComposition')}</li>
+              <li>{t('protectedFeature.features.customThumbnail')}</li>
+              <li>{t('protectedFeature.features.advancedVideoEditing')}</li>
+              <li>{t('protectedFeature.features.noWatermarks')}</li>
             </ul>
             <Button onClick={onUpgrade} className="w-full" variant="default">
-              Upgrade to PRO
+              {t('protectedFeature.upgradeToPro')}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     );
   }
 
@@ -111,14 +111,15 @@ export function ProtectedFeature({
 
 // Hook for imperative checks
 export function useFeatureAccess() {
-  const { isAuthenticated, user } = useAuthStore();
+  const { entitlement, isAuthenticated } = useAuthStore();
+  const isPro = entitlement?.tier === "PRO" && entitlement.status === "active";
 
   return {
     isAuthenticated,
-    isPro: user?.tier === "PRO",
+    isPro,
     canAccess: (requiresPro: boolean = false) => {
       if (!isAuthenticated) return false;
-      if (requiresPro && user?.tier !== "PRO") return false;
+      if (requiresPro && !isPro) return false;
       return true;
     },
   };

@@ -2,7 +2,6 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
 import { BackgroundMusic, AudioLevels } from '@/types/autoEdit';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
@@ -10,6 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Separator } from '@/components/ui/separator';
 import { Music, Upload, X, Volume2, AlertCircle } from 'lucide-react';
+import { logger } from '@/lib/logger';
 
 interface AudioMixerProps {
   backgroundMusic: BackgroundMusic | null;
@@ -29,10 +29,10 @@ export function AudioMixer({
   const handleSelectMusic = useCallback(async () => {
     try {
       const selected = await open({
-        title: 'Select Background Music',
+        title: t('editor.audioMixer.selectMusic'),
         multiple: false,
         filters: [{
-          name: 'Audio Files',
+          name: t('editor.audioMixer.audioFiles'),
           extensions: ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma']
         }]
       });
@@ -44,7 +44,7 @@ export function AudioMixer({
         });
       }
     } catch (error) {
-      console.error('Failed to select music file:', error);
+      logger.error('Failed to select music file:', error);
       alert(t('errors.fileSelectionFailed'));
     }
   }, [backgroundMusic, onBackgroundMusicChange, t]);
@@ -63,35 +63,35 @@ export function AudioMixer({
   }, [backgroundMusic, onBackgroundMusicChange]);
 
   return (
-    <Card className="h-full">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+    <div className="gaming-panel p-6 h-full" data-testid="audio-mixer">
+      <div className="mb-4">
+        <h3 className="text-lg font-semibold flex items-center gap-2">
           <Music className="w-5 h-5" />
-          Audio Mixer
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-6">
+          {t('editor.audioMixer.title')}
+        </h3>
+      </div>
+      <div className="space-y-6">
         {/* Background Music Upload */}
         <div className="space-y-3">
-          <Label>Background Music</Label>
+          <Label>{t('editor.audioMixer.backgroundMusic')}</Label>
 
           {!backgroundMusic ? (
             <div className="border-2 border-dashed rounded-lg p-6 text-center">
               <Music className="w-12 h-12 mx-auto mb-3 text-muted-foreground" />
               <p className="text-sm text-muted-foreground mb-3">
-                Add background music to your Short
+                {t('editor.audioMixer.addMusicDesc')}
               </p>
               <Button
                 onClick={handleSelectMusic}
                 variant="outline"
+                data-testid="upload-music-button"
               >
                 <Upload className="w-4 h-4 mr-2" />
-                Upload Music
+                {t('editor.audioMixer.uploadMusic')}
               </Button>
             </div>
           ) : (
-            <Card>
-              <CardContent className="p-4">
+            <div className="bg-black/40 rounded-lg border border-white/5 p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <Music className="w-4 h-4" />
@@ -110,12 +110,13 @@ export function AudioMixer({
 
                 <div className="flex items-center justify-between">
                   <Label htmlFor="loop-music" className="text-sm">
-                    Loop music
+                    {t('editor.audioMixer.loopMusic')}
                   </Label>
                   <Switch
                     id="loop-music"
                     checked={backgroundMusic.loop_music}
                     onCheckedChange={handleLoopToggle}
+                    data-testid="loop-music-toggle"
                   />
                 </div>
 
@@ -123,12 +124,11 @@ export function AudioMixer({
                   <Alert className="mt-3">
                     <AlertCircle className="h-4 w-4" />
                     <AlertDescription className="text-xs">
-                      Music will play once. Video may be longer than the music.
+                      {t('editor.audioMixer.noLoopWarning')}
                     </AlertDescription>
                   </Alert>
                 )}
-              </CardContent>
-            </Card>
+            </div>
           )}
         </div>
 
@@ -140,9 +140,9 @@ export function AudioMixer({
             <Label className="flex items-center justify-between mb-2">
               <span className="flex items-center gap-2">
                 <Volume2 className="w-4 h-4" />
-                Game Audio
+                {t('editor.audioMixer.gameAudio')}
               </span>
-              <span className="text-sm font-mono text-muted-foreground">
+              <span className="text-sm font-mono text-muted-foreground" data-testid="game-audio-value">
                 {audioLevels.game_audio}%
               </span>
             </Label>
@@ -155,10 +155,11 @@ export function AudioMixer({
               max={100}
               step={1}
               className="w-full"
+              data-testid="game-audio-slider"
             />
             <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>Silent</span>
-              <span>Full</span>
+              <span>{t('editor.audioMixer.silent')}</span>
+              <span>{t('editor.audioMixer.full')}</span>
             </div>
           </div>
 
@@ -166,9 +167,9 @@ export function AudioMixer({
             <Label className="flex items-center justify-between mb-2">
               <span className="flex items-center gap-2">
                 <Music className="w-4 h-4" />
-                Background Music
+                {t('editor.audioMixer.backgroundMusic')}
               </span>
-              <span className="text-sm font-mono text-muted-foreground">
+              <span className="text-sm font-mono text-muted-foreground" data-testid="music-audio-value">
                 {audioLevels.background_music}%
               </span>
             </Label>
@@ -182,26 +183,26 @@ export function AudioMixer({
               step={1}
               className="w-full"
               disabled={!backgroundMusic}
+              data-testid="music-audio-slider"
             />
             <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>Silent</span>
-              <span>Full</span>
+              <span>{t('editor.audioMixer.silent')}</span>
+              <span>{t('editor.audioMixer.full')}</span>
             </div>
           </div>
         </div>
 
         {/* Audio Balance Info */}
-        <Alert>
+        <Alert data-testid="audio-tip">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription className="text-xs">
-            <strong>Tip:</strong> Keep game audio at 70% and music at 30% for best balance.
-            The final mix will include fade-in and fade-out effects.
+            {t('editor.audioMixer.mixTip')}
           </AlertDescription>
         </Alert>
 
         {/* Recommended Presets */}
         <div className="space-y-2">
-          <Label className="text-xs">Quick Presets</Label>
+          <Label className="text-xs">{t('editor.audioMixer.quickPresets')}</Label>
           <div className="grid grid-cols-2 gap-2">
             <Button
               variant="outline"
@@ -209,8 +210,9 @@ export function AudioMixer({
               onClick={() =>
                 onAudioLevelsChange({ game_audio: 100, background_music: 0 })
               }
+              data-testid="preset-game-only"
             >
-              Game Only
+              {t('editor.audioMixer.presetGameOnly')}
             </Button>
             <Button
               variant="outline"
@@ -218,8 +220,9 @@ export function AudioMixer({
               onClick={() =>
                 onAudioLevelsChange({ game_audio: 70, background_music: 30 })
               }
+              data-testid="preset-balanced"
             >
-              Balanced
+              {t('editor.audioMixer.presetBalanced')}
             </Button>
             <Button
               variant="outline"
@@ -227,8 +230,9 @@ export function AudioMixer({
               onClick={() =>
                 onAudioLevelsChange({ game_audio: 40, background_music: 60 })
               }
+              data-testid="preset-music-focus"
             >
-              Music Focus
+              {t('editor.audioMixer.presetMusicFocus')}
             </Button>
             <Button
               variant="outline"
@@ -236,31 +240,34 @@ export function AudioMixer({
               onClick={() =>
                 onAudioLevelsChange({ game_audio: 0, background_music: 100 })
               }
+              data-testid="preset-music-only"
             >
-              Music Only
+              {t('editor.audioMixer.presetMusicOnly')}
             </Button>
           </div>
         </div>
 
         {/* Final mix visualization */}
         <div className="space-y-2">
-          <Label className="text-xs">Mix Preview</Label>
-          <div className="flex h-8 rounded overflow-hidden border">
+          <Label className="text-xs">{t('editor.audioMixer.mixPreview')}</Label>
+          <div className="flex h-8 rounded overflow-hidden border" data-testid="mix-preview">
             <div
               className="bg-blue-500 flex items-center justify-center text-xs font-medium text-white"
               style={{ width: `${audioLevels.game_audio}%` }}
+              data-testid="mix-preview-game"
             >
-              {audioLevels.game_audio > 15 && 'Game'}
+              {audioLevels.game_audio > 15 && t('editor.audioMixer.game')}
             </div>
             <div
               className="bg-purple-500 flex items-center justify-center text-xs font-medium text-white"
               style={{ width: `${audioLevels.background_music}%` }}
+              data-testid="mix-preview-music"
             >
-              {audioLevels.background_music > 15 && 'Music'}
+              {audioLevels.background_music > 15 && t('editor.audioMixer.music')}
             </div>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

@@ -1,7 +1,7 @@
 pub mod commands;
 pub mod models;
-pub mod storage;
 pub mod platform_config;
+pub mod storage;
 
 // No re-exports needed - types used directly where needed
 

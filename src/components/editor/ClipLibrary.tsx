@@ -33,7 +33,7 @@ export function ClipLibrary() {
       <div className="flex-1 overflow-y-auto p-4">
         <div className="grid grid-cols-1 gap-4">
           {availableClips.map((clip) => (
-            <ClipCard key={clip.clip_id} clip={clip} />
+            <ClipCard key={clip.file_path} clip={clip} />
           ))}
         </div>
       </div>

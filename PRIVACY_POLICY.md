@@ -3,6 +3,8 @@
 **Last Updated**: January 4, 2025
 **Effective Date**: January 4, 2025
 
+> **Readiness qualification:** This policy is a draft privacy baseline for implemented and planned flows. Payment/Toss billing, paid access, and subscription enforcement are deferred and should not be treated as active collection or processing until non-payment field gates and separate payment QA pass. Broad local-processing and support claims require current evidence for the tested build.
+
 ## 1. Introduction
 
 LoLShorts ("we", "our", or "us") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our desktop application.
@@ -19,11 +21,9 @@ LoLShorts ("we", "our", or "us") is committed to protecting your privacy. This P
 - Password (encrypted, we never see your plain-text password)
 - Subscription tier (FREE or PRO)
 
-**Payment Information**
-- Processed by Supabase/Stripe (we do not store credit card numbers)
-- Billing address
-- Payment history
-- Subscription status
+**Payment Information (Deferred)**
+- Live payment processing is not active in the current non-payment readiness build
+- Future billing address, payment history, and subscription status handling require separate payment QA and policy updates before launch
 
 ### 2.2 Information Collected Automatically
 
@@ -58,7 +58,7 @@ LoLShorts ("we", "our", or "us") is committed to protecting your privacy. This P
 
 ### 3.1 Service Delivery
 - Authenticate your account and manage sessions
-- Process subscription payments and upgrades
+- Process subscription payments and upgrades only after deferred payment work is separately approved
 - Enable video recording and processing features
 - Detect League of Legends game events
 - Store application settings and preferences
@@ -72,7 +72,7 @@ LoLShorts ("we", "our", or "us") is committed to protecting your privacy. This P
 ### 3.3 Communication
 - Send important service announcements
 - Respond to support inquiries
-- Send subscription renewal reminders
+- Send subscription renewal reminders only if a future paid subscription system is approved
 - Notify about major updates or security issues
 
 ### 3.4 Security and Compliance
@@ -108,11 +108,10 @@ We share information with trusted third-party service providers who assist us in
 - Location: United States
 - Privacy Policy: https://supabase.com/privacy
 
-**Stripe (Payment Processing)**
-- Purpose: Process subscription payments
-- Data Shared: Payment information, billing address
-- Location: United States
-- Privacy Policy: https://stripe.com/privacy
+**Payment Processor (Future/Deferred)**
+- Purpose: Future subscription payments only after payment readiness approval
+- Data Shared: None in the current non-payment readiness build
+- Location and privacy policy: To be documented before any live payment launch
 
 **FFmpeg (Local Processing)**
 - Purpose: Video processing (runs locally on your device)
@@ -321,7 +320,7 @@ BY USING LOLSHORTS, YOU ACKNOWLEDGE THAT YOU HAVE READ AND UNDERSTOOD THIS PRIVA
 - Provide the service you signed up for
 - Improve features based on usage
 - Send important updates
-- Process payments
+- Process payments only after deferred payment readiness is separately approved
 
 **Your rights**:
 - Access, correct, or delete your data

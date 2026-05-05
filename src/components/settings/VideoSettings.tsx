@@ -8,9 +8,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Info } from "lucide-react";
+import { logger } from '@/lib/logger';
 
 type Resolution = "r1920x1080" | "r2560x1440" | "r3840x2160";
 type FrameRate = "fps30" | "fps60" | "fps120" | "fps144";
@@ -62,7 +62,7 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
         setIsDetecting(false);
       })
       .catch((error) => {
-        console.error("Failed to detect encoders:", error);
+        logger.error("Failed to detect encoders:", error);
         setIsDetecting(false);
       });
   }, []);
@@ -155,14 +155,14 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
   return (
     <div className="space-y-6">
       {/* Resolution */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.videoSettings.resolution.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.videoSettings.resolution.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.videoSettings.resolution.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
+        </div>
+        <div>
           <div className="flex items-center gap-4">
             <div className="flex-1">
               <Select
@@ -189,18 +189,18 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
               <Badge variant="secondary">{t('settings.recordingConfig.videoSettings.resolution.recommended')}</Badge>
             )}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Frame Rate */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.videoSettings.frameRate.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.videoSettings.frameRate.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.videoSettings.frameRate.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
+        </div>
+        <div>
           <div className="flex items-center gap-4">
             <div className="flex-1">
               <Select
@@ -222,18 +222,18 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
               <Badge variant="secondary">{t('settings.recordingConfig.videoSettings.frameRate.recommended')}</Badge>
             )}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Bitrate */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.videoSettings.bitratePreset.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.videoSettings.bitratePreset.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.videoSettings.bitratePreset.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+          </p>
+        </div>
+        <div className="space-y-3">
           <Select
             value={settings.bitrate_preset}
             onValueChange={(value) => updateSetting("bitrate_preset", value as BitratePreset)}
@@ -253,18 +253,18 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
             <Info className="w-4 h-4" />
             <span>{t('settings.recordingConfig.videoSettings.bitratePreset.estimatedSize')}: {getEstimatedSize()}</span>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Codec */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.videoSettings.videoCodec.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.videoSettings.videoCodec.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.videoSettings.videoCodec.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
+        </div>
+        <div>
           <div className="flex items-center gap-4">
             <div className="flex-1">
               <Select
@@ -285,18 +285,18 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
               <Badge variant="secondary">{t('settings.recordingConfig.videoSettings.videoCodec.recommended')}</Badge>
             )}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Encoder */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.videoSettings.encoderPreference.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.videoSettings.encoderPreference.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.videoSettings.encoderPreference.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
+        </div>
+        <div>
           <div className="space-y-3">
             <div className="flex items-center gap-4">
               <div className="flex-1">
@@ -372,12 +372,12 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
               </div>
             )}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Info Card */}
-      <Card className="bg-muted/50">
-        <CardContent className="pt-6">
+      <div className="gaming-panel p-6">
+        <div>
           <div className="space-y-2 text-sm">
             <p className="font-semibold">{t('settings.recordingConfig.videoSettings.currentConfiguration.title')}</p>
             <p className="text-muted-foreground">
@@ -396,8 +396,8 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
               • {t('settings.recordingConfig.videoSettings.currentConfiguration.estimatedSize')}: {getEstimatedSize()}
             </p>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

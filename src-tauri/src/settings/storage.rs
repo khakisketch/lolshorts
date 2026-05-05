@@ -1,9 +1,21 @@
 use super::models::RecordingSettings;
 use super::platform_config::{PlatformConfig, PlatformConfigError};
-use std::fs;
-use std::path::PathBuf;
-use thiserror::Error;
 use serde_json;
+use std::fs;
+use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+/// Write data atomically: write to .tmp, then rename to final path.
+/// Prevents corruption if process crashes mid-write.
+pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let tmp_path = path.with_extension(format!(
+        "{}.tmp",
+        path.extension().unwrap_or_default().to_string_lossy()
+    ));
+    fs::write(&tmp_path, data)?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum SettingsError {
@@ -29,23 +41,66 @@ impl RecordingSettings {
     /// Load settings from file
     ///
     /// If the settings file doesn't exist, returns default settings.
+    /// On parse failure, attempts to load from .bak file before falling back to defaults.
     /// Location: %APPDATA%/Roaming/LoLShorts/settings.json (Windows)
     pub fn load() -> Result<Self> {
         let settings_path = Self::get_settings_path()?;
 
         if settings_path.exists() {
-            let json = fs::read_to_string(&settings_path)?;
-            let settings = serde_json::from_str(&json)?;
-            tracing::info!("Loaded settings from: {:?}", settings_path);
-            Ok(settings)
+            match fs::read_to_string(&settings_path)
+                .map_err(SettingsError::from)
+                .and_then(|json| serde_json::from_str::<Self>(&json).map_err(SettingsError::from))
+            {
+                Ok(settings) => {
+                    tracing::info!("Loaded settings from: {:?}", settings_path);
+                    if let Err(e) = settings.validate() {
+                        tracing::error!("Settings validation failed: {}. Using defaults.", e);
+                        return Ok(Self::default());
+                    }
+                    return Ok(settings);
+                }
+                Err(e) => {
+                    tracing::warn!("Settings load failed: {}. Trying backup.", e);
+                    let backup_path = settings_path.with_extension("json.bak");
+                    if backup_path.exists() {
+                        match fs::read_to_string(&backup_path)
+                            .map_err(SettingsError::from)
+                            .and_then(|json| {
+                                serde_json::from_str::<Self>(&json).map_err(SettingsError::from)
+                            }) {
+                            Ok(settings) => {
+                                tracing::warn!("Loaded settings from backup: {:?}", backup_path);
+                                if let Err(e2) = settings.validate() {
+                                    tracing::error!(
+                                        "Backup settings validation failed: {}. Using defaults.",
+                                        e2
+                                    );
+                                    return Ok(Self::default());
+                                }
+                                return Ok(settings);
+                            }
+                            Err(e2) => {
+                                tracing::warn!(
+                                    "Backup settings also failed: {}. Using defaults.",
+                                    e2
+                                );
+                            }
+                        }
+                    } else {
+                        tracing::warn!("No backup settings file found. Using defaults.");
+                    }
+                }
+            }
         } else {
             tracing::info!("Settings file not found, using defaults");
-            Ok(Self::default())
         }
+
+        Ok(Self::default())
     }
 
     /// Save settings to file
     ///
+    /// Creates a .bak backup of the existing file before writing.
     /// Creates the config directory if it doesn't exist.
     pub fn save(&self) -> Result<()> {
         let settings_path = Self::get_settings_path()?;
@@ -55,8 +110,16 @@ impl RecordingSettings {
             fs::create_dir_all(parent)?;
         }
 
+        // Backup existing settings before overwriting
+        if settings_path.exists() {
+            let backup_path = settings_path.with_extension("json.bak");
+            if let Err(e) = fs::copy(&settings_path, &backup_path) {
+                tracing::warn!("Failed to create settings backup: {}", e);
+            }
+        }
+
         let json = serde_json::to_string_pretty(self)?;
-        fs::write(&settings_path, json)?;
+        atomic_write(&settings_path, json.as_bytes())?;
 
         tracing::info!("Saved settings to: {:?}", settings_path);
         Ok(())
@@ -104,7 +167,10 @@ impl RecordingSettings {
         // Save optimized settings
         settings.save()?;
 
-        tracing::info!("Settings loaded and optimized for platform: {:?}", platform_config.platform);
+        tracing::info!(
+            "Settings loaded and optimized for platform: {:?}",
+            platform_config.platform
+        );
         Ok(settings)
     }
 
@@ -138,20 +204,20 @@ impl RecordingSettings {
     /// Check if video settings have been customized by user
     fn is_customized_video(&self) -> bool {
         let default = RecordingSettings::default();
-        self.video.resolution != default.video.resolution ||
-        self.video.frame_rate != default.video.frame_rate ||
-        self.video.bitrate_preset != default.video.bitrate_preset ||
-        self.video.codec != default.video.codec ||
-        self.video.encoder != default.video.encoder
+        self.video.resolution != default.video.resolution
+            || self.video.frame_rate != default.video.frame_rate
+            || self.video.bitrate_preset != default.video.bitrate_preset
+            || self.video.codec != default.video.codec
+            || self.video.encoder != default.video.encoder
     }
 
     /// Check if audio settings have been customized by user
     fn is_customized_audio(&self) -> bool {
         let default = RecordingSettings::default();
-        self.audio.record_microphone != default.audio.record_microphone ||
-        self.audio.record_system_audio != default.audio.record_system_audio ||
-        self.audio.sample_rate != default.audio.sample_rate ||
-        self.audio.bitrate != default.audio.bitrate
+        self.audio.record_microphone != default.audio.record_microphone
+            || self.audio.record_system_audio != default.audio.record_system_audio
+            || self.audio.sample_rate != default.audio.sample_rate
+            || self.audio.bitrate != default.audio.bitrate
     }
 
     /// Get migration status for settings version upgrades
@@ -249,7 +315,7 @@ impl RecordingSettings {
         // Validate imported settings
         if settings.event_filter.min_priority == 0 || settings.event_filter.min_priority > 5 {
             return Err(SettingsError::Validation(
-                "Invalid event filter priority range".to_string()
+                "Invalid event filter priority range".to_string(),
             ));
         }
 
@@ -262,40 +328,42 @@ impl RecordingSettings {
         // Validate event filter settings
         if self.event_filter.min_priority == 0 || self.event_filter.min_priority > 5 {
             return Err(SettingsError::Validation(
-                "Event filter priority must be between 1 and 5".to_string()
+                "Event filter priority must be between 1 and 5".to_string(),
             ));
         }
 
         // Validate audio volume settings
         if self.audio.microphone_volume > 200 {
             return Err(SettingsError::Validation(
-                "Microphone volume cannot exceed 200%".to_string()
+                "Microphone volume cannot exceed 200%".to_string(),
             ));
         }
 
         if self.audio.system_audio_volume > 200 {
             return Err(SettingsError::Validation(
-                "System audio volume cannot exceed 200%".to_string()
+                "System audio volume cannot exceed 200%".to_string(),
             ));
         }
 
         // Validate clip timing settings
         if self.clip_timing.default_pre_duration > 60 {
             return Err(SettingsError::Validation(
-                "Pre-event duration cannot exceed 60 seconds".to_string()
+                "Pre-event duration cannot exceed 60 seconds".to_string(),
             ));
         }
 
         if self.clip_timing.default_post_duration > 60 {
             return Err(SettingsError::Validation(
-                "Post-event duration cannot exceed 60 seconds".to_string()
+                "Post-event duration cannot exceed 60 seconds".to_string(),
             ));
         }
 
         // Validate merge threshold
-        if self.clip_timing.merge_time_threshold < 1.0 || self.clip_timing.merge_time_threshold > 300.0 {
+        if self.clip_timing.merge_time_threshold < 1.0
+            || self.clip_timing.merge_time_threshold > 300.0
+        {
             return Err(SettingsError::Validation(
-                "Event merge threshold must be between 1 and 300 seconds".to_string()
+                "Event merge threshold must be between 1 and 300 seconds".to_string(),
             ));
         }
 
@@ -334,6 +402,7 @@ impl RecordingSettings {
 mod tests {
     use super::*;
     use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_settings_path() {
@@ -419,5 +488,32 @@ mod tests {
         if path.exists() {
             fs::remove_file(path).ok();
         }
+    }
+
+    #[test]
+    fn test_atomic_write_creates_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        atomic_write(&path, b"{}").unwrap();
+        assert!(path.exists());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
+    }
+
+    #[test]
+    fn test_atomic_write_no_tmp_file_remains() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        atomic_write(&path, b"{}").unwrap();
+        let tmp_path = path.with_extension("json.tmp");
+        assert!(!tmp_path.exists());
+    }
+
+    #[test]
+    fn test_atomic_write_overwrites_existing() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "old").unwrap();
+        atomic_write(&path, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
     }
 }

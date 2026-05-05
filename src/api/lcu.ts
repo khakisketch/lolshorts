@@ -33,7 +33,7 @@ export interface GameInfo {
 export interface UnifiedGameStatus {
   lcu_connected: boolean;
   in_game: boolean;
-  game_mode: 'Live' | { Replay: string | null };
+  game_mode: 'Live' | 'TFT' | { Replay: string | null };
   summoner_name: string | null;
   champion_name: string | null;
   game_time: number | null;
@@ -55,16 +55,16 @@ export const lcuApi = {
   getUnifiedGameStatus: () => cmd<UnifiedGameStatus>('get_unified_game_status'),
 
   listMatchHistory: (beginIndex: number = 0, endIndex: number = 20) =>
-    cmd<MatchInfo[]>('list_match_history', { beginIndex, endIndex }),
+    cmd<MatchInfo[]>('list_match_history', { begin_index: beginIndex, end_index: endIndex }),
 
   downloadReplay: (gameId: number) =>
-    cmd<void>('download_replay', { gameId }),
+    cmd<void>('download_replay', { game_id: gameId }),
 
   getReplayStatus: (gameId: number) =>
-    cmd<string>('get_replay_status', { gameId }),
+    cmd<string>('get_replay_status', { game_id: gameId }),
 
   launchReplay: (gameId: number) =>
-    cmd<void>('launch_replay', { gameId }),
+    cmd<void>('launch_replay', { game_id: gameId }),
 
   getGameParticipants: () =>
     cmd<PlayerInfo[]>('get_game_participants'),

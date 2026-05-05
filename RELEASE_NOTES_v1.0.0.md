@@ -1,14 +1,16 @@
 # Release Notes: LoLShorts v1.0.0
 
 **Release Date**: 2025-11-05
-**Build Status**: ✅ Production Ready
+**Build Status**: Historical build candidate; current field readiness is not established by this document
 **Platform**: Windows 10+ (x64)
+
+> **Readiness qualification:** These historical release notes are retained for context. They do not prove current real-world LoL/replay behavior, YouTube account upload behavior, GPU/audio coverage, installer/updater validation, support readiness, payment readiness, or subscription enforcement readiness. Payment, Toss, paid access, and PRO billing remain deferred until non-payment field gates pass and separate payment QA is approved.
 
 ---
 
 ## 🎉 What's New in v1.0.0
 
-This is the **first stable production release** of LoLShorts - an automatic League of Legends gameplay recording and editing application optimized for YouTube Shorts.
+This was documented as a historical release candidate for LoLShorts, an automatic League of Legends gameplay recording and editing application optimized for YouTube Shorts. Current public-readiness claims require field evidence outside these notes.
 
 ### Key Features
 
@@ -179,8 +181,8 @@ Choose one of the following installers:
 |-----------|--------|---------|
 | **Rust Backend** | ✅ 0 Errors | 46 non-critical warnings |
 | **TypeScript Frontend** | ✅ Success | Strict mode compilation |
-| **Production Build** | ✅ Success | 39.23 seconds |
-| **Installers** | ✅ Generated | NSIS + MSI |
+| **Production Build** | ✅ Historical build success | 39.23 seconds; not field readiness |
+| **Installers** | ✅ Generated | NSIS + MSI artifacts; installation/update readiness still needs field validation |
 
 ### Performance Targets
 
@@ -195,14 +197,14 @@ Choose one of the following installers:
 | Category | Score | Status |
 |----------|-------|--------|
 | Code Quality | 95% | ✅ Excellent |
-| Build System | 100% | ✅ Perfect |
-| Features | 100% | ✅ Complete |
+| Build System | Historical full-score claim | Build evidence only; not field readiness |
+| Features | Historical full-score claim | Implementation evidence only; not field readiness |
 | Testing | 85% | ✅ Good |
 | Documentation | 95% | ✅ Excellent |
 | Security | 90% | ✅ Very Good |
 | Performance | 95% | ✅ Excellent |
 
-**Overall Production Readiness**: 94% ✅
+**Overall readiness note**: 94% was a historical quality score, not current field-readiness evidence.
 
 ---
 
@@ -210,8 +212,8 @@ Choose one of the following installers:
 
 ### Privacy First Design
 
-- **100% Local Processing**: All video processing happens on your computer
-- **No Data Collection**: LoLShorts does not collect or transmit user data
+- **Local video-processing intent**: Video processing is designed to happen on your computer; account flows, YouTube uploads, diagnostics/support submissions, and future payment paths may send selected data outside the device.
+- **No broad data-collection claim without evidence**: Current privacy claims must be limited to verified flows.
 - **No Telemetry**: No analytics or tracking
 - **Open Source**: Code is publicly auditable on GitHub
 
@@ -288,7 +290,8 @@ For more help, see [Troubleshooting Guide](docs/TROUBLESHOOTING.md) or [open an 
 ### Version 1.1.0 (Q1 2025)
 - macOS support (Boot Camp)
 - Cloud storage integration (optional)
-- Direct upload to YouTube/TikTok
+- YouTube upload policy and gating require current field evidence; do not treat this roadmap item as active paid enforcement
+- TikTok direct upload deferred in favor of export-first sharing
 - Multi-language support (Korean, Chinese, Japanese)
 
 ### Version 1.2.0 (Q2 2025)

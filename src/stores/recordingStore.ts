@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { recordingApi, RecordingStatus as ApiRecordingStatus, isRecording as apiIsRecording } from '../api/recording';
-import { RecordingSettings } from '@/types';
+import { RecordingSettings, RecordingReadiness } from '@/types';
 
 export interface RecordingStatus {
   isRecording: boolean;
@@ -14,8 +14,10 @@ export interface RecordingStatus {
 export interface RecordingStore {
   // State
   status: RecordingStatus;
+  readiness: RecordingReadiness | null;
   settings: RecordingSettings;
   error: string | null;
+  _pollInterval: number | null;
 
   // Actions
   startRecording: () => Promise<void>;
@@ -28,8 +30,6 @@ export interface RecordingStore {
   startStatusPolling: () => void;
   stopStatusPolling: () => void;
 }
-
-let pollInterval: number | null = null;
 
 // Default settings matching Rust backend defaults
 const DEFAULT_SETTINGS: RecordingSettings = {
@@ -92,10 +92,18 @@ const DEFAULT_SETTINGS: RecordingSettings = {
     toggle_recording: "F8",
     delete_last_clip: "F10"
   },
+  storage: {
+    auto_delete_enabled: false,
+    auto_delete_days: 30,
+    max_storage_gb: 50,
+    delete_exported_clips: false
+  },
   auto_start_with_league: true,
   minimize_to_tray: true,
   show_notifications: true,
-  show_replay_popup: true
+  show_replay_popup: true,
+  crash_reporting_enabled: false,
+  overlay_enabled: true
 };
 
 export const useRecordingStore = create<RecordingStore>((set, get) => ({
@@ -107,8 +115,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
     lcuConnected: false,
     state: 'idle',
   },
+  readiness: null,
   settings: DEFAULT_SETTINGS,
   error: null,
+  _pollInterval: null,
 
   startRecording: async () => {
     try {
@@ -157,15 +167,21 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
         lcuConnected: false,
         state: 'idle',
       },
+      readiness: null,
       error: null
     });
   },
 
   syncStatus: async () => {
     try {
-      const backendStatus = await recordingApi.getStatus();
+      const [backendStatus, readiness] = await Promise.all([
+        recordingApi.getStatus(),
+        recordingApi.getRecordingReadiness(),
+      ]);
 
       set((state) => ({
+        error: null,
+        readiness,
         status: {
           ...state.status,
           isRecording: apiIsRecording(backendStatus),
@@ -174,24 +190,34 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
           duration: backendStatus.buffer_duration_secs,
         }
       }));
-    } catch (_e) {
-      // Silent fail on sync to avoid spamming errors if backend is down temporarily
-      // console.debug('Failed to sync status:', e);
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : 'Failed to sync recording status';
+      set((state) => ({
+        error: errorMessage,
+        status: {
+          ...state.status,
+          isRecording: false,
+          state: 'error',
+        }
+      }));
     }
   },
 
+
   startStatusPolling: () => {
-    if (pollInterval) return;
+    if (get()._pollInterval) return;
     get().syncStatus(); // Initial sync
-    pollInterval = window.setInterval(() => {
+    const id = window.setInterval(() => {
       get().syncStatus();
     }, 1000);
+    set({ _pollInterval: id });
   },
 
   stopStatusPolling: () => {
-    if (pollInterval) {
-      clearInterval(pollInterval);
-      pollInterval = null;
+    const id = get()._pollInterval;
+    if (id) {
+      clearInterval(id);
+      set({ _pollInterval: null });
     }
   }
 }));

@@ -138,7 +138,8 @@
     "timeline": {
       "title": "Временная шкала",
       "addClip": "Добавить клип",
-      "removeClip": "Удалить клип"
+      "removeClip": "Удалить клип",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "Обрезать",
@@ -152,7 +153,8 @@
       "title": "Экспорт",
       "quality": "Качество",
       "format": "Формат",
-      "exportVideo": "Экспортировать видео"
+      "exportVideo": "Экспортировать видео",
+      "noClipSourcePath": "No clip source path available"
     },
     "selectGameTitle": "Select a Game to Edit",
     "selectGameDescription": "Choose a game from your recorded sessions to start editing",
@@ -234,6 +236,18 @@
       "upload": "Upload",
       "history": "History",
       "account": "Account"
+    },
+    "schedule": {
+      "scheduleButton": "Запланировать",
+      "confirmSchedule": "Подтвердить расписание",
+      "publishAt": "Опубликовать в",
+      "publishAtHint": "Оставьте пустым для добавления в очередь без времени публикации. YouTube требует не менее 15 минут в будущем.",
+      "scheduleSuccessful": "Загрузка успешно запланирована!",
+      "scheduleFailed": "Не удалось запланировать загрузку",
+      "queueTitle": "Очередь загрузки",
+      "scheduledFor": "Запланировано на",
+      "queued": "В очереди",
+      "cancelScheduled": "Отменить запланированную загрузку"
     }
   },
   "settings": {

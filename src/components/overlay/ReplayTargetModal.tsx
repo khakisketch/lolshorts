@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { lcuApi, PlayerInfo } from '@/api/lcu';
+import { recordingApi, ReplayTargetReadiness } from '@/api/recording';
 import { cmd } from '@/api/client';
 import { useToast } from '@/components/ui/use-toast';
+import { logger } from '@/lib/logger';
 
-// Create a recordingApi wrapper if not exists, or direct call for now
 const setRecordingTarget = (summonerName: string | null) =>
   cmd<void>('set_recording_target', { summonerName });
 
@@ -15,89 +16,151 @@ interface ReplayTargetModalProps {
 }
 
 export function ReplayTargetModal({ isOpen, onClose }: ReplayTargetModalProps) {
-  const [players, setPlayers] = useState<PlayerInfo[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { t } = useTranslation();
+  const [readiness, setReadiness] = useState<ReplayTargetReadiness | null>(null);
   const { toast } = useToast();
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingActiveRef = useRef(false);
+  const pollReadinessRef = useRef<(() => Promise<void>) | null>(null);
+
+  const clearPollTimer = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  const pollReadiness = useCallback(async () => {
+    if (!pollingActiveRef.current) return;
+    clearPollTimer();
+
+    try {
+      const result = await recordingApi.getReplayTargetReadiness();
+      if (!pollingActiveRef.current) return;
+
+      setReadiness(result);
+
+      if (result.state === 'loading' || result.state === 'unavailable') {
+        pollTimerRef.current = setTimeout(() => {
+          void pollReadinessRef.current?.();
+        }, 2000);
+      }
+    } catch (error) {
+      if (!pollingActiveRef.current) return;
+      logger.error("Failed to poll replay target readiness:", error);
+      setReadiness({
+        state: 'failed',
+        candidates: [],
+        selectedTarget: null,
+        error: 'replayTarget.error',
+        retryable: true,
+      });
+    }
+  }, [clearPollTimer]);
 
   useEffect(() => {
-    if (isOpen) {
-      loadPlayers();
-    }
-  }, [isOpen]);
+    pollReadinessRef.current = pollReadiness;
+  }, [pollReadiness]);
 
-  const loadPlayers = async () => {
-    setLoading(true);
-    try {
-      const participants = await lcuApi.getGameParticipants();
-      setPlayers(participants);
-    } catch (error) {
-      console.error("Failed to load participants:", error);
-      // Fallback or retry?
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    if (!isOpen) {
+      pollingActiveRef.current = false;
+      clearPollTimer();
+      setReadiness(null);
+      return;
     }
+
+    pollingActiveRef.current = true;
+    setReadiness(null);
+    void pollReadiness();
+
+    return () => {
+      pollingActiveRef.current = false;
+      clearPollTimer();
+    };
+  }, [clearPollTimer, isOpen, pollReadiness]);
+
+  const handleRetry = () => {
+    pollingActiveRef.current = true;
+    clearPollTimer();
+    setReadiness(null);
+    void pollReadiness();
   };
 
   const handleSelectTarget = async (summonerName: string) => {
     try {
       await setRecordingTarget(summonerName);
       toast({
-        title: "Target Set",
-        description: `Recording highlights for: ${summonerName}. Double-click their champion to lock camera!`,
+        title: t('replayTarget.targetSet'),
+        description: t('replayTarget.targetSetDesc', { name: summonerName }),
       });
       onClose();
-    } catch (error) {
+    } catch (error: unknown) {
+      const description = error instanceof Error ? error.message : t('replayTarget.error');
       toast({
-        title: "Error",
-        description: "Failed to set recording target.",
+        title: t('common.error'),
+        description,
         variant: "destructive",
       });
     }
   };
 
-  // Observer mode is available but commented out in the UI
-  // To enable, uncomment the observer mode button and use:
-  // await setRecordingTarget(null);
-
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Replay Recording Setup</DialogTitle>
+          <DialogTitle>{t('replayTarget.title')}</DialogTitle>
           <DialogDescription>
-            Who should we record? Select a player to auto-capture their highlights.
+            {t('replayTarget.description')}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-2 gap-4 py-4">
-          {loading ? (
-            <div className="col-span-2 text-center py-4">Loading players...</div>
-          ) : (
-            <>
-              {players.map((player) => (
-                <Button
-                  key={player.summoner_name}
-                  variant="outline"
-                  className="h-auto py-3 flex flex-col items-start"
-                  onClick={() => handleSelectTarget(player.summoner_name)}
-                >
-                  <span className="font-bold">{player.summoner_name}</span>
-                  <span className="text-xs text-muted-foreground">ID: {player.champion_id}</span>
-                </Button>
-              ))}
-            </>
+    <div className="grid grid-cols-2 gap-4 py-4">
+      {!readiness || readiness.state === 'loading' ? (
+        <div className="col-span-2 text-center py-4 flex flex-col items-center gap-2">
+          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gaming-cyan" />
+          {t('replayTarget.loading')}
+        </div>
+      ) : readiness.state === 'unavailable' ? (
+        <div className="col-span-2 text-center py-4 flex flex-col items-center gap-4">
+          <p>{t('replayTarget.unavailable')}</p>
+          <Button variant="outline" onClick={handleRetry}>
+            {t('common.retry')}
+          </Button>
+        </div>
+      ) : readiness.state === 'empty' ? (
+        <div className="col-span-2 text-center py-4 flex flex-col items-center gap-4">
+          <p>{t('replayTarget.empty')}</p>
+          <Button variant="outline" onClick={handleRetry}>
+            {t('common.retry')}
+          </Button>
+        </div>
+      ) : readiness.state === 'failed' ? (
+        <div className="col-span-2 text-center py-4 flex flex-col items-center gap-4">
+          <p className="text-destructive">{readiness.error || t('replayTarget.error')}</p>
+          {readiness.retryable && (
+            <Button variant="outline" onClick={handleRetry}>
+              {t('common.retry')}
+            </Button>
           )}
         </div>
-
-        {/* Optional Observer Mode Button */}
-        {/* 
-        <div className="flex justify-center border-t pt-4">
-            <Button variant="ghost" onClick={handleSelectAll} className="w-full">
-                <Users className="mr-2 h-4 w-4" />
-                Record All Highlights (Observer Mode)
+      ) : (
+        <>
+          {readiness.candidates.map((player) => (
+            <Button
+              key={player.summoner_name}
+              variant={readiness.selectedTarget === player.summoner_name ? "default" : "outline"}
+              className="h-auto py-3 flex flex-col items-start"
+              onClick={() => handleSelectTarget(player.summoner_name)}
+            >
+              <span className="font-bold">{player.summoner_name}</span>
+              <span className="text-xs text-muted-foreground">ID: {player.champion_id}</span>
             </Button>
-        </div>
-        */}
+          ))}
+        </>
+      )}
+    </div>
+
       </DialogContent>
     </Dialog>
   );

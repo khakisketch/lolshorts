@@ -138,7 +138,8 @@
     "timeline": {
       "title": "Chronologie",
       "addClip": "Ajouter un clip",
-      "removeClip": "Supprimer le clip"
+      "removeClip": "Supprimer le clip",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "Rogner",
@@ -152,7 +153,8 @@
       "title": "Exporter",
       "quality": "Qualité",
       "format": "Format",
-      "exportVideo": "Exporter la vidéo"
+      "exportVideo": "Exporter la vidéo",
+      "noClipSourcePath": "No clip source path available"
     },
     "selectGameTitle": "Select a Game to Edit",
     "selectGameDescription": "Choose a game from your recorded sessions to start editing",
@@ -234,6 +236,18 @@
       "upload": "Upload",
       "history": "History",
       "account": "Account"
+    },
+    "schedule": {
+      "scheduleButton": "Planifier",
+      "confirmSchedule": "Confirmer la planification",
+      "publishAt": "Publier le",
+      "publishAtHint": "Laissez vide pour mettre en file d'attente sans heure de publication. YouTube exige au moins 15 minutes dans le futur.",
+      "scheduleSuccessful": "Téléchargement planifié avec succès!",
+      "scheduleFailed": "Échec de la planification du téléchargement",
+      "queueTitle": "File d'attente",
+      "scheduledFor": "Planifié pour",
+      "queued": "En file d'attente",
+      "cancelScheduled": "Annuler le téléchargement planifié"
     }
   },
   "settings": {

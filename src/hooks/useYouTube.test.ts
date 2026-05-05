@@ -13,7 +13,16 @@ jest.mock('@/api/youtube', () => ({
     uploadVideo: jest.fn(),
     getUploadProgress: jest.fn(),
     addToHistory: jest.fn(),
+    getUploadQueue: jest.fn(),
+    scheduleUpload: jest.fn(),
+    cancelScheduledUpload: jest.fn(),
   },
+}));
+
+// Mock client API
+jest.mock('@/api/client', () => ({
+  cmd: jest.fn(),
+  listenToEvent: jest.fn().mockResolvedValue(jest.fn()),
 }));
 
 // Mock utils
@@ -21,7 +30,7 @@ jest.mock('@/lib/utils', () => ({
   getErrorMessage: jest.fn((err) => err?.message || 'Unknown error'),
 }));
 
-import { youtubeApi } from '@/api/youtube';
+import { youtubeApi } from '../api/youtube';
 
 const mockYoutubeApi = youtubeApi as jest.Mocked<typeof youtubeApi>;
 
@@ -195,17 +204,18 @@ describe('useYouTube', () => {
       expect(quotaInfo).toEqual(mockQuota);
     });
 
-    it('should return null on quota fetch error', async () => {
+    it('should expose and rethrow quota fetch errors', async () => {
       mockYoutubeApi.getQuotaInfo.mockRejectedValue(new Error('Network error'));
 
       const { result } = renderHook(() => useYouTube());
 
-      let quotaInfo;
       await act(async () => {
-        quotaInfo = await result.current.getQuotaInfo();
+        await expect(result.current.getQuotaInfo()).rejects.toThrow('Network error');
       });
 
-      expect(quotaInfo).toBeNull();
+      await waitFor(() => {
+        expect(result.current.error).toBe('Network error');
+      });
     });
   });
 

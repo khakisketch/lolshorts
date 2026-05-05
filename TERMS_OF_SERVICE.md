@@ -3,6 +3,8 @@
 **Last Updated**: January 4, 2025
 **Effective Date**: January 4, 2025
 
+> **Readiness qualification:** These terms include future FREE/PRO policy language, but live payment, Toss checkout, paid access, and subscription enforcement are deferred in the current non-payment readiness build. Do not treat this document as proof of commercial support readiness, field readiness, or active billing.
+
 ## 1. Acceptance of Terms
 
 By accessing or using LoLShorts ("the Software"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, do not use the Software.
@@ -30,20 +32,18 @@ FREE tier users have access to:
 - Screenshot capture
 - Viewing and managing clips
 
-### 3.3 PRO Tier
-PRO tier users receive all FREE tier features plus:
+### 3.3 PRO Tier (Future Policy Only)
+PRO tier policy may include all FREE tier features plus, after payment readiness is separately approved:
 - Manual clip extraction with precise timing controls
 - YouTube Shorts composition (9:16 format)
 - Custom thumbnail generation
 - Advanced video editing capabilities
 - No watermarks on exports
-- Priority support
+- Priority support only after a staffed support process is validated
 
 ### 3.4 Subscription Payments
-- PRO subscriptions are billed monthly or annually
-- Payments are processed through our secure payment provider (Supabase)
-- All fees are non-refundable except as required by law
-- We reserve the right to change pricing with 30 days notice to existing subscribers
+- PRO subscriptions are not sold or enforced in the current non-payment readiness build.
+- Payment processing, billing periods, refunds, provider terms, pricing changes, and paid access require separate payment QA, legal review, support validation, and policy updates before launch.
 
 ## 4. Acceptable Use Policy
 
@@ -56,7 +56,7 @@ You may use the Software to:
 ### 4.2 Prohibited Uses
 You may NOT:
 - Use the Software to record others' gameplay without permission
-- Circumvent or attempt to circumvent subscription tier restrictions
+- Circumvent future subscription tier restrictions if paid access is later approved and clearly enabled
 - Reverse engineer, decompile, or disassemble the Software
 - Use the Software for any illegal purposes
 - Violate Riot Games' Terms of Service or policies
@@ -98,14 +98,14 @@ LoLShorts is a third-party application and is not endorsed by, sponsored by, or 
 
 ### 7.1 Data We Collect
 - Account information (email, username)
-- Subscription tier and payment information
+- Subscription tier and payment information only after future payment readiness approval
 - Application usage statistics
 - Error logs and crash reports (anonymized)
 - Gameplay recording metadata (not the recordings themselves)
 
 ### 7.2 Data Usage
 - To provide and improve the Software
-- To process subscriptions and payments
+- To process subscriptions and payments only after future payment readiness approval
 - To provide customer support
 - To send important service updates
 
@@ -170,7 +170,7 @@ We may suspend or terminate your account immediately if:
 ### 11.4 Effect of Termination
 Upon termination:
 - Your access to the Software will cease immediately
-- PRO subscriptions will not be refunded except as required by law
+- Future PRO subscription refund terms will be documented before paid access is enabled
 - You must delete all copies of the Software
 - Sections 6, 9, 10, 12, and 13 survive termination
 

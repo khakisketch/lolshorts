@@ -2,20 +2,20 @@
 
 **Version:** 1.0.0
 **Last Updated:** 2025-01-06
-**Status:** Production-Ready (87.5% complete - 7/8 quality gates)
+**Status:** Historical automation snapshot only, not Field QA production-ready. The 87.5% gate result does not prove public readiness, signed installer readiness, or real Windows field validation.
 
 ---
 
 ## 🎯 Pre-Deployment Checklist
 
 ### Code Quality Gates
-- [x] **Functional Correctness**: All features working as specified
+- [x] **Functional Correctness**: Automated/spec-level checks passed for this historical wave. This is not a current claim that all features work in the field.
 - [x] **Code Quality**: Clean, maintainable, well-documented code
 - [x] **Testing**: 93 E2E tests, comprehensive test coverage
-- [x] **Error Handling**: Production-grade error recovery (Wave 2)
+- [x] **Error Handling**: Production-grade design target for Wave 2. Field behavior still requires E5 evidence.
 - [x] **Documentation**: AUTO_EDIT_GUIDE.md, CANVAS_TUTORIAL.md, AUDIO_MIXING.md, TROUBLESHOOTING.md (Wave 3)
 - [x] **Performance**: <30s per minute of output, comprehensive benchmarking (Wave 4)
-- [x] **Security**: Input validation, vulnerability scanning (Wave 5)
+- [x] **Security**: Input validation and scanning were checked in this historical wave. This is not a current security-status guarantee.
 - [x] **Production Configuration**: Environment setup, logging, packaging (Wave 6 - in progress)
 
 ### System Requirements
@@ -524,8 +524,8 @@ ENABLE_TELEMETRY=true
 - File extension whitelisting
 
 ✅ **Code Signing**:
-- Installers signed with trusted certificate
-- Signature verification on updates
+- Historical deployment target only. Signed installers and update signatures still require current Field QA evidence before public claims.
+- Signature verification on updates must be validated against the active signed release channel.
 
 ✅ **Sandboxing**:
 - Tauri default security model (CSP, webview isolation)
@@ -533,12 +533,12 @@ ENABLE_TELEMETRY=true
 
 ✅ **Dependency Scanning**:
 - 20 warnings (unmaintained packages from Tauri framework)
-- No exploitable vulnerabilities
+- No exploitable vulnerabilities were reported in this historical scan. Treat as automation evidence only, not a current security-status guarantee.
 
 ---
 
 **Generated**: 2025-01-06
-**Status**: Production-Ready (87.5% - 7/8 quality gates)
+**Status**: Historical automation snapshot only, not Field QA production-ready.
 **Next Steps**: Wave 6 completion, first production deployment
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { LoginForm } from "./LoginForm";
 import { SignupForm } from "./SignupForm";
 
@@ -24,6 +24,9 @@ export function AuthModal({ open, onClose, defaultMode = "login" }: AuthModalPro
         <DialogTitle className="sr-only">
           {mode === "login" ? "Sign In" : "Create Account"}
         </DialogTitle>
+        <DialogDescription className="sr-only">
+          {mode === "login" ? "Enter your credentials to access your account" : "Fill in the details to create a new account"}
+        </DialogDescription>
         {mode === "login" ? (
           <LoginForm
             onSwitchToSignup={() => setMode("signup")}

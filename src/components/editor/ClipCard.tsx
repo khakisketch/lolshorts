@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next';
 import { ClipMetadata } from '@/types/storage';
-import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Play, Plus } from 'lucide-react';
@@ -21,7 +20,7 @@ export function ClipCard({ clip }: ClipCardProps) {
   };
 
   const handlePreview = () => {
-    setSelectedClipId(clip.clip_id);
+    setSelectedClipId(clip.file_path);
   };
 
   // Get priority variant color
@@ -35,7 +34,7 @@ export function ClipCard({ clip }: ClipCardProps) {
   const thumbnailSrc = clip.thumbnail_path ? convertFileSrc(clip.thumbnail_path) : undefined;
 
   return (
-    <Card className="overflow-hidden hover:border-primary transition-colors cursor-pointer group">
+    <div className="bg-black/40 rounded-lg border border-white/5 overflow-hidden hover:border-primary transition-colors cursor-pointer group">
       {/* Thumbnail */}
       <div className="relative aspect-video bg-muted">
         {thumbnailSrc ? (
@@ -57,8 +56,8 @@ export function ClipCard({ clip }: ClipCardProps) {
 
         {/* Priority badge */}
         <div className="absolute top-2 right-2">
-          <Badge variant={getPriorityVariant(clip.event_id)}>
-            {t('editor.clip.priority', { id: clip.event_id })}
+          <Badge variant={getPriorityVariant(clip.priority)}>
+            {t('editor.clip.priority', { id: clip.priority })}
           </Badge>
         </div>
       </div>
@@ -67,7 +66,7 @@ export function ClipCard({ clip }: ClipCardProps) {
       <div className="p-3 space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium truncate">
-            {t('editor.clip.clipNumber', { id: clip.clip_id })}
+            {t('editor.clip.clipNumber', { id: clip.file_path.split(/[\\/]/).pop() })}
           </span>
         </div>
 
@@ -93,6 +92,6 @@ export function ClipCard({ clip }: ClipCardProps) {
           </Button>
         </div>
       </div>
-    </Card>
+    </div>
   );
 }

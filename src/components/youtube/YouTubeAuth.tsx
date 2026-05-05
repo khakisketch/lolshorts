@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useYouTube } from '@/hooks/useYouTube';
 import { Button } from '@/components/ui/button';
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Youtube, LogOut, CheckCircle, AlertCircle } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-shell';
+import { logger } from '@/lib/logger';
 
 export function YouTubeAuth() {
   const { t } = useTranslation();
@@ -20,6 +20,7 @@ export function YouTubeAuth() {
   } = useYouTube();
 
   const [authInProgress, setAuthInProgress] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     checkAuthStatus();
@@ -28,6 +29,7 @@ export function YouTubeAuth() {
   const handleStartAuth = async () => {
     try {
       setAuthInProgress(true);
+      setActionError(null);
       const authUrl = await startAuthWithServer();
 
       // Open auth URL in system browser
@@ -36,7 +38,8 @@ export function YouTubeAuth() {
       // Authentication will complete automatically when user authorizes in browser
       // The callback server (port 9090) will handle the redirect and save credentials
     } catch (err) {
-      console.error('Auth error:', err);
+      logger.error('Auth error:', err);
+      setActionError(err instanceof Error ? err.message : t('youtube.auth.authStartFailed', 'Failed to start YouTube authentication.'));
     } finally {
       setAuthInProgress(false);
     }
@@ -44,9 +47,11 @@ export function YouTubeAuth() {
 
   const handleLogout = async () => {
     try {
+      setActionError(null);
       await logout();
     } catch (err) {
-      console.error('Logout error:', err);
+      logger.error('Logout error:', err);
+      setActionError(err instanceof Error ? err.message : t('youtube.auth.logoutFailed', 'Failed to disconnect YouTube account.'));
     }
   };
 
@@ -56,16 +61,16 @@ export function YouTubeAuth() {
   };
 
   return (
-    <Card>
-      <CardHeader>
+    <div className="gaming-panel p-6">
+      <div className="mb-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Youtube className="h-6 w-6 text-red-500" />
             <div>
-              <CardTitle>{t('youtube.auth.youtubeAccount')}</CardTitle>
-              <CardDescription>
+              <h3 className="text-lg font-semibold">{t('youtube.auth.youtubeAccount')}</h3>
+              <p className="text-sm text-muted-foreground">
                 {t('youtube.auth.connectDescription')}
-              </CardDescription>
+              </p>
             </div>
           </div>
           {authStatus.authenticated ? (
@@ -80,12 +85,12 @@ export function YouTubeAuth() {
             </Badge>
           )}
         </div>
-      </CardHeader>
+      </div>
 
-      <CardContent className="space-y-4">
-        {error && (
+      <div className="space-y-4">
+        {(actionError || error) && (
           <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription>{actionError || error}</AlertDescription>
           </Alert>
         )}
 
@@ -151,7 +156,7 @@ export function YouTubeAuth() {
             </p>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

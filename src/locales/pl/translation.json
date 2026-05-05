@@ -138,7 +138,8 @@
     "timeline": {
       "title": "Oś czasu",
       "addClip": "Dodaj klip",
-      "removeClip": "Usuń klip"
+      "removeClip": "Usuń klip",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "Przytnij",
@@ -152,7 +153,8 @@
       "title": "Eksportuj",
       "quality": "Jakość",
       "format": "Format",
-      "exportVideo": "Eksportuj wideo"
+      "exportVideo": "Eksportuj wideo",
+      "noClipSourcePath": "No clip source path available"
     },
     "selectGameTitle": "Select a Game to Edit",
     "selectGameDescription": "Choose a game from your recorded sessions to start editing",
@@ -234,6 +236,18 @@
       "upload": "Upload",
       "history": "History",
       "account": "Account"
+    },
+    "schedule": {
+      "scheduleButton": "Zaplanuj",
+      "confirmSchedule": "Potwierdź harmonogram",
+      "publishAt": "Opublikuj o",
+      "publishAtHint": "Pozostaw puste, aby dodać do kolejki bez czasu publikacji. YouTube wymaga co najmniej 15 minut w przyszłości.",
+      "scheduleSuccessful": "Przesyłanie pomyślnie zaplanowane!",
+      "scheduleFailed": "Nie udało się zaplanować przesyłania",
+      "queueTitle": "Kolejka przesyłania",
+      "scheduledFor": "Zaplanowane na",
+      "queued": "W kolejce",
+      "cancelScheduled": "Anuluj zaplanowane przesyłanie"
     }
   },
   "settings": {

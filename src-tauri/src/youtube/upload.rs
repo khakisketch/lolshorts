@@ -157,6 +157,15 @@ impl YouTubeUploadClient {
         })
     }
 
+    /// Create an upload client with isolated OAuth credentials while sharing progress state.
+    pub fn with_oauth_client(&self, oauth_client: Arc<YouTubeOAuthClient>) -> Self {
+        Self {
+            oauth_client,
+            http_client: self.http_client.clone(),
+            progress: Arc::clone(&self.progress),
+        }
+    }
+
     /// Upload video to YouTube
     ///
     /// # Arguments
@@ -388,9 +397,7 @@ impl YouTubeUploadClient {
         }
 
         let data: serde_json::Value = response.json().await?;
-        let items = data["items"]
-            .as_array()
-            .context("No items in response")?;
+        let items = data["items"].as_array().context("No items in response")?;
 
         if items.is_empty() {
             return Err(anyhow::anyhow!("Video not found: {}", video_id));
@@ -400,10 +407,7 @@ impl YouTubeUploadClient {
 
         Ok(YouTubeVideo {
             id: video_id.to_string(),
-            title: video["snippet"]["title"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
+            title: video["snippet"]["title"].as_str().unwrap_or("").to_string(),
             description: video["snippet"]["description"]
                 .as_str()
                 .unwrap_or("")
@@ -459,7 +463,10 @@ impl YouTubeUploadClient {
         metadata: VideoMetadata,
         thumbnail_path: Option<&Path>,
     ) -> Result<YouTubeVideo> {
-        info!("Starting resumable YouTube upload: {}", video_path.display());
+        info!(
+            "Starting resumable YouTube upload: {}",
+            video_path.display()
+        );
 
         // Validate metadata before upload
         metadata.validate().context("Invalid video metadata")?;
@@ -470,7 +477,11 @@ impl YouTubeUploadClient {
             .context("Failed to get file metadata")?;
         let file_size = file_metadata.len();
 
-        info!("Video file size: {} bytes ({:.2} MB)", file_size, file_size as f64 / 1024.0 / 1024.0);
+        info!(
+            "Video file size: {} bytes ({:.2} MB)",
+            file_size,
+            file_size as f64 / 1024.0 / 1024.0
+        );
 
         // Initialize progress
         self.update_progress(UploadProgress {
@@ -488,7 +499,9 @@ impl YouTubeUploadClient {
         info!("Resumable upload session initialized");
 
         // Step 2: Upload file in chunks with progress tracking
-        let video_id = self.upload_chunks(video_path, &upload_url, file_size).await?;
+        let video_id = self
+            .upload_chunks(video_path, &upload_url, file_size)
+            .await?;
 
         // Step 3: Update progress to processing
         self.update_progress(UploadProgress {
@@ -527,7 +540,11 @@ impl YouTubeUploadClient {
     }
 
     /// Initialize a resumable upload session
-    async fn init_resumable_upload(&self, metadata: &VideoMetadata, file_size: u64) -> Result<String> {
+    async fn init_resumable_upload(
+        &self,
+        metadata: &VideoMetadata,
+        file_size: u64,
+    ) -> Result<String> {
         let access_token = self
             .oauth_client
             .get_valid_token()
@@ -549,7 +566,10 @@ impl YouTubeUploadClient {
             }
         });
 
-        let init_url = format!("{}?uploadType=resumable&part=snippet,status", YOUTUBE_UPLOAD_BASE);
+        let init_url = format!(
+            "{}?uploadType=resumable&part=snippet,status",
+            YOUTUBE_UPLOAD_BASE
+        );
 
         let response = self
             .http_client
@@ -564,9 +584,15 @@ impl YouTubeUploadClient {
             .context("Failed to initialize resumable upload")?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             error!("Failed to initialize resumable upload: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to initialize resumable upload: {}", error_text));
+            return Err(anyhow::anyhow!(
+                "Failed to initialize resumable upload: {}",
+                error_text
+            ));
         }
 
         // Get the upload URL from the Location header
@@ -583,7 +609,12 @@ impl YouTubeUploadClient {
     }
 
     /// Upload file chunks with progress tracking and retry logic
-    async fn upload_chunks(&self, video_path: &Path, upload_url: &str, file_size: u64) -> Result<String> {
+    async fn upload_chunks(
+        &self,
+        video_path: &Path,
+        upload_url: &str,
+        file_size: u64,
+    ) -> Result<String> {
         let mut file = File::open(video_path)
             .await
             .context("Failed to open video file")?;
@@ -690,12 +721,20 @@ impl YouTubeUploadClient {
                             })
                             .await;
 
-                            debug!("Chunk uploaded: {} / {} ({:.1}%)", bytes_uploaded, file_size, percentage);
+                            debug!(
+                                "Chunk uploaded: {} / {} ({:.1}%)",
+                                bytes_uploaded, file_size, percentage
+                            );
                             retry_count = 0; // Reset retry count on success
                         }
                         // Client error - don't retry
-                        StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                            let error_text = resp.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                        StatusCode::BAD_REQUEST
+                        | StatusCode::UNAUTHORIZED
+                        | StatusCode::FORBIDDEN => {
+                            let error_text = resp
+                                .text()
+                                .await
+                                .unwrap_or_else(|_| "Unknown error".to_string());
                             error!("Upload failed with client error: {}", error_text);
 
                             self.update_progress(UploadProgress {
@@ -716,7 +755,8 @@ impl YouTubeUploadClient {
                             retry_count += 1;
 
                             if retry_count >= MAX_RETRIES {
-                                let error_msg = format!("Upload failed after {} retries", MAX_RETRIES);
+                                let error_msg =
+                                    format!("Upload failed after {} retries", MAX_RETRIES);
                                 self.update_progress(UploadProgress {
                                     bytes_uploaded,
                                     total_bytes: file_size,
@@ -731,7 +771,10 @@ impl YouTubeUploadClient {
 
                             // Exponential backoff
                             let delay = RETRY_DELAY_MS * 2u64.pow(retry_count - 1);
-                            warn!("Retrying in {}ms (attempt {}/{})", delay, retry_count, MAX_RETRIES);
+                            warn!(
+                                "Retrying in {}ms (attempt {}/{})",
+                                delay, retry_count, MAX_RETRIES
+                            );
                             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
                             // Query upload status to find where to resume
@@ -746,7 +789,8 @@ impl YouTubeUploadClient {
                     retry_count += 1;
 
                     if retry_count >= MAX_RETRIES {
-                        let error_msg = format!("Upload failed after {} retries: {}", MAX_RETRIES, e);
+                        let error_msg =
+                            format!("Upload failed after {} retries: {}", MAX_RETRIES, e);
                         self.update_progress(UploadProgress {
                             bytes_uploaded,
                             total_bytes: file_size,
@@ -761,7 +805,10 @@ impl YouTubeUploadClient {
 
                     // Exponential backoff
                     let delay = RETRY_DELAY_MS * 2u64.pow(retry_count - 1);
-                    warn!("Retrying in {}ms (attempt {}/{})", delay, retry_count, MAX_RETRIES);
+                    warn!(
+                        "Retrying in {}ms (attempt {}/{})",
+                        delay, retry_count, MAX_RETRIES
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
                     // Query upload status to find where to resume

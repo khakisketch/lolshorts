@@ -151,7 +151,8 @@
     "timeline": {
       "title": "Timeline",
       "addClip": "Add Clip",
-      "removeClip": "Remove Clip"
+      "removeClip": "Remove Clip",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "Trim",
@@ -165,7 +166,8 @@
       "title": "Export",
       "quality": "Quality",
       "format": "Format",
-      "exportVideo": "Export Video"
+      "exportVideo": "Export Video",
+      "noClipSourcePath": "No clip source path available"
     }
   },
   "autoEdit": {
@@ -234,6 +236,18 @@
       "used": "已用：{{used}} / {{total}}",
       "remaining": "剩余{{count}}次上传",
       "resetTime": "{{time}}后重置"
+    },
+    "schedule": {
+      "scheduleButton": "定时",
+      "confirmSchedule": "确认定时",
+      "publishAt": "发布时间",
+      "publishAtHint": "YouTube要求至少提前15分钟。留空以加入队列但不设置发布时间。",
+      "scheduleSuccessful": "上传已成功定时！",
+      "scheduleFailed": "定时上传失败",
+      "queueTitle": "上传队列",
+      "scheduledFor": "定时于",
+      "queued": "排队中",
+      "cancelScheduled": "取消定时上传"
     }
   },
   "settings": {

@@ -178,8 +178,8 @@ impl PerformanceProfiler {
 
     /// Collect system metadata
     fn collect_metadata() -> PerformanceMetadata {
-        use sysinfo::{Disks, System};
         use crate::utils::ffmpeg;
+        use sysinfo::{Disks, System};
 
         let mut sys = System::new_all();
         sys.refresh_all();

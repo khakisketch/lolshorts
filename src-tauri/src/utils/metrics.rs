@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// Tracks system health, resource utilization, and recording performance
 /// for production observability and alerting.
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::path::PathBuf;
 use tokio::sync::RwLock;
-use tracing::{warn, info};
+use tracing::{info, warn};
 
 /// Performance metrics for FFmpeg recording process
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,11 +205,10 @@ impl MetricsCollector {
         metrics.available_ram_gb = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
 
         // Check disk space for recording directory
-        if let Some(total_space) = self.get_disk_space(&self.recording_dir) {
-            // Estimate available space (rough heuristic: assume 20% available)
-            metrics.available_disk_gb = total_space * 0.2;
+        if let Some(available_gb) = self.get_disk_space(&self.recording_dir) {
+            metrics.available_disk_gb = available_gb;
         } else {
-            metrics.available_disk_gb = 50.0; // Default fallback
+            metrics.available_disk_gb = -1.0; // Unknown — UI should display "unknown"
         }
 
         // Add basic GPU metrics if available (Windows DirectX)
@@ -356,11 +355,23 @@ impl MetricsCollector {
         })
     }
 
-    /// Get total disk space for the given path
-    fn get_disk_space(&self, _path: &PathBuf) -> Option<f64> {
-        // For now, return a reasonable default disk size
-        // In a production environment, this would use proper disk space APIs
-        Some(500.0) // 500GB default
+    /// Get available disk space in GB for the given path using sysinfo.
+    fn get_disk_space(&self, path: &Path) -> Option<f64> {
+        use sysinfo::Disks;
+
+        let disks = Disks::new_with_refreshed_list();
+        let path_str = path.to_string_lossy().to_lowercase();
+
+        // Find the disk whose mount point is the longest prefix of our path
+        let best = disks
+            .iter()
+            .filter(|d| {
+                let mount = d.mount_point().to_string_lossy().to_lowercase();
+                path_str.starts_with(mount.as_str())
+            })
+            .max_by_key(|d| d.mount_point().to_string_lossy().len());
+
+        best.map(|disk| disk.available_space() as f64 / 1024.0 / 1024.0 / 1024.0)
     }
 
     #[cfg(test)]
@@ -376,7 +387,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_healthy() {
-        let collector = MetricsCollector::new(HealthThresholds::default(), PathBuf::from("C:\\test"));
+        let collector =
+            MetricsCollector::new(HealthThresholds::default(), PathBuf::from("C:\\test"));
 
         let metrics = RecordingMetrics {
             fps: 60.0,
@@ -402,7 +414,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_warning() {
-        let collector = MetricsCollector::new(HealthThresholds::default(), PathBuf::from("C:\\test"));
+        let collector =
+            MetricsCollector::new(HealthThresholds::default(), PathBuf::from("C:\\test"));
 
         let metrics = RecordingMetrics {
             fps: 50.0, // Below threshold (55)
@@ -428,7 +441,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_critical() {
-        let collector = MetricsCollector::new(HealthThresholds::default(), PathBuf::from("C:\\test"));
+        let collector =
+            MetricsCollector::new(HealthThresholds::default(), PathBuf::from("C:\\test"));
 
         let metrics = RecordingMetrics {
             fps: 40.0, // Very low (< 45)

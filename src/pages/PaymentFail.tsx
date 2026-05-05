@@ -1,37 +1,50 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { XCircle, AlertCircle } from "lucide-react";
 
+interface PaymentFailSearchParams {
+  code?: string;
+  message?: string;
+}
+
 export function PaymentFail() {
-  const searchParams = useSearch({ from: "/payment/fail" }) as Record<string, string>;
+  const { t } = useTranslation();
+  const searchParams = useSearch({ from: "/payment/fail" }) as PaymentFailSearchParams;
   const navigate = useNavigate();
 
   const errorCode = searchParams.code;
   const errorMessage = searchParams.message;
 
   const getErrorDetails = () => {
+    if (!errorCode) {
+      return {
+        title: "Payment deferred",
+        description: "Checkout is unavailable in this readiness build. No payment was attempted."
+      };
+    }
+
     switch (errorCode) {
       case "PAY_PROCESS_CANCELED":
         return {
-          title: "Payment Cancelled",
-          description: "You cancelled the payment process. No charges were made to your account."
+          title: t('paymentFail.errors.cancelled.title'),
+          description: t('paymentFail.errors.cancelled.description')
         };
       case "PAY_PROCESS_ABORTED":
         return {
-          title: "Payment Aborted",
-          description: "The payment process was interrupted. Please try again."
+          title: t('paymentFail.errors.aborted.title'),
+          description: t('paymentFail.errors.aborted.description')
         };
       case "REJECT_CARD_COMPANY":
         return {
-          title: "Card Declined",
-          description: "Your card was declined by the card company. Please try a different payment method."
+          title: t('paymentFail.errors.cardDeclined.title'),
+          description: t('paymentFail.errors.cardDeclined.description')
         };
       default:
         return {
-          title: "Payment Failed",
-          description: errorMessage || "An error occurred during payment processing."
+          title: t('paymentFail.errors.default.title'),
+          description: errorMessage || t('paymentFail.errors.default.description')
         };
     }
   };
@@ -39,27 +52,21 @@ export function PaymentFail() {
   const errorDetails = getErrorDetails();
 
   const handleRetry = () => {
-    // Clear any stored order info
     sessionStorage.removeItem("pending_order_id");
     sessionStorage.removeItem("pending_amount");
-
-    // Go back to settings to retry
     navigate({ to: "/settings" });
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-destructive">
-            <XCircle className="w-6 h-6" />
-            {errorDetails.title}
-          </CardTitle>
-          <CardDescription>
-            {errorDetails.description}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+    <div className="min-h-screen flex items-center justify-center p-6 bg-[hsl(240,18%,9%)]">
+      <div className="gaming-panel p-6 w-full max-w-md">
+        <div className="flex items-center gap-2 mb-1">
+          <XCircle className="w-6 h-6 text-gaming-magenta" />
+          <h2 className="text-lg font-semibold text-gaming-magenta">{errorDetails.title}</h2>
+        </div>
+        <p className="text-sm text-muted-foreground mb-6">{errorDetails.description}</p>
+
+        <div className="space-y-4">
           {errorMessage && (
             <Alert variant="destructive">
               <AlertCircle className="w-4 h-4" />
@@ -69,17 +76,15 @@ export function PaymentFail() {
 
           {errorCode && (
             <div className="text-xs text-muted-foreground">
-              <p>Error Code: {errorCode}</p>
+              <p>{t('paymentFail.errorCode')} {errorCode}</p>
             </div>
           )}
 
-          <div className="p-4 bg-muted/50 rounded-lg">
-            <p className="text-sm font-semibold mb-2">What can you do?</p>
+          <div className="p-4 bg-black/40 border border-white/5 rounded-lg">
+            <p className="text-sm font-semibold mb-2">{t('paymentFail.whatCanYouDo')}</p>
             <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-              <li>Check your payment method and try again</li>
-              <li>Try a different payment method</li>
-              <li>Contact your card issuer if the problem persists</li>
-              <li>Contact our support team if you need assistance</li>
+              <li>Return to Settings and continue with the current local workflows.</li>
+              <li>Do not retry live checkout until payment QA is approved.</li>
             </ul>
           </div>
 
@@ -89,21 +94,21 @@ export function PaymentFail() {
               onClick={() => navigate({ to: "/" })}
               className="flex-1"
             >
-              Go Home
+              {t('paymentFail.goHome')}
             </Button>
             <Button
               onClick={handleRetry}
               className="flex-1"
             >
-              Try Again
+              {t('paymentFail.tryAgain')}
             </Button>
           </div>
 
           <p className="text-xs text-center text-muted-foreground">
-            No charges were made to your account
+            {t('paymentFail.noCharges')}
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

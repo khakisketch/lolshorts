@@ -3,7 +3,6 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 interface EventFilterSettings {
@@ -154,14 +153,14 @@ export function EventFilterSettings({ settings, onChange }: EventFilterSettingsP
       </div>
 
       {/* Priority Filter */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.eventFilter.priorityFilter')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.eventFilter.priorityFilter')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.eventFilter.priorityFilterDescription')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <Label>{t('settings.recordingConfig.eventFilter.minimumPriority')}</Label>
@@ -184,18 +183,18 @@ export function EventFilterSettings({ settings, onChange }: EventFilterSettingsP
               <span>{t('settings.recordingConfig.eventFilter.priorityScale.epic')}</span>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Kill Events */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.eventFilter.killEvents.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.eventFilter.killEvents.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.eventFilter.killEvents.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <Label htmlFor="record_kills" className="flex-1 cursor-pointer">
               {t('settings.recordingConfig.eventFilter.killEvents.kills')}
@@ -272,18 +271,18 @@ export function EventFilterSettings({ settings, onChange }: EventFilterSettingsP
               onCheckedChange={(checked: boolean) => updateSetting("record_ace", checked)}
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Objective Events */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.eventFilter.objectiveEvents.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.eventFilter.objectiveEvents.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.eventFilter.objectiveEvents.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <Label htmlFor="record_dragon" className="flex-1 cursor-pointer">
               {t('settings.recordingConfig.eventFilter.objectiveEvents.dragon')}
@@ -338,18 +337,18 @@ export function EventFilterSettings({ settings, onChange }: EventFilterSettingsP
               onCheckedChange={(checked: boolean) => updateSetting("record_steal", checked)}
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Structure Events */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.eventFilter.structureEvents.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.eventFilter.structureEvents.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.eventFilter.structureEvents.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <Label htmlFor="record_turret" className="flex-1 cursor-pointer">
               {t('settings.recordingConfig.eventFilter.structureEvents.turrets')}
@@ -393,8 +392,8 @@ export function EventFilterSettings({ settings, onChange }: EventFilterSettingsP
               onCheckedChange={(checked: boolean) => updateSetting("record_game_end", checked)}
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

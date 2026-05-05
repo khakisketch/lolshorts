@@ -40,6 +40,7 @@ export default {
 
   // Module name mappers for CSS and assets
   moduleNameMapper: {
+    '^@/lib/logger$': '<rootDir>/__mocks__/loggerMock.ts', // Mock logger (import.meta)
     '^@/(.*)$': '<rootDir>/src/$1', // Path alias support
     '\\.(css|less|scss|sass)$': 'identity-obj-proxy', // Mock CSS imports
     '\\.(jpg|jpeg|png|gif|svg|woff|woff2|ttf|eot)$': '<rootDir>/__mocks__/fileMock.js', // Mock assets
@@ -62,6 +63,14 @@ export default {
     '!src/**/*.test.{ts,tsx}',
     '!src/main.tsx', // Entry point
   ],
+
+  coverageThreshold: {
+    global: {
+      lines: 50,
+      branches: 40,
+      functions: 50,
+    },
+  },
 
   // Module file extensions
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],

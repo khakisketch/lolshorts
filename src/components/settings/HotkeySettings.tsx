@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Keyboard, RotateCcw } from "lucide-react";
 
 interface HotkeySettings {
@@ -74,8 +73,8 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
   return (
     <div className="space-y-6">
       {/* Info Card */}
-      <Card className="bg-muted/50">
-        <CardContent className="pt-6">
+      <div className="gaming-panel p-6">
+        <div>
           <div className="flex items-start gap-3">
             <Keyboard className="w-5 h-5 text-muted-foreground mt-0.5" />
             <div className="space-y-1 text-sm">
@@ -85,18 +84,18 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
               </p>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Manual Save Clip */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.hotkeys.manualSaveClip.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.hotkeys.manualSaveClip.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.hotkeys.manualSaveClip.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+          </p>
+        </div>
+        <div className="space-y-3">
           <div className="flex items-center gap-3">
             <div className="flex-1">
               <Input
@@ -122,18 +121,18 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
           <p className="text-xs text-muted-foreground">
             {t('settings.recordingConfig.hotkeys.manualSaveClip.defaultF8')}
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Toggle Recording */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.hotkeys.toggleRecording.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.hotkeys.toggleRecording.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.hotkeys.toggleRecording.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+          </p>
+        </div>
+        <div className="space-y-3">
           <div className="flex items-center gap-3">
             <div className="flex-1">
               <Input
@@ -159,18 +158,18 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
           <p className="text-xs text-muted-foreground">
             {t('settings.recordingConfig.hotkeys.toggleRecording.defaultF9')}
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Delete Last Clip */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.hotkeys.deleteLastClip.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.hotkeys.deleteLastClip.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.hotkeys.deleteLastClip.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+          </p>
+        </div>
+        <div className="space-y-3">
           <div className="flex items-center gap-3">
             <div className="flex-1">
               <Input
@@ -196,8 +195,8 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
           <p className="text-xs text-muted-foreground">
             {t('settings.recordingConfig.hotkeys.deleteLastClip.defaultF10')}
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Reset All */}
       <div className="pt-4">

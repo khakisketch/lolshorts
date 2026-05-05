@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use oauth2::{
     basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
-    ClientSecret, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken,
-    Scope, TokenResponse, TokenUrl,
+    ClientSecret, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
+    TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -50,15 +50,16 @@ impl YouTubeOAuthClient {
     pub fn new(client_id: String, client_secret: String, redirect_uri: String) -> Result<Self> {
         let client_id = ClientId::new(client_id);
         let client_secret = ClientSecret::new(client_secret);
-        let auth_url = AuthUrl::new(GOOGLE_AUTH_URL.to_string())
-            .context("Failed to create auth URL")?;
-        let token_url = TokenUrl::new(GOOGLE_TOKEN_URL.to_string())
-            .context("Failed to create token URL")?;
+        let auth_url =
+            AuthUrl::new(GOOGLE_AUTH_URL.to_string()).context("Failed to create auth URL")?;
+        let token_url =
+            TokenUrl::new(GOOGLE_TOKEN_URL.to_string()).context("Failed to create token URL")?;
         let redirect_url =
             RedirectUrl::new(redirect_uri).context("Failed to create redirect URL")?;
 
-        let oauth_client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
-            .set_redirect_uri(redirect_url);
+        let oauth_client =
+            BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
+                .set_redirect_uri(redirect_url);
 
         Ok(Self {
             oauth_client,
@@ -104,8 +105,8 @@ impl YouTubeOAuthClient {
     pub async fn exchange_code(&self, code: String, state: String) -> Result<YouTubeCredentials> {
         // Take the OAuth2 state to extract the pkce_verifier
         let oauth_state = self.state.write().await.take();
-        let stored_state = oauth_state
-            .context("No OAuth2 state found. Call generate_auth_url() first")?;
+        let stored_state =
+            oauth_state.context("No OAuth2 state found. Call generate_auth_url() first")?;
 
         // Verify CSRF token
         if stored_state.csrf_token.secret() != &state {
@@ -131,9 +132,7 @@ impl YouTubeOAuthClient {
 
         let credentials = YouTubeCredentials {
             access_token: token_response.access_token().secret().clone(),
-            refresh_token: token_response
-                .refresh_token()
-                .map(|t| t.secret().clone()),
+            refresh_token: token_response.refresh_token().map(|t| t.secret().clone()),
             expires_at,
             token_type: "Bearer".to_string(),
         };
@@ -238,6 +237,15 @@ impl YouTubeOAuthClient {
     /// Get current credentials (for storage)
     pub async fn get_credentials(&self) -> Option<YouTubeCredentials> {
         self.credentials.read().await.clone()
+    }
+
+    /// Create an independent OAuth client using the same OAuth configuration and explicit credentials.
+    pub async fn clone_with_credentials(&self, credentials: YouTubeCredentials) -> Self {
+        Self {
+            oauth_client: self.oauth_client.clone(),
+            state: Arc::new(RwLock::new(None)),
+            credentials: Arc::new(RwLock::new(Some(credentials))),
+        }
     }
 
     /// Clear stored credentials (logout)

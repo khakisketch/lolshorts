@@ -9,11 +9,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Mic, Volume2 } from "lucide-react";
+import { Mic, Volume2, AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { logger } from '@/lib/logger';
 
 type SampleRate = "hz44100" | "hz48000";
 type AudioBitrate = "kbps128" | "kbps192" | "kbps256" | "kbps320";
@@ -42,6 +43,7 @@ interface AudioSettingsProps {
 export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
   const { t } = useTranslation();
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
+  const [devicesLoaded, setDevicesLoaded] = useState(false);
 
   // Fetch audio devices on component mount
   useEffect(() => {
@@ -50,8 +52,10 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
         const devices = await invoke<AudioDevice[]>("list_audio_devices");
         setAudioDevices(devices);
       } catch (error) {
-        console.error("[AudioSettings] Failed to fetch audio devices:", error);
+        logger.error("[AudioSettings] Failed to fetch audio devices:", error);
         setAudioDevices([]);
+      } finally {
+        setDevicesLoaded(true);
       }
     };
 
@@ -87,20 +91,42 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
     return labels[bitrate];
   };
 
+  const hasNoDevices = devicesLoaded && audioDevices.length === 0;
+
   return (
-    <div className="space-y-6">
+    <div data-testid="audio-settings" className="space-y-6">
+      {/* No audio devices warning */}
+      {hasNoDevices && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            {t('errors.audioNoDevicesAvailable')}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* No system audio devices warning when system audio enabled */}
+      {devicesLoaded && settings.record_system_audio && systemAudioDevices.length === 0 && !hasNoDevices && (
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            {t('errors.audioDeviceNotFoundHint')}
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Microphone Settings */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold text-base flex items-center gap-2">
             <Mic className="w-4 h-4" />
             {t('settings.recordingConfig.audioSettings.microphoneRecording.title')}
-          </CardTitle>
-          <CardDescription>
+          </h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.audioSettings.microphoneRecording.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <Label htmlFor="record_microphone" className="flex-1 cursor-pointer">
               {t('settings.recordingConfig.audioSettings.microphoneRecording.enableMicrophone')}
@@ -157,21 +183,21 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
               </div>
             </>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* System Audio Settings */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold text-base flex items-center gap-2">
             <Volume2 className="w-4 h-4" />
             {t('settings.recordingConfig.audioSettings.systemAudioRecording.title')}
-          </CardTitle>
-          <CardDescription>
+          </h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.audioSettings.systemAudioRecording.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <Label htmlFor="record_system_audio" className="flex-1 cursor-pointer">
               {t('settings.recordingConfig.audioSettings.systemAudioRecording.enableSystemAudio')}
@@ -228,18 +254,18 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
               </div>
             </>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Audio Quality Settings */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.audioSettings.audioQuality.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.audioSettings.audioQuality.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.audioSettings.audioQuality.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="space-y-2">
             <Label>{t('settings.recordingConfig.audioSettings.audioQuality.sampleRate')}</Label>
             <div className="flex items-center gap-4">
@@ -287,13 +313,13 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
               )}
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Info Card */}
       {(settings.record_microphone || settings.record_system_audio) && (
-        <Card className="bg-muted/50">
-          <CardContent className="pt-6">
+        <div className="gaming-panel p-6">
+          <div>
             <div className="space-y-2 text-sm">
               <p className="font-semibold">{t('settings.recordingConfig.audioSettings.currentConfiguration.title')}</p>
               {settings.record_microphone && (
@@ -320,8 +346,8 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
                 • {t('settings.recordingConfig.audioSettings.currentConfiguration.quality')}: {getSampleRateLabel(settings.sample_rate)} @ {getBitrateLabel(settings.bitrate)}
               </p>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
     </div>
   );

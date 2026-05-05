@@ -1,18 +1,21 @@
 // Complete windows-capture v2 + FFmpeg integration
-mod integration_backend;
+pub mod integration_backend;
 
 // macOS-specific recording backend
-#[cfg(target_os = "macos")]
-mod mac_backend;
 #[cfg(target_os = "macos")]
 mod mac_audio;
 #[cfg(target_os = "macos")]
 mod mac_audio_core;
 #[cfg(target_os = "macos")]
-mod mac_screen_capture;
+mod mac_backend;
 #[cfg(target_os = "macos")]
 mod mac_ffmpeg;
+#[cfg(target_os = "macos")]
+mod mac_screen_capture;
 
+// WASAPI loopback audio capture (replaces unreliable DirectShow Stereo Mix)
+#[cfg(target_os = "windows")]
+pub mod wasapi_audio;
 
 // Common types and interfaces
 pub mod audio;
@@ -21,26 +24,20 @@ pub mod commands;
 pub mod game_monitor;
 pub mod live_client;
 
-
 // Complete integration exports
 pub use integration_backend::RecordingManager;
 
-
 // Platform-specific exports
 #[cfg(target_os = "macos")]
-pub use mac_backend::{MacRecordingManager, MacRecordingConfig, MacRecordingStatus};
+pub use mac_audio::{MacAudioDevice, MacAudioDeviceType, MacAudioManager};
 #[cfg(target_os = "macos")]
-pub use mac_audio::{MacAudioManager, MacAudioDevice, MacAudioDeviceType};
+pub use mac_audio_core::{CoreAudioDevice, CoreAudioDeviceType, CoreAudioManager};
 #[cfg(target_os = "macos")]
-pub use mac_audio_core::{CoreAudioManager, CoreAudioDevice, CoreAudioDeviceType};
+pub use mac_backend::{MacRecordingConfig, MacRecordingManager, MacRecordingStatus};
 #[cfg(target_os = "macos")]
-pub use mac_screen_capture::{MacScreenCaptureManager, MacScreenCaptureConfig, MacDisplayInfo};
+pub use mac_ffmpeg::{detect_available_macos_encoders, MacFFmpegCommandBuilder, MacFFmpegConfig};
 #[cfg(target_os = "macos")]
-pub use mac_ffmpeg::{MacFFmpegConfig, MacFFmpegCommandBuilder, detect_available_macos_encoders};
-
-
-
-
+pub use mac_screen_capture::{MacDisplayInfo, MacScreenCaptureConfig, MacScreenCaptureManager};
 
 /// Platform detection utilities
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,12 +68,12 @@ impl Platform {
 // Note: Use initialize_recording_backend_full for complete initialization with all options
 pub use integration_backend::initialize_recording_backend_full;
 pub use integration_backend::VideoSettingsConfig;
-
+pub use integration_backend::{HwAccel, RecordingConfig, RecordingStatus, VideoEncoder};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recording::integration_backend::RecordingStatus;
+    use crate::recording::RecordingStatus;
 
     #[test]
     fn test_platform_detection() {
@@ -90,7 +87,7 @@ mod tests {
 
         // Test platform matching
         match platform {
-            Platform::Windows | Platform::MacOS => {},
+            Platform::Windows | Platform::MacOS => {}
         }
     }
 

@@ -1,58 +1,55 @@
 // src/types/storage.ts
+// Aligned with Rust backend: src-tauri/src/storage/models.rs
 
-export interface Game {
-  game_id: string;
-  game_start_time: string;
-  game_end_time: string | null;
-  champion_name: string | null;
-  game_mode: string | null;
+export type GameResult = 'Win' | 'Loss' | 'Remake';
+
+export interface KDA {
+  kills: number;
+  deaths: number;
+  assists: number;
 }
 
 export interface GameMetadata {
   game_id: string;
-  summoner_name: string;
   champion: string;
   game_mode: string;
-  game_start_time: string;
-  game_duration: number;
-  result: string;
-  kills: number;
-  deaths: number;
-  assists: number;
-  created_at: string;
+  start_time: string;
+  end_time: string | null;
+  result: GameResult | null;
+  kda: KDA | null;
 }
+
+// EventType is a tagged enum in Rust with snake_case serialization.
+// Simple variants serialize as strings, Multikill/Custom carry data.
+export type EventType =
+  | 'champion_kill'
+  | 'turret_kill'
+  | 'inhibitor_kill'
+  | 'dragon_kill'
+  | 'baron_kill'
+  | 'ace'
+  | 'first_blood'
+  | { multikill: number }
+  | { custom: string };
 
 export interface EventData {
   event_id: number;
-  event_name: string;
-  event_time: number;
-  killer_name?: string;
-  victim_name?: string;
-  assisters: string[];
+  event_type: EventType;
+  timestamp: number;
   priority: number;
-}
-
-export interface Clip {
-  id: number;
-  game_id: string; // Changed to string from number to match Rust game_id type and usage
-  file_path: string;
-  event_type: string;
-  event_time: number;
-  priority: number;
-  duration_secs: number;
-  created_at: string;
-  thumbnail_path?: string;
+  participants: string[];
+  details?: Record<string, unknown> | null;
 }
 
 export interface ClipMetadata {
-  clip_id: string;
-  event_id: number;
   file_path: string;
-  thumbnail_path?: string;
-  start_time: number;
-  end_time: number;
+  thumbnail_path?: string | null;
+  event_type: EventType;
+  event_time: number;
+  priority: number;
   duration: number;
   created_at: string;
+  usage_count?: number;
 }
 
 export interface StorageStats {

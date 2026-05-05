@@ -6,7 +6,6 @@ import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { formatDuration } from '@/lib/utils';
@@ -70,11 +69,11 @@ export function CompositionSettings({ onExport }: CompositionSettingsProps) {
       {/* Settings Content */}
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
         {/* Aspect Ratio Section */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">{t('editor.composition.aspectRatio')}</CardTitle>
-          </CardHeader>
-          <CardContent>
+        <div className="bg-black/40 rounded-lg border border-white/5 p-4">
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold">{t('editor.composition.aspectRatio')}</h3>
+          </div>
+          <div>
             <RadioGroup
               value={compositionSettings.aspectRatio}
               onValueChange={(value) => setAspectRatio(value as AspectRatio)}
@@ -94,15 +93,15 @@ export function CompositionSettings({ onExport }: CompositionSettingsProps) {
                 </div>
               ))}
             </RadioGroup>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
         {/* Transition Section */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">{t('editor.composition.transitions')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <div className="bg-black/40 rounded-lg border border-white/5 p-4">
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold">{t('editor.composition.transitions')}</h3>
+          </div>
+          <div className="space-y-4">
             {/* Transition Type */}
             <div className="space-y-2">
               <Label htmlFor="transition-type">{t('editor.composition.type')}</Label>
@@ -143,18 +142,18 @@ export function CompositionSettings({ onExport }: CompositionSettingsProps) {
                 />
               </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
         {/* Summary Section */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm flex items-center gap-2">
+        <div className="bg-black/40 rounded-lg border border-white/5 p-4">
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
               <Film className="w-4 h-4" />
               {t('editor.composition.summary')}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
+            </h3>
+          </div>
+          <div className="space-y-3">
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">{t('editor.composition.totalClips')}</span>
               <Badge variant="secondary">{timelineClips.length}</Badge>
@@ -176,8 +175,8 @@ export function CompositionSettings({ onExport }: CompositionSettingsProps) {
                 }
               </Badge>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
 
       <Separator />

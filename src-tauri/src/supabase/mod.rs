@@ -73,12 +73,21 @@ pub struct SupabaseErrorResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LicenseStatus {
-    #[serde(rename = "ACTIVE")]
+    #[serde(rename = "active", alias = "ACTIVE")]
     Active,
-    #[serde(rename = "EXPIRED")]
+    #[serde(rename = "expired", alias = "EXPIRED")]
     Expired,
-    #[serde(rename = "CANCELLED")]
+    #[serde(
+        rename = "cancelled",
+        alias = "CANCELLED",
+        alias = "canceled",
+        alias = "CANCELED"
+    )]
     Cancelled,
+    #[serde(rename = "inactive", alias = "INACTIVE")]
+    Inactive,
+    #[serde(rename = "none", alias = "NONE")]
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,8 +98,11 @@ pub struct License {
     pub status: LicenseStatus,
     pub created_at: String,
     pub expires_at: Option<String>,
+    #[serde(default)]
     pub stripe_subscription_id: Option<String>,
+    #[serde(default)]
     pub stripe_customer_id: Option<String>,
+    #[serde(default)]
     pub metadata: serde_json::Value,
 }
 

@@ -12,12 +12,15 @@ import { ExportModal } from '@/components/editor/ExportModal';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, Video, AlertCircle } from 'lucide-react';
+import { logger } from '@/lib/logger';
+import { VideoErrorBoundary } from '@/components/ErrorBoundary';
+import { useToast } from '@/components/ui/use-toast';
 
 export function Editor() {
   const { t } = useTranslation();
+  const { toast } = useToast();
   const { selectedGameId, setSelectedGameId, availableClips, setAvailableClips } = useEditorStore();
   const { loadGameClips, isLoading, error } = useEditor();
   const { getAllGames, isLoading: isLoadingGames } = useStorage();
@@ -25,27 +28,25 @@ export function Editor() {
   const [games, setGames] = useState<Array<{ id: string; date: string; name: string }>>([]);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
-  // Load games on mount
   useEffect(() => {
     const loadGames = async () => {
       try {
         const allGames = await getAllGames();
-        // Transform GameMetadata[] to simplified format
         const gameList = allGames.map((game) => ({
           id: game.game_id,
-          date: new Date(game.game_start_time).toLocaleDateString(),
+          date: new Date(game.start_time).toLocaleDateString(),
           name: `${game.champion} - ${game.game_mode}`,
         }));
         setGames(gameList);
       } catch (err) {
-        console.error('Failed to load games:', err);
+        logger.error('Failed to load games:', err);
+        toast({ title: t('editor.error.loadGamesFailed'), variant: 'destructive' });
       }
     };
 
     loadGames();
-  }, [getAllGames]);
+  }, [getAllGames, t, toast]);
 
-  // Load clips when game is selected
   useEffect(() => {
     if (selectedGameId) {
       const loadClips = async () => {
@@ -53,13 +54,14 @@ export function Editor() {
           const clips = await loadGameClips(selectedGameId);
           setAvailableClips(clips);
         } catch (err) {
-          console.error('Failed to load clips:', err);
+          logger.error('Failed to load clips:', err);
+          toast({ title: t('editor.error.loadClipsFailed'), variant: 'destructive' });
         }
       };
 
       loadClips();
     }
-  }, [selectedGameId, loadGameClips, setAvailableClips]);
+  }, [selectedGameId, loadGameClips, setAvailableClips, t, toast]);
 
   const handleGameSelect = (gameId: string) => {
     setSelectedGameId(gameId);
@@ -69,58 +71,53 @@ export function Editor() {
   if (!selectedGameId) {
     return (
       <div className="flex items-center justify-center h-full p-6">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Video className="w-6 h-6" />
-              {t('editor.selectGameTitle')}
-            </CardTitle>
-            <CardDescription>
-              {t('editor.selectGameDescription')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {isLoadingGames ? (
-              <div className="flex items-center justify-center p-8">
-                <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
-              </div>
-            ) : games.length === 0 ? (
-              <Alert>
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  {t('editor.noGamesAvailable')}
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">{t('editor.selectGame')}</label>
-                  <Select onValueChange={handleGameSelect}>
-                    <SelectTrigger>
-                      <SelectValue placeholder={t('editor.chooseGame')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {games.map((game) => (
-                        <SelectItem key={game.id} value={game.id}>
-                          <div className="flex items-center justify-between w-full">
-                            <span>{game.name}</span>
-                            <Badge variant="outline" className="ml-2">{game.date}</Badge>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+        <div className="gaming-panel p-6 w-full max-w-md">
+          <div className="flex items-center gap-2 mb-1">
+            <Video className="w-6 h-6 text-gaming-cyan" />
+            <h2 className="text-lg font-semibold" data-autofocus tabIndex={-1}>{t('editor.selectGameTitle')}</h2>
+          </div>
+          <p className="text-sm text-muted-foreground mb-6">
+            {t('editor.selectGameDescription')}
+          </p>
 
-                <div className="p-4 bg-muted rounded-lg text-sm text-muted-foreground">
-                  <p>
-                    {t('editor.selectGamePrompt')}
-                  </p>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
+          {isLoadingGames ? (
+            <div className="flex items-center justify-center p-8">
+              <Loader2 className="w-8 h-8 animate-spin text-gaming-cyan" />
+            </div>
+          ) : games.length === 0 ? (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                {t('editor.noGamesAvailable')}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">{t('editor.selectGame')}</label>
+                <Select onValueChange={handleGameSelect}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={t('editor.chooseGame')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {games.map((game) => (
+                      <SelectItem key={game.id} value={game.id}>
+                        <div className="flex items-center justify-between w-full">
+                          <span>{game.name}</span>
+                          <Badge variant="outline" className="ml-2">{game.date}</Badge>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="mt-4 p-4 bg-black/40 rounded-lg border border-white/5 text-sm text-muted-foreground">
+                <p>{t('editor.selectGamePrompt')}</p>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     );
   }
@@ -130,7 +127,7 @@ export function Editor() {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center space-y-4">
-          <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto" />
+          <Loader2 className="w-12 h-12 animate-spin text-gaming-cyan mx-auto" />
           <p className="text-muted-foreground">{t('editor.loadingClips')}</p>
         </div>
       </div>
@@ -141,14 +138,12 @@ export function Editor() {
   if (error) {
     return (
       <div className="flex items-center justify-center h-full p-6">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-destructive">
-              <AlertCircle className="w-6 h-6" />
-              {t('editor.errorLoadingClips')}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <div className="gaming-panel p-6 w-full max-w-md">
+          <div className="flex items-center gap-2 mb-1">
+            <AlertCircle className="w-6 h-6 text-gaming-magenta" />
+            <h2 className="text-lg font-semibold text-gaming-magenta">{t('editor.errorLoadingClips')}</h2>
+          </div>
+          <div className="space-y-4 mt-4">
             <Alert variant="destructive">
               <AlertDescription>{error}</AlertDescription>
             </Alert>
@@ -167,8 +162,29 @@ export function Editor() {
                 {t('editor.retry')}
               </Button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show empty state when game is selected but has no clips
+  if (availableClips.length === 0 && selectedGameId && !isLoading && !error) {
+    return (
+      <div className="flex items-center justify-center h-full p-6">
+        <div className="gaming-panel p-6 w-full max-w-md text-center">
+          <Video className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+          <h2 className="text-lg font-semibold mb-2">{t('editor.noClips')}</h2>
+          <p className="text-sm text-muted-foreground mb-4">
+            {t('editor.noClipsDescription')}
+          </p>
+          <Button
+            variant="outline"
+            onClick={() => setSelectedGameId(null)}
+          >
+            {t('editor.backToGameSelection')}
+          </Button>
+        </div>
       </div>
     );
   }
@@ -177,10 +193,10 @@ export function Editor() {
   return (
     <>
       {/* Header Bar */}
-      <div className="border-b p-4 bg-background">
+      <div className="border-b border-white/5 p-4 bg-[hsl(240,18%,9%)]">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Video className="w-6 h-6" />
+            <Video className="w-6 h-6 text-gaming-cyan" />
             <div>
               <h2 className="text-lg font-semibold">{t('editor.title')}</h2>
               <p className="text-sm text-muted-foreground">
@@ -211,7 +227,7 @@ export function Editor() {
       <div className="flex-1 overflow-hidden">
         <EditorLayout
           clipLibrary={<ClipLibrary />}
-          videoPreview={<VideoPreview />}
+          videoPreview={<VideoErrorBoundary><VideoPreview /></VideoErrorBoundary>}
           compositionSettings={
             <CompositionSettings
               onExport={() => setIsExportModalOpen(true)}
@@ -221,7 +237,6 @@ export function Editor() {
         />
       </div>
 
-      {/* Export Modal */}
       <ExportModal
         isOpen={isExportModalOpen}
         onClose={() => setIsExportModalOpen(false)}

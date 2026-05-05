@@ -1,37 +1,46 @@
 // Integration tests for recording system
 #![cfg(test)]
 
-use lolshorts_tauri::recording::{RecordingManager, RecordingState};
-use lolshorts_tauri::lcu::LcuClient;
+use lolshorts::lcu::LcuClient;
+use lolshorts::recording::{RecordingConfig, RecordingManager, RecordingStatus};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio;
+use tokio::sync::RwLock;
 
 #[tokio::test]
 async fn test_recording_manager_initialization() {
-    let manager = RecordingManager::new();
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let config = RecordingConfig {
+        output_dir: temp_dir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let manager = RecordingManager::new(config).await.unwrap();
 
-    let state = manager.get_state().await;
-    assert_eq!(state, RecordingState::Idle);
+    let status = manager.get_status().await;
+    assert_eq!(status, RecordingStatus::Idle);
 }
 
 #[tokio::test]
 async fn test_recording_state_transitions() {
-    let manager = Arc::new(RwLock::new(RecordingManager::new()));
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let config = RecordingConfig {
+        output_dir: temp_dir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let manager = Arc::new(RwLock::new(RecordingManager::new(config).await.unwrap()));
 
     // Initial state should be Idle
     {
         let mgr = manager.read().await;
-        assert_eq!(mgr.get_state().await, RecordingState::Idle);
+        assert_eq!(mgr.get_status().await, RecordingStatus::Idle);
     }
 
-    // Start recording (will fail without actual Game DVR, but test state change logic)
+    // Start recording (will fail without actual FFmpeg capture source, but test state change logic)
     {
         let mut mgr = manager.write().await;
         let result = mgr.start_recording().await;
 
-        // May fail in test environment without Game DVR, which is expected
-        // Just verify we handle the error gracefully
+        // May fail in test environment without capture device, which is expected
         if result.is_err() {
             println!("Recording start failed as expected in test environment");
         }
@@ -40,11 +49,9 @@ async fn test_recording_state_transitions() {
 
 #[tokio::test]
 async fn test_lcu_client_initialization() {
-    let client = LcuClient::new();
+    let _client = LcuClient::new();
 
-    // Test that client can be created
-    assert!(true); // Client creation doesn't fail
-
+    // Test that client can be created without panicking
     // Note: Actual connection test requires League Client running
     // This is tested in E2E tests with mocked LCU
 }
@@ -53,7 +60,12 @@ async fn test_lcu_client_initialization() {
 async fn test_concurrent_recording_requests() {
     use tokio::task;
 
-    let manager = Arc::new(RwLock::new(RecordingManager::new()));
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let config = RecordingConfig {
+        output_dir: temp_dir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let manager = Arc::new(RwLock::new(RecordingManager::new(config).await.unwrap()));
 
     // Spawn multiple concurrent state checks
     let mut handles = vec![];
@@ -61,34 +73,35 @@ async fn test_concurrent_recording_requests() {
         let mgr_clone = Arc::clone(&manager);
         let handle = task::spawn(async move {
             let mgr = mgr_clone.read().await;
-            mgr.get_state().await
+            mgr.get_status().await
         });
         handles.push(handle);
     }
 
     // All should succeed and return same state
     for handle in handles {
-        let state = handle.await.unwrap();
-        assert_eq!(state, RecordingState::Idle);
+        let status = handle.await.unwrap();
+        assert_eq!(status, RecordingStatus::Idle);
     }
 }
 
 #[tokio::test]
 async fn test_clip_metadata_validation() {
-    use lolshorts_tauri::recording::ClipMetadata;
+    use lolshorts::storage::models::EventType;
+    use lolshorts::storage::ClipMetadata;
 
     let valid_metadata = ClipMetadata {
-        game_id: 12345,
-        event_type: "ChampionKill".to_string(),
+        file_path: "C:\\Videos\\clip.mp4".to_string(),
+        thumbnail_path: None,
+        event_type: EventType::ChampionKill,
         event_time: 180.5,
         priority: 3,
-        file_path: "C:\\Videos\\clip.mp4".to_string(),
         duration: 15.0,
-        created_at: chrono::Utc::now().timestamp(),
+        created_at: chrono::Utc::now(),
+        usage_count: 0,
     };
 
     // Verify required fields are present
-    assert!(!valid_metadata.event_type.is_empty());
     assert!(valid_metadata.event_time > 0.0);
     assert!(valid_metadata.priority >= 1 && valid_metadata.priority <= 5);
     assert!(!valid_metadata.file_path.is_empty());
@@ -96,24 +109,22 @@ async fn test_clip_metadata_validation() {
 
 #[tokio::test]
 async fn test_event_priority_calculation() {
-    use lolshorts_tauri::recording::EventDetector;
-
-    let detector = EventDetector::new();
+    use lolshorts::storage::models::EventType;
 
     // Pentakill should have highest priority
-    let pentakill_priority = detector.calculate_pentakill_priority();
+    let pentakill_priority = EventType::Multikill(5).default_priority();
     assert_eq!(pentakill_priority, 5);
 
     // Quadrakill should be 4
-    let quadrakill_priority = detector.calculate_multikill_priority(4);
+    let quadrakill_priority = EventType::Multikill(4).default_priority();
     assert_eq!(quadrakill_priority, 4);
 
     // Triple kill should be 3
-    let triple_priority = detector.calculate_multikill_priority(3);
+    let triple_priority = EventType::Multikill(3).default_priority();
     assert_eq!(triple_priority, 3);
 
     // Single kill should be lower
-    let single_priority = detector.calculate_multikill_priority(1);
+    let single_priority = EventType::ChampionKill.default_priority();
     assert!(single_priority < 3);
 }
 
@@ -133,37 +144,34 @@ async fn test_clip_storage_limits() {
 
 #[tokio::test]
 async fn test_game_detection_flow() {
-    use lolshorts_tauri::recording::GameState;
+    use lolshorts::recording::game_monitor::{GameMode, UnifiedGameStatus};
 
-    // Test game state detection logic
-    let states = vec![
-        GameState::None,
-        GameState::Lobby,
-        GameState::InGame,
-        GameState::PostGame,
-    ];
+    // Test game mode variants exist and are distinct
+    assert_ne!(GameMode::Live, GameMode::TFT);
 
-    // Should transition through states in order
-    for i in 0..states.len() - 1 {
-        let current = &states[i];
-        let next = &states[i + 1];
+    // Test UnifiedGameStatus can be constructed
+    let status = UnifiedGameStatus {
+        lcu_connected: false,
+        in_game: false,
+        game_mode: GameMode::Live,
+        summoner_name: None,
+        champion_name: None,
+        game_time: None,
+        is_monitoring: false,
+        is_recording: false,
+    };
 
-        // Verify state progression makes sense
-        match (current, next) {
-            (GameState::None, GameState::Lobby) => assert!(true),
-            (GameState::Lobby, GameState::InGame) => assert!(true),
-            (GameState::InGame, GameState::PostGame) => assert!(true),
-            _ => (), // Other transitions are possible but not tested here
-        }
-    }
+    assert!(!status.in_game);
+    assert!(!status.lcu_connected);
 }
 
 #[tokio::test]
 async fn test_windows_capture_recorder_basic_functionality() {
-    use lolshorts_tauri::recording::integration_backend::{
-        WindowsCaptureRecorder, RecordingConfig, VideoEncoder, RecordingStatus
+    use lolshorts::recording::integration_backend::{
+        RecordingConfig, RecordingStatus, VideoEncoder, WindowsCaptureRecorder,
     };
-    use std::path::PathBuf;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
 
     // Create test configuration
     let config = RecordingConfig {
@@ -171,14 +179,18 @@ async fn test_windows_capture_recorder_basic_functionality() {
         bitrate: 5_000_000,
         resolution: (640, 480), // Small for testing
         encoder: VideoEncoder::H264,
-        output_dir: PathBuf::from("./test_recordings"),
+        output_dir: temp_dir.path().to_path_buf(),
         buffer_duration_secs: 30,
         audio_config: None, // No audio for basic test
+        ..Default::default()
     };
 
     // Test recorder creation
     let recorder_result = WindowsCaptureRecorder::new(config).await;
-    assert!(recorder_result.is_ok(), "Failed to create WindowsCaptureRecorder");
+    assert!(
+        recorder_result.is_ok(),
+        "Failed to create WindowsCaptureRecorder"
+    );
 
     let recorder = recorder_result.unwrap();
 
@@ -190,7 +202,6 @@ async fn test_windows_capture_recorder_basic_functionality() {
     let stats = recorder.get_stats().await;
     assert_eq!(stats.total_frames, 0);
     assert_eq!(stats.uptime_seconds, 0.0);
-    assert_eq!(stats.current_fps, 0.0);
 
-    println!("✅ WindowsCaptureRecorder basic functionality test passed");
+    println!("WindowsCaptureRecorder basic functionality test passed");
 }

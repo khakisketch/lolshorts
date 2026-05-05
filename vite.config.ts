@@ -2,9 +2,15 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 
+const appVersion = process.env.npm_package_version ?? "0.0.0-dev";
+
 // https://vitejs.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [react()],
+
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
 
   resolve: {
     alias: {
@@ -45,7 +51,7 @@ export default defineConfig(async () => ({
       output: {
         manualChunks: {
           // React core
-          'react-vendor': ['react', 'react-dom'],
+          'react-vendor': ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'],
 
           // React Router
           'router': ['@tanstack/react-router'],
@@ -109,4 +115,4 @@ export default defineConfig(async () => ({
     ],
     exclude: ['@tauri-apps/api', '@tauri-apps/plugin-shell', '@tauri-apps/plugin-dialog'],
   },
-}));
+});

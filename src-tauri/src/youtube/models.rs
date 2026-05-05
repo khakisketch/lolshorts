@@ -1,5 +1,87 @@
 use serde::{Deserialize, Serialize};
 
+fn default_scheduled_upload_status() -> ScheduledUploadStatus {
+    ScheduledUploadStatus::Pending
+}
+
+/// Lifecycle state for a queued scheduled upload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScheduledUploadStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl ScheduledUploadStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            ScheduledUploadStatus::Completed
+                | ScheduledUploadStatus::Failed
+                | ScheduledUploadStatus::Cancelled
+        )
+    }
+}
+
+/// Schedule information for a queued upload
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadSchedule {
+    /// ISO 8601 datetime string for when to publish (used as YouTube `publishAt`)
+    pub scheduled_at: Option<String>,
+    /// Position in the upload queue (0-based)
+    pub queue_position: Option<u32>,
+}
+
+/// A pending scheduled upload entry saved to storage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledUpload {
+    pub id: String,
+    pub video_path: String,
+    pub title: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub privacy_status: String,
+    pub thumbnail_path: Option<String>,
+    pub schedule: UploadSchedule,
+    pub created_at: i64, // Unix timestamp
+    #[serde(default = "default_scheduled_upload_status")]
+    pub status: ScheduledUploadStatus,
+    #[serde(default)]
+    pub error_message: Option<String>,
+    #[serde(default)]
+    pub attempts: u32,
+    #[serde(default)]
+    pub completed_video_id: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<i64>,
+}
+
+/// Parameters for scheduling a YouTube upload via the Tauri command.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScheduleUploadParams {
+    pub video_path: String,
+    pub title: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub privacy_status: String,
+    pub thumbnail_path: Option<String>,
+    pub scheduled_at: Option<String>,
+}
+
+/// Structured event emitted after scheduled upload execution finishes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledUploadEvent {
+    pub upload_id: String,
+    pub status: ScheduledUploadStatus,
+    pub video_id: Option<String>,
+    pub title: String,
+    pub attempts: u32,
+    pub error_message: Option<String>,
+}
+
 /// YouTube authentication status
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStatus {
@@ -32,7 +114,6 @@ impl QuotaInfo {
     /// YouTube Data API v3 daily quota limit (10,000 units)
     pub const DAILY_LIMIT: u64 = 10_000;
 
-    
     /// Create new quota info
     pub fn new(used: u64) -> Self {
         let now = chrono::Utc::now();
@@ -63,4 +144,3 @@ impl QuotaInfo {
         }
     }
 }
-

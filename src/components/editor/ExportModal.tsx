@@ -12,11 +12,14 @@ import { Separator } from '@/components/ui/separator';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
-import { CheckCircle2, XCircle, Loader2, FolderOpen, Film, Settings, Clock, LayoutTemplate } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { CheckCircle2, XCircle, Loader2, FolderOpen, Film, Settings, Clock, LayoutTemplate, Copy } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { open as openPath } from '@tauri-apps/plugin-shell';
 import { join, dirname } from '@tauri-apps/api/path';
 import { getErrorMessage, formatDuration } from '@/lib/utils';
+import { logger } from '@/lib/logger';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -24,6 +27,9 @@ interface ExportModalProps {
 }
 
 type ExportFormat = 'shorts' | 'montage';
+
+const DEFAULT_SHORTS_FILENAME = 'lolshorts_export.mp4';
+const DEFAULT_MONTAGE_FILENAME = 'lol_montage.mp4';
 
 export function ExportModal({ isOpen, onClose }: ExportModalProps) {
   const { t } = useTranslation();
@@ -46,6 +52,9 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
   const { toast } = useToast();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>('shorts');
+  const [fileFormat, setFileFormat] = useState<'mp4' | 'webm' | 'mov' | 'gif'>('mp4');
+  const [resolution, setResolution] = useState<'1080x1920' | '720x1280'>('1080x1920');
+  const [gifDuration, setGifDuration] = useState(10);
 
   // Reset modal state when opened
   useEffect(() => {
@@ -55,18 +64,21 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
       setExportError(null);
       setSelectedPath(null);
       setExportFormat('shorts');
+      setFileFormat('mp4');
+      setResolution('1080x1920');
+      setGifDuration(10);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   const handleSelectPath = async () => {
     try {
-      const defaultName = exportFormat === 'shorts' ? 'lolshorts_export.mp4' : 'lol_montage.mp4';
+      const defaultName = exportFormat === 'shorts' ? DEFAULT_SHORTS_FILENAME : DEFAULT_MONTAGE_FILENAME;
       const selected = await open({
         title: t('editor.export.saveTitle'),
         filters: [{
           name: t('editor.export.videoFiles'),
-          extensions: ['mp4'],
+          extensions: [fileFormat],
         }],
         defaultPath: await join(await dirname(''), defaultName),
       });
@@ -75,7 +87,7 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
         setSelectedPath(selected);
       }
     } catch (error) {
-      console.error('Failed to select path:', error);
+      logger.error('Failed to select path:', error);
       setExportError(t('editor.export.selectLocationFailed'));
     }
   };
@@ -87,7 +99,20 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
 
     try {
       let outputPath = '';
-      if (exportFormat === 'shorts') {
+      if (fileFormat === 'gif') {
+        // GIF export: use first clip's source path
+        const firstClipPath = timelineClips[0]?.file_path;
+        if (!firstClipPath) {
+          setExportError(t('editor.export.noClipSourcePath'));
+          setExportStatus('error');
+          return;
+        }
+        outputPath = await invoke<string>('export_as_gif', {
+          input: firstClipPath,
+          output: selectedPath,
+          maxDuration: gifDuration,
+        });
+      } else if (exportFormat === 'shorts') {
         outputPath = await composeShorts(
           timelineClips,
           compositionSettings,
@@ -105,7 +130,7 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
         description: t('toast.exportCompleteDesc'),
       });
     } catch (error) {
-      console.error('Export failed:', error);
+      logger.error('Export failed:', error);
       setExportError(getErrorMessage(error));
       setExportStatus('error');
       toast({
@@ -122,7 +147,7 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
         const dir = await dirname(exportOutputPath);
         await openPath(dir);
       } catch (error) {
-        console.error('Failed to open folder:', error);
+        logger.error('Failed to open folder:', error);
       }
     }
   };
@@ -256,6 +281,40 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
 
               <Separator />
 
+              {/* Format & Resolution */}
+              <div className="space-y-3">
+                <div className="flex gap-4">
+                  <div className="flex-1 space-y-1">
+                    <Label className="text-xs">{t('editor.export.fileFormat', 'File Format')}</Label>
+                    <Select value={fileFormat} onValueChange={(v) => setFileFormat(v as 'mp4' | 'webm' | 'mov' | 'gif')}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="mp4">MP4 (H.264)</SelectItem>
+                        <SelectItem value="webm">WebM (VP9)</SelectItem>
+                        <SelectItem value="mov">MOV (ProRes)</SelectItem>
+                        <SelectItem value="gif">GIF (Animated)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <Label className="text-xs">{t('editor.export.resolution', 'Resolution')}</Label>
+                    <Select value={resolution} onValueChange={(v) => setResolution(v as '1080x1920' | '720x1280')}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1080x1920">1080 x 1920 (FHD)</SelectItem>
+                        <SelectItem value="720x1280">720 x 1280 (HD)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              <Separator />
+
               {/* File Path Selection */}
               <div className="space-y-2">
                 <span className="text-sm font-medium" id="save-location-label">{t('editor.export.saveLocation')}</span>
@@ -285,7 +344,7 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
             <div className="space-y-3">
               <Progress value={exportProgress} className="w-full" />
               <p className="text-sm text-center text-muted-foreground">
-                {Math.round(exportProgress)}% complete
+                {t('editor.export.percentComplete', { percent: Math.round(exportProgress) })}
               </p>
               <Alert>
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -313,15 +372,38 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
                   {exportOutputPath}
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleOpenFolder}
-                className="w-full"
-              >
-                <FolderOpen className="w-4 h-4 mr-2" />
-                {t('editor.export.openFolder')}
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleOpenFolder}
+                  className="flex-1"
+                >
+                  <FolderOpen className="w-4 h-4 mr-2" />
+                  {t('editor.export.openFolder')}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    if (exportOutputPath) {
+                      try {
+                        await navigator.clipboard.writeText(exportOutputPath);
+                        toast({
+                          title: t('editor.export.pathCopied', 'Path copied'),
+                          description: t('editor.export.pathCopiedDesc', 'File path copied to clipboard.'),
+                        });
+                      } catch (err) {
+                        logger.error('Failed to copy path:', err);
+                      }
+                    }
+                  }}
+                  className="flex-1"
+                >
+                  <Copy className="w-4 h-4 mr-2" />
+                  {t('editor.export.copyPath', 'Copy Path')}
+                </Button>
+              </div>
             </div>
           )}
 

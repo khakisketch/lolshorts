@@ -1,6 +1,6 @@
 /**
  * Auto-Edit TypeScript Types
- * These types match the backend Rust types from src-tauri/src/video/auto_composer.rs
+ * Frontend Auto-Edit types consumed after IPC normalization in src/api/video.ts.
  */
 
 // ========================================================================
@@ -96,6 +96,7 @@ export interface AutoEditProgress {
   clips_selected: number;
   total_clips: number;
   estimated_completion_seconds?: number;
+  output_path?: string;
 }
 
 export interface AutoEditResult {
@@ -109,6 +110,22 @@ export interface AutoEditResult {
 // ========================================================================
 // Frontend-Only Types (UI State)
 // ========================================================================
+
+export interface AutoEditMetadata {
+  title: string;
+  caption: string;
+  tags: string[];
+}
+
+export interface ShortsReadiness {
+  isReady: boolean;
+  checks: {
+    duration: { label: string; passed: boolean; message: string };
+    clipCount: { label: string; passed: boolean; message: string };
+    template: { label: string; passed: boolean; message: string };
+    music: { label: string; passed: boolean; message: string };
+  };
+}
 
 export interface GameSelection {
   game_id: string;

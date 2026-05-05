@@ -10,12 +10,14 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock as TokioRwLock};
 use tokio::time::Instant;
 
+use super::lol_window_detector::{LoLWindow, LoLWindowDetector};
+use super::mac_audio_core::{CoreAudioDevice, CoreAudioDeviceType, CoreAudioManager};
+use super::mac_ffmpeg::{
+    detect_available_macos_encoders, FFmpegUseCase, MacFFmpegCommandBuilder, MacFFmpegConfig,
+};
+use super::mac_screen_capture::{MacDisplayInfo, MacScreenCaptureConfig, MacScreenCaptureManager};
 use crate::storage::GameMetadata;
 use crate::utils::ffmpeg::get_ffmpeg_path;
-use super::mac_audio_core::{CoreAudioDevice, CoreAudioManager, CoreAudioDeviceType};
-use super::mac_screen_capture::{MacScreenCaptureManager, MacScreenCaptureConfig, MacDisplayInfo};
-use super::mac_ffmpeg::{MacFFmpegConfig, MacFFmpegCommandBuilder, detect_available_macos_encoders, FFmpegUseCase};
-use super::lol_window_detector::{LoLWindowDetector, LoLWindow};
 
 /// macOS screen capture configuration
 #[derive(Debug, Clone)]
@@ -147,7 +149,9 @@ impl MacRecordingManager {
     }
 
     /// Detect available encoders
-    pub async fn detect_available_encoders(&self) -> Result<Vec<super::mac_ffmpeg::MacFFmpegEncoder>> {
+    pub async fn detect_available_encoders(
+        &self,
+    ) -> Result<Vec<super::mac_ffmpeg::MacFFmpegEncoder>> {
         detect_available_macos_encoders()
     }
 
@@ -170,7 +174,9 @@ impl MacRecordingManager {
         // Start screen capture
         {
             let mut capture = self.screen_capture.lock().await;
-            capture.start_capture().await
+            capture
+                .start_capture()
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to start screen capture: {}", e))?;
         }
 
@@ -204,7 +210,9 @@ impl MacRecordingManager {
         // Stop screen capture
         {
             let mut capture = self.screen_capture.lock().await;
-            capture.stop_capture().await
+            capture
+                .stop_capture()
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to stop screen capture: {}", e))?;
         }
 
@@ -226,12 +234,12 @@ impl MacRecordingManager {
 
     /// Start FFmpeg capture with macOS configuration
     async fn start_ffmpeg_capture(&self, output_path: &PathBuf) -> Result<u32> {
-        let ffmpeg_path = get_ffmpeg_path()
-            .context("Failed to find FFmpeg for macOS recording")?;
+        let ffmpeg_path = get_ffmpeg_path().context("Failed to find FFmpeg for macOS recording")?;
 
         // Detect available encoders
         let encoders = self.detect_available_encoders().await?;
-        let best_encoder = encoders.iter()
+        let best_encoder = encoders
+            .iter()
             .find(|e| e.is_hardware && self.config.use_hardware_encoding)
             .or_else(|| encoders.iter().find(|e| e.is_hardware))
             .or_else(|| encoders.first())
@@ -239,9 +247,15 @@ impl MacRecordingManager {
 
         // Configure FFmpeg for macOS
         let ffmpeg_config = if self.config.use_hardware_encoding {
-            super::mac_ffmpeg::optimize_ffmpeg_params(best_encoder, FFmpegUseCase::RealTimeRecording)
+            super::mac_ffmpeg::optimize_ffmpeg_params(
+                best_encoder,
+                FFmpegUseCase::RealTimeRecording,
+            )
         } else {
-            super::mac_ffmpeg::optimize_ffmpeg_params(best_encoder, FFmpegUseCase::HighQualityEncoding)
+            super::mac_ffmpeg::optimize_ffmpeg_params(
+                best_encoder,
+                FFmpegUseCase::HighQualityEncoding,
+            )
         };
 
         // Build FFmpeg command
@@ -253,19 +267,24 @@ impl MacRecordingManager {
                 fps: self.config.fps as f64,
                 bitrate: self.config.bitrate,
                 gop_size: self.config.fps, // 1 second GOP
-                max_b_frames: if self.config.use_hardware_encoding { 0 } else { 2 },
+                max_b_frames: if self.config.use_hardware_encoding {
+                    0
+                } else {
+                    2
+                },
             });
 
         // Add audio if enabled
         if self.config.audio_enabled {
-            builder = builder
-                .add_audio_input(0)
-                .with_audio_params(super::mac_ffmpeg::AudioParameters {
-                    sample_rate: 44100,
-                    channels: 2,
-                    bitrate: 128_000,
-                    enabled: true,
-                });
+            builder =
+                builder
+                    .add_audio_input(0)
+                    .with_audio_params(super::mac_ffmpeg::AudioParameters {
+                        sample_rate: 44100,
+                        channels: 2,
+                        bitrate: 128_000,
+                        enabled: true,
+                    });
         }
 
         let mut cmd = builder.build()?;
@@ -279,7 +298,8 @@ impl MacRecordingManager {
             cmd.stdout(Stdio::null());
         }
 
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .context("Failed to start FFmpeg process for macOS")?;
 
         // Return PID (simplified - in production you'd want proper process management)
@@ -358,7 +378,7 @@ impl MacRecordingManager {
 
     /// Get system performance metrics
     pub async fn get_system_metrics(&self) -> Result<MacSystemMetrics> {
-        use sysinfo::{System, SystemExt, CpuExt, ProcessExt, DiskExt};
+        use sysinfo::{CpuExt, DiskExt, ProcessExt, System, SystemExt};
 
         let mut system = System::new_all();
         system.refresh_all();
@@ -373,8 +393,11 @@ impl MacRecordingManager {
 
         // Disk usage for output directory
         let disk_usage = if let Ok(metadata) = std::fs::metadata(&self.config.output_dir) {
-            if let Some(disk) = system.disks().iter()
-                .find(|d| self.config.output_dir.starts_with(d.mount_point())) {
+            if let Some(disk) = system
+                .disks()
+                .iter()
+                .find(|d| self.config.output_dir.starts_with(d.mount_point()))
+            {
                 (disk.total_space(), disk.available_space())
             } else {
                 (0, 0)
@@ -430,7 +453,11 @@ impl MacRecordingManager {
 
         if let Some(window) = cached_window {
             // Check if window is still valid
-            if self.lol_window_detector.is_window_valid(window.window_id).await {
+            if self
+                .lol_window_detector
+                .is_window_valid(window.window_id)
+                .await
+            {
                 return Some(window);
             }
         }
@@ -444,7 +471,9 @@ impl MacRecordingManager {
     }
 
     /// Configure capture region for LoL game content
-    pub async fn configure_lol_capture(&self) -> Result<Option<super::mac_screen_capture::MacDisplayInfo>> {
+    pub async fn configure_lol_capture(
+        &self,
+    ) -> Result<Option<super::mac_screen_capture::MacDisplayInfo>> {
         if let Some(window) = self.get_capture_window().await {
             // Get capture region from LoL window
             let capture_region = self.lol_window_detector.get_capture_region(&window).await?;
@@ -453,19 +482,21 @@ impl MacRecordingManager {
             let mut capture_manager = self.screen_capture.lock().await;
 
             // Configure to capture specific window region
-            capture_manager.configure_window_capture(
-                window.window_id,
-                capture_region,
-                self.config.fps as f64,
-            ).await?;
+            capture_manager
+                .configure_window_capture(window.window_id, capture_region, self.config.fps as f64)
+                .await?;
 
             // Return display info
             Ok(Some(super::mac_screen_capture::MacDisplayInfo {
                 display_id: window.display_id,
                 width: window.bounds.size.width as u32,
                 height: window.bounds.size.height as u32,
-                scale_factor: capture_manager.get_display_scale_factor(window.display_id).await.unwrap_or(2.0),
-                is_main: window.display_id == capture_manager.get_main_display_id().await.unwrap_or(0),
+                scale_factor: capture_manager
+                    .get_display_scale_factor(window.display_id)
+                    .await
+                    .unwrap_or(2.0),
+                is_main: window.display_id
+                    == capture_manager.get_main_display_id().await.unwrap_or(0),
             }))
         } else {
             // No LoL window detected, use full display
@@ -535,14 +566,14 @@ pub async fn initialize_recording_backend(output_dir: PathBuf) -> Result<MacReco
     #[cfg(target_os = "macos")]
     {
         // Check if FFmpeg is available
-        let result = std::process::Command::new("which")
-            .arg("ffmpeg")
-            .output();
+        let result = std::process::Command::new("which").arg("ffmpeg").output();
 
         match result {
             Ok(output) if output.status.success() => {
-                tracing::info!("FFmpeg found for macOS recording: {:?}",
-                           String::from_utf8_lossy(&output.stdout).trim());
+                tracing::info!(
+                    "FFmpeg found for macOS recording: {:?}",
+                    String::from_utf8_lossy(&output.stdout).trim()
+                );
             }
             _ => {
                 tracing::warn!("FFmpeg not found - macOS recording may not work");
@@ -554,12 +585,15 @@ pub async fn initialize_recording_backend(output_dir: PathBuf) -> Result<MacReco
             Ok(encoders) => {
                 let hardware_encoders: Vec<_> = encoders.iter().filter(|e| e.is_hardware).collect();
                 if !hardware_encoders.is_empty() {
-                    tracing::info!("Found {} hardware encoders: {}",
-                               hardware_encoders.len(),
-                               hardware_encoders.iter()
-                                   .map(|e| &e.name)
-                                   .collect::<Vec<_>>()
-                                   .join(", "));
+                    tracing::info!(
+                        "Found {} hardware encoders: {}",
+                        hardware_encoders.len(),
+                        hardware_encoders
+                            .iter()
+                            .map(|e| &e.name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                 } else {
                     tracing::info!("No hardware encoders found, will use software encoding");
                 }

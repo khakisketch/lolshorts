@@ -1,8 +1,119 @@
-use super::{SubscriptionTier, User};
+use super::{AuthManager, SubscriptionTier, User};
 use crate::error::{AppError, AppResult};
 use crate::AppState;
 use tauri::State;
 use tracing::{error, info, warn};
+
+const PAYMENT_DEFERRED_REASON: &str =
+    "Payment and PRO subscriptions are deferred until non-payment readiness gates pass.";
+const PAYMENT_DEFERRED_NEXT_STEP: &str =
+    "Enable server-side payment approval and webhook processing before live checkout.";
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EntitlementResponse {
+    pub tier: String,
+    pub status: String,
+    pub expires_at: Option<String>,
+    pub source: String,
+    pub checked_at: String,
+    pub payment_available: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionSyncResponse {
+    pub user: User,
+    pub entitlement: EntitlementResponse,
+}
+
+fn subscription_tier_from_license(license: &crate::supabase::License) -> SubscriptionTier {
+    if license.tier == "PRO" && license_is_active(license) {
+        SubscriptionTier::Pro
+    } else {
+        SubscriptionTier::Free
+    }
+}
+
+fn license_is_active(license: &crate::supabase::License) -> bool {
+    matches!(&license.status, crate::supabase::LicenseStatus::Active)
+        && license_not_expired(license.expires_at.as_deref())
+}
+
+fn license_not_expired(expires_at: Option<&str>) -> bool {
+    let Some(expires_at) = expires_at else {
+        return true;
+    };
+
+    chrono::DateTime::parse_from_rfc3339(expires_at)
+        .map(|expires_at| expires_at.with_timezone(&chrono::Utc) > chrono::Utc::now())
+        .unwrap_or_else(|e| {
+            warn!(
+                "Invalid license expires_at '{}'; failing closed to expired: {}",
+                expires_at, e
+            );
+            false
+        })
+}
+
+fn tier_from_entitlement(entitlement: &EntitlementResponse) -> SubscriptionTier {
+    if entitlement.tier == "PRO" && entitlement.status == "active" {
+        SubscriptionTier::Pro
+    } else {
+        SubscriptionTier::Free
+    }
+}
+
+fn sync_cached_user_tier(auth: &AuthManager, user: &User, entitlement: &EntitlementResponse) {
+    let authoritative_tier = tier_from_entitlement(entitlement);
+    if user.tier == authoritative_tier {
+        return;
+    }
+
+    let mut updated_user = user.clone();
+    updated_user.tier = authoritative_tier;
+
+    if let Err(e) = auth.login(updated_user) {
+        warn!("Failed to sync cached user tier from entitlement: {}", e);
+    }
+}
+
+fn status_string_for_license(license: &crate::supabase::License) -> String {
+    if !license_not_expired(license.expires_at.as_deref()) {
+        return "expired".to_string();
+    }
+
+    match &license.status {
+        crate::supabase::LicenseStatus::Active => "active",
+        crate::supabase::LicenseStatus::Expired => "expired",
+        crate::supabase::LicenseStatus::Cancelled => "cancelled",
+        crate::supabase::LicenseStatus::Inactive => "inactive",
+        crate::supabase::LicenseStatus::None => "none",
+    }
+    .to_string()
+}
+
+fn entitlement_from_license(license: Option<crate::supabase::License>) -> EntitlementResponse {
+    let (tier, status, expires_at) = match license {
+        Some(license) if license_is_active(&license) => {
+            let tier = if license.tier == "PRO" { "PRO" } else { "FREE" };
+            (tier.to_string(), "active".to_string(), license.expires_at)
+        }
+        Some(license) => (
+            "FREE".to_string(),
+            status_string_for_license(&license),
+            license.expires_at,
+        ),
+        None => ("FREE".to_string(), "none".to_string(), None),
+    };
+
+    EntitlementResponse {
+        tier,
+        status,
+        expires_at,
+        source: "supabase".to_string(),
+        checked_at: chrono::Utc::now().to_rfc3339(),
+        payment_available: false,
+    }
+}
 
 #[tauri::command]
 pub async fn login(state: State<'_, AppState>, email: String, password: String) -> AppResult<User> {
@@ -33,10 +144,7 @@ pub async fn login(state: State<'_, AppState>, email: String, password: String) 
                 "Fetched license for user: tier={}, status={:?}",
                 license.tier, license.status
             );
-            match license.tier.as_str() {
-                "PRO" => SubscriptionTier::Pro,
-                _ => SubscriptionTier::Free,
-            }
+            subscription_tier_from_license(&license)
         }
         Ok(None) => {
             info!("No license found for user, defaulting to Free tier");
@@ -56,6 +164,9 @@ pub async fn login(state: State<'_, AppState>, email: String, password: String) 
         refresh_token: session.refresh_token,
         expires_at: session.expires_at,
     };
+
+    let _youtube_credential_guard = state.youtube_manager.lock_credential_operations().await;
+    state.youtube_manager.clear_app_auth_oauth_state().await;
 
     state
         .auth
@@ -99,10 +210,7 @@ pub async fn signup(
                 "License created for new user: tier={}, status={:?}",
                 license.tier, license.status
             );
-            match license.tier.as_str() {
-                "PRO" => SubscriptionTier::Pro,
-                _ => SubscriptionTier::Free,
-            }
+            subscription_tier_from_license(&license)
         }
         Ok(None) | Err(_) => {
             info!("Using default Free tier for new user");
@@ -119,6 +227,9 @@ pub async fn signup(
         expires_at: session.expires_at,
     };
 
+    let _youtube_credential_guard = state.youtube_manager.lock_credential_operations().await;
+    state.youtube_manager.clear_app_auth_oauth_state().await;
+
     state
         .auth
         .login(user.clone())
@@ -130,6 +241,9 @@ pub async fn signup(
 
 #[tauri::command]
 pub async fn logout(state: State<'_, AppState>) -> AppResult<()> {
+    let _youtube_credential_guard = state.youtube_manager.lock_credential_operations().await;
+    state.youtube_manager.clear_app_auth_oauth_state().await;
+
     state
         .auth
         .logout()
@@ -197,11 +311,23 @@ pub async fn refresh_token(state: State<'_, AppState>) -> AppResult<User> {
             AppError::Auth(format!("Token refresh failed: {}", e))
         })?;
 
-    // Update user with new tokens
+    let refreshed_license = supabase_client
+        .get_user_license(&current_user.id, &session.access_token)
+        .await
+        .ok()
+        .flatten();
+    let refreshed_entitlement = entitlement_from_license(refreshed_license);
+    let refreshed_tier = if refreshed_entitlement.tier == "PRO" {
+        SubscriptionTier::Pro
+    } else {
+        SubscriptionTier::Free
+    };
+
+    // Update user with new tokens and authoritative entitlement
     let updated_user = User {
         id: current_user.id,
         email: current_user.email,
-        tier: current_user.tier,
+        tier: refreshed_tier,
         access_token: session.access_token,
         refresh_token: session.refresh_token,
         expires_at: session.expires_at,
@@ -249,10 +375,14 @@ pub async fn get_user_license(state: State<'_, AppState>) -> AppResult<LicenseIn
 
     match license {
         Some(license) => {
-            let is_active = matches!(license.status, crate::supabase::LicenseStatus::Active);
+            let is_active = license_is_active(&license);
 
             Ok(LicenseInfoResponse {
-                tier: license.tier,
+                tier: if is_active && license.tier == "PRO" {
+                    "PRO".to_string()
+                } else {
+                    "FREE".to_string()
+                },
                 expires_at: license.expires_at,
                 is_active,
             })
@@ -268,6 +398,55 @@ pub async fn get_user_license(state: State<'_, AppState>) -> AppResult<LicenseIn
     }
 }
 
+/// Return the current authoritative entitlement from Supabase user_licenses.
+#[tauri::command]
+pub async fn get_current_entitlement(
+    state: State<'_, AppState>,
+    _force_refresh: Option<bool>,
+) -> AppResult<EntitlementResponse> {
+    let user = state
+        .auth
+        .get_current_user()
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let Some(user) = user else {
+        return Ok(entitlement_from_license(None));
+    };
+
+    let supabase_client = match state.auth.get_supabase_client() {
+        Ok(client) => client,
+        Err(e) => {
+            warn!(
+                "Supabase client unavailable during entitlement refresh; failing closed to FREE: {}",
+                e
+            );
+            let entitlement = entitlement_from_license(None);
+            sync_cached_user_tier(&state.auth, &user, &entitlement);
+            return Ok(entitlement);
+        }
+    };
+
+    let license = match supabase_client
+        .get_user_license(&user.id, &user.access_token)
+        .await
+    {
+        Ok(license) => license,
+        Err(e) => {
+            warn!(
+                "Authoritative entitlement lookup failed; failing closed to FREE: {}",
+                e
+            );
+            let entitlement = entitlement_from_license(None);
+            sync_cached_user_tier(&state.auth, &user, &entitlement);
+            return Ok(entitlement);
+        }
+    };
+
+    let entitlement = entitlement_from_license(license);
+    sync_cached_user_tier(&state.auth, &user, &entitlement);
+    Ok(entitlement)
+}
+
 /// Sync session from Frontend (Supabase JS SDK) to Backend
 /// Validates the token by fetching user data from Supabase before storing
 #[tauri::command]
@@ -277,7 +456,8 @@ pub async fn set_session(
     refresh_token: String,
     user_id: String,
     email: String,
-) -> AppResult<()> {
+    expires_at: Option<i64>,
+) -> AppResult<SessionSyncResponse> {
     info!("Syncing session for user: {}", email);
 
     // Validate input
@@ -285,7 +465,9 @@ pub async fn set_session(
         return Err(AppError::Validation("Token cannot be empty".to_string()));
     }
     if user_id.is_empty() || email.is_empty() {
-        return Err(AppError::Validation("User ID and email are required".to_string()));
+        return Err(AppError::Validation(
+            "User ID and email are required".to_string(),
+        ));
     }
 
     let supabase_client = state
@@ -293,52 +475,74 @@ pub async fn set_session(
         .get_supabase_client()
         .map_err(|e| AppError::Internal(format!("Failed to get Supabase client: {}", e)))?;
 
-    // Validate token by fetching user license from DB
-    // This ensures the token is valid and belongs to the claimed user
-    let tier = match supabase_client
-        .get_user_license(&user_id, &access_token)
+    let verified_user = supabase_client.get_user(&access_token).await.map_err(|e| {
+        warn!(
+            "Token validation failed for claimed user {}: {}",
+            user_id, e
+        );
+        AppError::Auth(format!("Invalid token: {}", e))
+    })?;
+
+    if verified_user.id != user_id {
+        warn!(
+            "Rejected session sync: token subject {} does not match claimed user {}",
+            verified_user.id, user_id
+        );
+        return Err(AppError::Auth("Token subject mismatch".to_string()));
+    }
+
+    if !verified_user.email.eq_ignore_ascii_case(&email) {
+        warn!(
+            "Rejected session sync: token email {} does not match claimed email {}",
+            verified_user.email, email
+        );
+        return Err(AppError::Auth("Token email mismatch".to_string()));
+    }
+
+    let license = match supabase_client
+        .get_user_license(&verified_user.id, &access_token)
         .await
     {
-        Ok(Some(license)) => {
-            // Token is valid - we got a response
-            match license.tier.as_str() {
-                "PRO" => SubscriptionTier::Pro,
-                _ => SubscriptionTier::Free,
-            }
-        }
-        Ok(None) => {
-            // User exists but no license record - default to Free
-            warn!("No license record found for user {}, defaulting to Free tier", user_id);
-            SubscriptionTier::Free
-        }
+        Ok(license) => license,
         Err(e) => {
-            // Token validation failed - reject the session
-            warn!("Token validation failed for user {}: {}", user_id, e);
-            return Err(AppError::Auth(format!("Invalid token: {}", e)));
+            warn!(
+                "Failed to fetch Supabase entitlement for user {}; failing closed as FREE: {}",
+                verified_user.id, e
+            );
+            None
         }
+    };
+    let entitlement = entitlement_from_license(license);
+    let tier = if entitlement.tier == "PRO" {
+        SubscriptionTier::Pro
+    } else {
+        SubscriptionTier::Free
     };
 
     let user = User {
-        id: user_id,
-        email,
+        id: verified_user.id,
+        email: verified_user.email,
         tier,
         access_token,
         refresh_token,
-        expires_at: chrono::Utc::now().timestamp() + 3600, // Approximate expiry
+        expires_at: expires_at.unwrap_or_else(|| chrono::Utc::now().timestamp() + 3600),
     };
+
+    let _youtube_credential_guard = state.youtube_manager.lock_credential_operations().await;
+    state.youtube_manager.clear_app_auth_oauth_state().await;
 
     state
         .auth
-        .login(user)
+        .login(user.clone())
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    Ok(())
+    Ok(SessionSyncResponse { user, entitlement })
 }
 
 // ============================================================================
-// Payment Commands - Production Implementation
-// Note: Full payment integration is planned for v2.0
-// Current version: FREE tier only with PRO features gated via license check
+// Payment Commands - Deferred
+// Payment, Toss checkout, and subscription enforcement remain disabled until
+// non-payment readiness gates pass and a separate payment QA plan is approved.
 // ============================================================================
 
 /// Subscription details structure for frontend compatibility
@@ -346,6 +550,7 @@ pub async fn set_session(
 pub struct SubscriptionDetails {
     pub is_active: bool,
     pub tier: String,
+    pub status: String,
     pub expires_at: Option<String>,
     pub auto_renew: bool,
     pub payment_method: Option<String>,
@@ -353,90 +558,8 @@ pub struct SubscriptionDetails {
     pub payment_available: bool,
     /// Message about payment availability
     pub payment_message: Option<String>,
-}
-
-/// Confirm payment - TossPayments 결제 승인 및 라이센스 업그레이드
-#[tauri::command]
-pub async fn confirm_payment(
-    state: State<'_, AppState>,
-    payment_key: String,
-    order_id: String,
-    amount: i64,
-) -> Result<(), String> {
-    use crate::payments::{TossPaymentsClient, PaymentConfirmRequest};
-
-    // Check if user is authenticated
-    let user = state
-        .auth
-        .get_current_user()
-        .map_err(|e| format!("Authentication required: {}", e))?;
-
-    let user = user.ok_or("You must be logged in to upgrade your subscription.")?;
-
-    info!("결제 승인 요청: user={}, order_id={}, amount={}", user.email, order_id, amount);
-
-    // TossPayments 클라이언트 생성
-    let tosspayments_client = TossPaymentsClient::from_env()
-        .map_err(|e| {
-            error!("TossPayments 클라이언트 초기화 실패: {}", e);
-            format!("결제 시스템을 초기화할 수 없습니다: {}", e)
-        })?;
-
-    // TossPayments API로 결제 승인 요청
-    let confirm_request = PaymentConfirmRequest {
-        payment_key: payment_key.clone(),
-        order_id: order_id.clone(),
-        amount,
-    };
-
-    let confirm_response = tosspayments_client
-        .confirm_payment(confirm_request)
-        .await
-        .map_err(|e| {
-            error!("TossPayments 결제 승인 실패: {}", e);
-            format!("결제 승인에 실패했습니다: {}", e)
-        })?;
-
-    // 결제 성공 - 라이센스 업그레이드
-    if confirm_response.status == "DONE" {
-        info!("결제 성공, 라이센스 업그레이드 진행: payment_key={}", payment_key);
-
-        // Supabase에서 라이센스 업그레이드
-        let supabase_client = state
-            .auth
-            .get_supabase_client()
-            .map_err(|e| format!("Database connection error: {}", e))?;
-
-        // 라이센스를 PRO로 업그레이드
-        supabase_client
-            .upgrade_user_license(&user.id, &user.access_token, &order_id, &payment_key, amount)
-            .await
-            .map_err(|e| {
-                error!("라이센스 업그레이드 실패: {}", e);
-                format!("결제는 완료되었으나 라이센스 활성화에 실패했습니다. 고객센터에 문의해주세요. (주문번호: {})", order_id)
-            })?;
-
-        // 로컬 사용자 상태 업데이트
-        let updated_user = User {
-            id: user.id,
-            email: user.email,
-            tier: SubscriptionTier::Pro,
-            access_token: user.access_token,
-            refresh_token: user.refresh_token,
-            expires_at: user.expires_at,
-        };
-
-        state
-            .auth
-            .login(updated_user)
-            .map_err(|e| format!("Failed to update local user state: {}", e))?;
-
-        info!("PRO 라이센스 활성화 완료: order_id={}", order_id);
-        Ok(())
-    } else {
-        warn!("결제 상태가 DONE이 아님: status={}", confirm_response.status);
-        Err(format!("결제가 완료되지 않았습니다. 상태: {}", confirm_response.status))
-    }
+    pub reason: String,
+    pub next_required_step: String,
 }
 
 /// Get subscription details - Returns actual license status from database
@@ -463,25 +586,20 @@ pub async fn get_subscription_details(
                 .ok()
                 .flatten();
 
-            let (is_active, tier, expires_at) = match license {
-                Some(lic) => {
-                    let active = matches!(lic.status, crate::supabase::LicenseStatus::Active);
-                    (active, lic.tier, lic.expires_at)
-                }
-                None => (false, "FREE".to_string(), None),
-            };
+            let entitlement = entitlement_from_license(license);
+            let is_active = entitlement.status == "active";
 
             Ok(SubscriptionDetails {
                 is_active,
-                tier,
-                expires_at,
+                tier: entitlement.tier,
+                status: entitlement.status,
+                expires_at: entitlement.expires_at,
                 auto_renew: false,    // Auto-renew not yet implemented
                 payment_method: None, // Payment methods not yet stored
                 payment_available: false,
-                payment_message: Some(
-                    "PRO upgrade available via manual process. Contact support@lolshorts.app"
-                        .to_string(),
-                ),
+                payment_message: Some(PAYMENT_DEFERRED_REASON.to_string()),
+                reason: PAYMENT_DEFERRED_REASON.to_string(),
+                next_required_step: PAYMENT_DEFERRED_NEXT_STEP.to_string(),
             })
         }
         None => {
@@ -489,11 +607,14 @@ pub async fn get_subscription_details(
             Ok(SubscriptionDetails {
                 is_active: false,
                 tier: "FREE".to_string(),
+                status: "none".to_string(),
                 expires_at: None,
                 auto_renew: false,
                 payment_method: None,
                 payment_available: false,
                 payment_message: Some("Log in to view subscription details".to_string()),
+                reason: "User is not authenticated.".to_string(),
+                next_required_step: "Log in before viewing subscription details.".to_string(),
             })
         }
     }
@@ -501,26 +622,36 @@ pub async fn get_subscription_details(
 
 /// Cancel subscription - Handles subscription cancellation requests
 #[tauri::command]
-pub async fn cancel_subscription(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn cancel_subscription(state: State<'_, AppState>) -> Result<String, String> {
     let user = state
         .auth
         .get_current_user()
         .map_err(|e| format!("Authentication required: {}", e))?;
 
-    if user.is_none() {
+    let Some(user) = user else {
         return Err("You must be logged in to manage your subscription.".to_string());
-    }
+    };
 
-    let current_tier = state.auth.get_tier().unwrap_or(SubscriptionTier::Free);
+    let license = state
+        .auth
+        .get_supabase_client()
+        .map_err(|e| format!("Database connection error: {}", e))?
+        .get_user_license(&user.id, &user.access_token)
+        .await
+        .ok()
+        .flatten();
+    let entitlement = entitlement_from_license(license);
 
-    if current_tier == SubscriptionTier::Free {
+    if entitlement.tier != "PRO" || entitlement.status != "active" {
         return Err("You don't have an active subscription to cancel.".to_string());
     }
 
-    // For manual upgrade process, cancellation is also manual
-    tracing::info!("Subscription cancellation requested for user");
+    tracing::info!("Deferred subscription cancellation requested for user");
 
-    Err("To cancel your PRO subscription, please contact support@lolshorts.app. We'll process your cancellation request within 24 hours.".to_string())
+    Ok(format!(
+        "{} No active subscription can be changed in this build.",
+        PAYMENT_DEFERRED_REASON
+    ))
 }
 
 /// Open payment page - Navigates to the payment/upgrade page
@@ -535,6 +666,96 @@ pub async fn open_payment_page(state: State<'_, AppState>) -> Result<String, Str
         return Err("Please log in first to upgrade to PRO.".to_string());
     }
 
-    // Return information about how to upgrade
-    Ok("To upgrade to PRO, please visit our website at https://lolshorts.app/pricing or contact support@lolshorts.app with your account email. PRO features include unlimited auto-edits, no watermark, and priority processing.".to_string())
+    Ok(format!(
+        "{} No checkout or paid upgrade is available in this build.",
+        PAYMENT_DEFERRED_REASON
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_license(
+        tier: &str,
+        status: crate::supabase::LicenseStatus,
+    ) -> crate::supabase::License {
+        crate::supabase::License {
+            id: "license-id".to_string(),
+            user_id: "user-id".to_string(),
+            tier: tier.to_string(),
+            status,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            expires_at: None,
+            stripe_subscription_id: None,
+            stripe_customer_id: None,
+            metadata: serde_json::json!({}),
+        }
+    }
+
+    #[test]
+    fn active_pro_license_maps_to_pro_tier() {
+        let license = test_license("PRO", crate::supabase::LicenseStatus::Active);
+
+        assert_eq!(
+            subscription_tier_from_license(&license),
+            SubscriptionTier::Pro
+        );
+    }
+
+    #[test]
+    fn inactive_pro_license_maps_to_free_tier() {
+        let expired = test_license("PRO", crate::supabase::LicenseStatus::Expired);
+        let cancelled = test_license("PRO", crate::supabase::LicenseStatus::Cancelled);
+
+        assert_eq!(
+            subscription_tier_from_license(&expired),
+            SubscriptionTier::Free
+        );
+        assert_eq!(
+            subscription_tier_from_license(&cancelled),
+            SubscriptionTier::Free
+        );
+    }
+
+    #[test]
+    fn active_free_license_maps_to_free_tier() {
+        let license = test_license("FREE", crate::supabase::LicenseStatus::Active);
+
+        assert_eq!(
+            subscription_tier_from_license(&license),
+            SubscriptionTier::Free
+        );
+    }
+
+    #[test]
+    fn expired_active_pro_license_fails_closed_to_free_entitlement() {
+        let mut license = test_license("PRO", crate::supabase::LicenseStatus::Active);
+        license.expires_at = Some(
+            chrono::Utc::now()
+                .checked_sub_signed(chrono::Duration::days(1))
+                .unwrap()
+                .to_rfc3339(),
+        );
+
+        let entitlement = entitlement_from_license(Some(license));
+
+        assert_eq!(entitlement.tier, "FREE");
+        assert_eq!(entitlement.status, "expired");
+        assert_eq!(entitlement.source, "supabase");
+        assert!(!entitlement.payment_available);
+    }
+
+    #[test]
+    fn invalid_license_expiry_fails_closed_to_free_entitlement() {
+        let mut license = test_license("PRO", crate::supabase::LicenseStatus::Active);
+        license.expires_at = Some("not-a-timestamp".to_string());
+
+        let entitlement = entitlement_from_license(Some(license));
+
+        assert_eq!(entitlement.tier, "FREE");
+        assert_eq!(entitlement.status, "expired");
+        assert_eq!(entitlement.source, "supabase");
+        assert!(!entitlement.payment_available);
+    }
 }

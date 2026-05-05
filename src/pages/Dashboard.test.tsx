@@ -16,12 +16,17 @@ jest.mock('@/lib/auth', () => ({
 }));
 
 // Mock recording store
+const mockRecordingStoreState = {
+  status: {
+    state: 'idle',
+    isRecording: false,
+  },
+  error: null as string | null,
+};
+
 jest.mock('@/stores/recordingStore', () => ({
   useRecordingStore: () => ({
-    status: {
-      state: 'idle',
-      isRecording: false,
-    },
+    ...mockRecordingStoreState,
     startRecording: jest.fn().mockResolvedValue(undefined),
     stopRecording: jest.fn().mockResolvedValue(undefined),
   }),
@@ -68,10 +73,13 @@ jest.mock('@/components/auth', () => ({
   AuthModal: () => null,
 }));
 
+jest.mock('@/components/StatusDashboard', () => ({
+  StatusDashboard: () => <div data-testid="status-dashboard" />,
+}));
+
 // Import mocked modules after jest.mock calls
-import { lcuApi } from '@/api/lcu';
-import { utilsApi } from '@/api/utils';
-import { useAuthStore } from '@/lib/auth';
+import { lcuApi } from '../api/lcu';
+import { utilsApi } from '../api/utils';
 
 const mockLcuApi = lcuApi as jest.Mocked<typeof lcuApi>;
 const mockUtilsApi = utilsApi as jest.Mocked<typeof utilsApi>;
@@ -79,6 +87,8 @@ const mockUtilsApi = utilsApi as jest.Mocked<typeof utilsApi>;
 describe('Dashboard', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockRecordingStoreState.error = null;
+    mockRecordingStoreState.status.state = 'idle';
     jest.useFakeTimers();
   });
 
@@ -112,7 +122,9 @@ describe('Dashboard', () => {
 
   it('should show loading state initially', () => {
     render(<Dashboard />);
-    expect(screen.getByText('common.loading')).toBeInTheDocument();
+    // Dashboard uses Skeleton components for loading state, not text
+    const skeletons = document.querySelectorAll('.bg-muted');
+    expect(skeletons.length).toBeGreaterThan(0);
   });
 
   it('should poll game status periodically', async () => {
@@ -145,6 +157,14 @@ describe('Dashboard', () => {
     });
   });
 
+  it('should render status diagnostics dashboard', async () => {
+    render(<Dashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status-dashboard')).toBeInTheDocument();
+    });
+  });
+
   it('should cleanup interval on unmount', async () => {
     const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
 
@@ -169,6 +189,18 @@ describe('Dashboard', () => {
 
       await waitFor(() => {
         expect(screen.getByText('dashboard.title')).toBeInTheDocument();
+      });
+    });
+
+    it('should display recording status sync failures', async () => {
+      mockRecordingStoreState.status.state = 'error';
+      mockRecordingStoreState.error = 'Desktop runtime unavailable';
+
+      render(<Dashboard />);
+
+      await waitFor(() => {
+        expect(screen.getByText('dashboard.recordingError.title')).toBeInTheDocument();
+        expect(screen.getByText('Desktop runtime unavailable')).toBeInTheDocument();
       });
     });
   });

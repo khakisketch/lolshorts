@@ -2,7 +2,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Game metadata stored in metadata.json
+/// Game metadata stored in the local SQLite database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameMetadata {
     pub game_id: String,
@@ -37,7 +37,7 @@ impl KDA {
     }
 }
 
-/// Event data stored in events.json
+/// Event data stored in the local SQLite database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventData {
     pub event_id: u64,
@@ -84,7 +84,7 @@ impl EventType {
     }
 }
 
-/// Clip metadata stored in clips.json
+/// Clip metadata stored in the local SQLite database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipMetadata {
     pub file_path: String,
@@ -232,13 +232,19 @@ pub struct YouTubeUploadStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "PascalCase")]
 pub enum UploadStatus {
+    #[serde(alias = "notuploaded")]
     NotUploaded,
+    #[serde(alias = "queued")]
     Queued,
+    #[serde(alias = "uploading")]
     Uploading,
+    #[serde(alias = "processing")]
     Processing,
+    #[serde(alias = "completed")]
     Completed,
+    #[serde(alias = "failed")]
     Failed,
 }
 
@@ -262,4 +268,25 @@ pub struct StorageStats {
 
     /// Total storage used by all clips in bytes
     pub total_size_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UploadStatus;
+
+    #[test]
+    fn upload_status_serializes_pascal_case_and_reads_legacy_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&UploadStatus::NotUploaded).unwrap(),
+            "\"NotUploaded\""
+        );
+        assert_eq!(
+            serde_json::from_str::<UploadStatus>("\"notuploaded\"").unwrap(),
+            UploadStatus::NotUploaded
+        );
+        assert_eq!(
+            serde_json::from_str::<UploadStatus>("\"completed\"").unwrap(),
+            UploadStatus::Completed
+        );
+    }
 }

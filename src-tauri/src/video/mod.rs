@@ -182,40 +182,36 @@ fn extract_codec_from_stderr(stderr: &str) -> Option<String> {
 
 pub type Result<T> = std::result::Result<T, VideoError>;
 
+const FFMPEG_PROCESS_TIMEOUT_SECS: u64 = 30 * 60;
+
 /// Helper to execute FFmpeg command with proper error handling
 pub async fn execute_ffmpeg_command(command: &mut tokio::process::Command) -> Result<()> {
-    use tokio::io::AsyncReadExt;
+    use tokio::time::{timeout, Duration};
 
-    // Ensure stderr is piped
     command.stderr(std::process::Stdio::piped());
     command.stdout(std::process::Stdio::null());
+    command.kill_on_drop(true);
 
-    let mut child = command.spawn().map_err(|e| {
+    let output = timeout(
+        Duration::from_secs(FFMPEG_PROCESS_TIMEOUT_SECS),
+        command.output(),
+    )
+    .await
+    .map_err(|_| VideoError::Timeout {
+        timeout_secs: FFMPEG_PROCESS_TIMEOUT_SECS,
+    })?
+    .map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             VideoError::FfmpegNotFound
         } else {
             VideoError::ProcessingError {
-                message: format!("Failed to spawn FFmpeg process: {}", e),
+                message: format!("Failed to execute FFmpeg process: {}", e),
             }
         }
     })?;
 
-    // Capture stderr for error messages
-    let mut stderr_output = String::new();
-    if let Some(mut stderr) = child.stderr.take() {
-        stderr.read_to_string(&mut stderr_output).await.ok();
-    }
-
-    // Wait for command to complete
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| VideoError::ProcessingError {
-            message: format!("Failed to wait for FFmpeg process: {}", e),
-        })?;
-
-    // Check exit status
-    if !status.success() {
+    if !output.status.success() {
+        let stderr_output = String::from_utf8_lossy(&output.stderr);
         return Err(VideoError::from_ffmpeg_stderr(&stderr_output));
     }
 

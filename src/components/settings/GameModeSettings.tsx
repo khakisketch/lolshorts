@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 interface GameModeSettings {
@@ -90,14 +89,14 @@ export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) 
       </div>
 
       {/* Ranked Modes */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.gameModes.rankedModes.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.gameModes.rankedModes.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.gameModes.rankedModes.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_ranked_solo" className="cursor-pointer">
@@ -129,18 +128,18 @@ export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) 
               onCheckedChange={(checked: boolean) => updateSetting("record_ranked_flex", checked)}
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Normal Modes */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.gameModes.normalModes.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.gameModes.normalModes.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.gameModes.normalModes.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_normal" className="cursor-pointer">
@@ -172,18 +171,18 @@ export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) 
               onCheckedChange={(checked: boolean) => updateSetting("record_quick_play", checked)}
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Alternative Modes */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.gameModes.alternativeModes.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.gameModes.alternativeModes.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.gameModes.alternativeModes.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_aram" className="cursor-pointer">
@@ -231,18 +230,18 @@ export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) 
               onCheckedChange={(checked: boolean) => updateSetting("record_special", checked)}
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Practice Modes */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.gameModes.practiceModes.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.gameModes.practiceModes.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.gameModes.practiceModes.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_custom" className="cursor-pointer">
@@ -274,8 +273,8 @@ export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) 
               onCheckedChange={(checked: boolean) => updateSetting("record_practice", checked)}
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

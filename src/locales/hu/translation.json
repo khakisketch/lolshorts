@@ -138,7 +138,8 @@
     "timeline": {
       "title": "Idővonal",
       "addClip": "Klip hozzáadása",
-      "removeClip": "Klip eltávolítása"
+      "removeClip": "Klip eltávolítása",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "Vágás",
@@ -152,7 +153,8 @@
       "title": "Exportálás",
       "quality": "Minőség",
       "format": "Formátum",
-      "exportVideo": "Videó exportálása"
+      "exportVideo": "Videó exportálása",
+      "noClipSourcePath": "No clip source path available"
     },
     "selectGameTitle": "Select a Game to Edit",
     "selectGameDescription": "Choose a game from your recorded sessions to start editing",
@@ -234,6 +236,18 @@
       "upload": "Upload",
       "history": "History",
       "account": "Account"
+    },
+    "schedule": {
+      "scheduleButton": "Ütemezés",
+      "confirmSchedule": "Ütemezés megerősítése",
+      "publishAt": "Közzététel időpontja",
+      "publishAtHint": "Hagyja üresen, ha közzétételi idő nélkül szeretné sorba állítani. A YouTube legalább 15 percet igényel a jövőben.",
+      "scheduleSuccessful": "Feltöltés sikeresen ütemezve!",
+      "scheduleFailed": "Feltöltés ütemezése sikertelen",
+      "queueTitle": "Feltöltési sor",
+      "scheduledFor": "Ütemezve",
+      "queued": "Sorban áll",
+      "cancelScheduled": "Ütemezett feltöltés törlése"
     }
   },
   "settings": {

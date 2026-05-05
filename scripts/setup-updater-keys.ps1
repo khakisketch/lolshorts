@@ -69,7 +69,7 @@ $pubKey = $pubKey.Trim()
 Write-Host ""
 Write-Host "=== Keys Generated Successfully! ===" -ForegroundColor Green
 Write-Host ""
-Write-Host "PUBLIC KEY (add to tauri.conf.json > plugins > updater > pubkey):" -ForegroundColor Cyan
+Write-Host "PUBLIC KEY (set as TAURI_UPDATER_PUBKEY in CI/build env):" -ForegroundColor Cyan
 Write-Host $pubKey -ForegroundColor White
 Write-Host ""
 Write-Host "=== GitHub Secrets Required ===" -ForegroundColor Yellow
@@ -79,6 +79,9 @@ Write-Host "   Copy the entire contents of: $keyPath" -ForegroundColor White
 Write-Host ""
 Write-Host "2. TAURI_KEY_PASSWORD:"
 Write-Host "   The password you just entered" -ForegroundColor White
+Write-Host ""
+Write-Host "3. TAURI_UPDATER_PUBKEY:"
+Write-Host "   Copy the public key shown above into a GitHub Secret or Variable" -ForegroundColor White
 Write-Host ""
 Write-Host "=== Security Reminders ===" -ForegroundColor Red
 Write-Host "- NEVER commit the private key (.tauri/tauri.key) to git"
@@ -96,4 +99,4 @@ if ($gitignoreContent -notmatch "\.tauri/") {
 }
 
 Write-Host ""
-Write-Host "Setup complete! Don't forget to update tauri.conf.json with the public key above." -ForegroundColor Green
+Write-Host "Setup complete! Don't forget to configure TAURI_UPDATER_PUBKEY for release builds." -ForegroundColor Green

@@ -35,10 +35,15 @@ pub async fn get_current_game(state: State<'_, AppState>) -> AppResult<Option<Ga
     let client = state.lcu_client.lock().await;
 
     if !client.is_connected() {
-        return Err(AppError::Lcu("LCU not connected. Call connect_lcu first.".to_string()));
+        return Err(AppError::Lcu(
+            "LCU not connected. Call connect_lcu first.".to_string(),
+        ));
     }
 
-    client.get_current_game().await.map_err(|e| AppError::Lcu(e.to_string()))
+    client
+        .get_current_game()
+        .await
+        .map_err(|e| AppError::Lcu(e.to_string()))
 }
 
 #[tauri::command]
@@ -50,7 +55,10 @@ pub async fn is_in_game(state: State<'_, AppState>) -> AppResult<bool> {
         return Ok(false);
     }
 
-    client.is_in_game().await.map_err(|e| AppError::Lcu(e.to_string()))
+    client
+        .is_in_game()
+        .await
+        .map_err(|e| AppError::Lcu(e.to_string()))
 }
 
 /// Get LCU performance metrics for monitoring
@@ -64,7 +72,10 @@ pub async fn get_lcu_metrics(state: State<'_, AppState>) -> AppResult<LcuMetrics
 #[tauri::command]
 pub async fn refresh_lcu_caches(state: State<'_, AppState>) -> AppResult<()> {
     let client = state.lcu_client.lock().await;
-    client.refresh_caches().await.map_err(|e| AppError::Lcu(e.to_string()))
+    client
+        .refresh_caches()
+        .await
+        .map_err(|e| AppError::Lcu(e.to_string()))
 }
 
 // ========================================================================

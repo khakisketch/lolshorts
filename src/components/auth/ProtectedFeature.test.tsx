@@ -26,6 +26,71 @@ describe('ProtectedFeature', () => {
     expect(screen.getByText('Protected Content')).toBeInTheDocument();
   });
 
+  it('renders non-PRO features for authenticated FREE users', () => {
+    (useAuthStore as unknown as jest.Mock).mockReturnValue({
+      user: { id: '123', email: 'test@example.com', tier: 'FREE' },
+      isAuthenticated: true,
+    });
+
+    render(
+      <ProtectedFeature requiresPro={false} featureName="Auto-Edit">
+        <div>Auto-Edit Content</div>
+      </ProtectedFeature>
+    );
+
+    expect(screen.getByText('Auto-Edit Content')).toBeInTheDocument();
+  });
+
+  it('blocks PRO-only features for authenticated FREE users', () => {
+    (useAuthStore as unknown as jest.Mock).mockReturnValue({
+      user: { id: '123', email: 'test@example.com', tier: 'FREE' },
+      isAuthenticated: true,
+      entitlement: { tier: 'FREE', status: 'active' },
+    });
+
+    render(
+      <ProtectedFeature requiresPro={true} featureName="YouTube">
+        <div>YouTube Content</div>
+      </ProtectedFeature>
+    );
+
+    expect(screen.queryByText('YouTube Content')).not.toBeInTheDocument();
+    expect(screen.getByText('PRO')).toBeInTheDocument();
+  });
+
+  it('does not trust a persisted user tier without active entitlement', () => {
+    (useAuthStore as unknown as jest.Mock).mockReturnValue({
+      user: { id: '123', email: 'test@example.com', tier: 'PRO' },
+      isAuthenticated: true,
+      entitlement: { tier: 'FREE', status: 'active' },
+    });
+
+    render(
+      <ProtectedFeature requiresPro={true} featureName="YouTube">
+        <div>YouTube Content</div>
+      </ProtectedFeature>
+    );
+
+    expect(screen.queryByText('YouTube Content')).not.toBeInTheDocument();
+    expect(screen.getByText('PRO')).toBeInTheDocument();
+  });
+
+  it('renders PRO-only features only with active Supabase entitlement', () => {
+    (useAuthStore as unknown as jest.Mock).mockReturnValue({
+      user: { id: '123', email: 'test@example.com', tier: 'FREE' },
+      isAuthenticated: true,
+      entitlement: { tier: 'PRO', status: 'active' },
+    });
+
+    render(
+      <ProtectedFeature requiresPro={true} featureName="YouTube">
+        <div>YouTube Content</div>
+      </ProtectedFeature>
+    );
+
+    expect(screen.getByText('YouTube Content')).toBeInTheDocument();
+  });
+
   it('renders fallback when user is not authenticated', () => {
     // Mock unauthenticated state
     (useAuthStore as unknown as jest.Mock).mockReturnValue({

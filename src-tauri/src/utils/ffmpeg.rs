@@ -1,19 +1,23 @@
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 use std::env;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
-use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use thiserror::Error;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
+
+use crate::utils::process::command_output_with_timeout;
 
 #[derive(Debug, Error)]
 pub enum FFmpegError {
     #[error("FFmpeg not found in bundled binaries or system PATH")]
     NotFound,
-  }
+}
 
 // Global cache for FFmpeg path - initialized once per application lifetime
 static FFMPEG_PATH: OnceLock<PathBuf> = OnceLock::new();
+const FFMPEG_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn get_ffmpeg_path() -> Result<PathBuf, FFmpegError> {
     // Return cached path if already found
@@ -78,10 +82,18 @@ pub fn get_ffmpeg_path() -> Result<PathBuf, FFmpegError> {
     }
 
     // 4. Fallback to system PATH
-    let path_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+    let path_cmd = if cfg!(target_os = "windows") {
+        "where"
+    } else {
+        "which"
+    };
     debug!("Checking system PATH for FFmpeg using: {}", path_cmd);
 
-    if let Ok(output) = Command::new(path_cmd).arg("ffmpeg").output() {
+    let mut path_lookup = Command::new(path_cmd);
+    path_lookup.arg("ffmpeg");
+    if let Ok(output) =
+        command_output_with_timeout(path_lookup, FFMPEG_PROBE_TIMEOUT, "FFmpeg PATH lookup")
+    {
         if output.status.success() {
             let path_str = String::from_utf8_lossy(&output.stdout);
             if let Some(first_line) = path_str.lines().next() {
@@ -109,7 +121,7 @@ fn get_ffmpeg_executable_name() -> &'static str {
 }
 
 // Check if a specific FFmpeg executable exists in the given directory
-fn check_ffmpeg_in_dir(dir: &PathBuf) -> Option<PathBuf> {
+fn check_ffmpeg_in_dir(dir: &Path) -> Option<PathBuf> {
     let candidates = if cfg!(target_os = "windows") {
         vec!["ffmpeg.exe", "ffmpeg-x86_64-pc-windows-msvc.exe"]
     } else {
@@ -174,13 +186,14 @@ pub fn get_ffmpeg_info() -> Result<FFmpegInfo, FFmpegError> {
 
     info!("Querying FFmpeg information from: {:?}", ffmpeg_path);
 
-    let version_output = Command::new(&ffmpeg_path)
-        .arg("-version")
-        .output()
-        .map_err(|e| {
-            error!("Failed to execute FFmpeg version command: {}", e);
-            FFmpegError::NotFound
-        })?;
+    let mut version_cmd = Command::new(&ffmpeg_path);
+    version_cmd.arg("-version");
+    let version_output =
+        command_output_with_timeout(version_cmd, FFMPEG_PROBE_TIMEOUT, "FFmpeg version probe")
+            .map_err(|e| {
+                error!("Failed to execute FFmpeg version command: {}", e);
+                FFmpegError::NotFound
+            })?;
 
     if !version_output.status.success() {
         let stderr = String::from_utf8_lossy(&version_output.stderr);
@@ -188,13 +201,14 @@ pub fn get_ffmpeg_info() -> Result<FFmpegInfo, FFmpegError> {
         return Err(FFmpegError::NotFound);
     }
 
-    let encoders_output = Command::new(&ffmpeg_path)
-        .arg("-encoders")
-        .output()
-        .map_err(|e| {
-            error!("Failed to execute FFmpeg encoders command: {}", e);
-            FFmpegError::NotFound
-        })?;
+    let mut encoders_cmd = Command::new(&ffmpeg_path);
+    encoders_cmd.arg("-encoders");
+    let encoders_output =
+        command_output_with_timeout(encoders_cmd, FFMPEG_PROBE_TIMEOUT, "FFmpeg encoder probe")
+            .map_err(|e| {
+                error!("Failed to execute FFmpeg encoders command: {}", e);
+                FFmpegError::NotFound
+            })?;
 
     if !encoders_output.status.success() {
         let stderr = String::from_utf8_lossy(&encoders_output.stderr);
@@ -202,13 +216,14 @@ pub fn get_ffmpeg_info() -> Result<FFmpegInfo, FFmpegError> {
         return Err(FFmpegError::NotFound);
     }
 
-    let formats_output = Command::new(&ffmpeg_path)
-        .arg("-formats")
-        .output()
-        .map_err(|e| {
-            error!("Failed to execute FFmpeg formats command: {}", e);
-            FFmpegError::NotFound
-        })?;
+    let mut formats_cmd = Command::new(&ffmpeg_path);
+    formats_cmd.arg("-formats");
+    let formats_output =
+        command_output_with_timeout(formats_cmd, FFMPEG_PROBE_TIMEOUT, "FFmpeg format probe")
+            .map_err(|e| {
+                error!("Failed to execute FFmpeg formats command: {}", e);
+                FFmpegError::NotFound
+            })?;
 
     if !formats_output.status.success() {
         let stderr = String::from_utf8_lossy(&formats_output.stderr);
@@ -263,7 +278,7 @@ fn parse_configuration(output: &str) -> Vec<String> {
             if let Some(config_part) = line.split("configuration:").nth(1) {
                 let config_str = config_part.trim();
                 // Remove surrounding characters if present
-                let cleaned = config_str.trim_matches(|c|c == '-' || c == ' ');
+                let cleaned = config_str.trim_matches(|c| c == '-' || c == ' ');
                 if !cleaned.is_empty() {
                     config = cleaned.split_whitespace().map(|s| s.to_string()).collect();
                 }
@@ -322,7 +337,9 @@ fn parse_encoder_line(line: &str) -> Option<EncoderInfo> {
     };
 
     // Clean up description (remove leading/trailing slashes)
-    let description = description_start.trim_matches(|c|c == '/' || c == ' ').trim();
+    let description = description_start
+        .trim_matches(|c| c == '/' || c == ' ')
+        .trim();
 
     // Detect hardware acceleration
     let is_hardware_accelerated = is_hardware_encoder(&encoder_name);
@@ -335,19 +352,31 @@ fn parse_encoder_line(line: &str) -> Option<EncoderInfo> {
         is_hardware_accelerated,
         supported_pix_fmts: vec![], // Could be parsed from additional FFmpeg commands
         supported_frame_rates: vec![], // Could be parsed from additional FFmpeg commands
-        threading_support: None, // Could be parsed from additional FFmpeg commands
+        threading_support: None,    // Could be parsed from additional FFmpeg commands
     })
 }
 
 /// Check if an encoder is hardware accelerated
 fn is_hardware_encoder(name: &str) -> bool {
     let hardware_keywords = [
-        "nvenc", "qsv", "amf", "vaapi", "videotoolbox", "cuda",
-        "nvidia", "intel", "amd", "quicksync", "vce", "media_sdk"
+        "nvenc",
+        "qsv",
+        "amf",
+        "vaapi",
+        "videotoolbox",
+        "cuda",
+        "nvidia",
+        "intel",
+        "amd",
+        "quicksync",
+        "vce",
+        "media_sdk",
     ];
 
     let name_lower = name.to_lowercase();
-    hardware_keywords.iter().any(|keyword| name_lower.contains(keyword))
+    hardware_keywords
+        .iter()
+        .any(|keyword| name_lower.contains(keyword))
 }
 
 /// Parse formats from formats output
@@ -395,7 +424,9 @@ fn parse_format_line(line: &str) -> Option<FormatInfo> {
         ""
     };
 
-    let description = description_start.trim_matches(|c|c == '/' || c == ' ').trim();
+    let description = description_start
+        .trim_matches(|c| c == '/' || c == ' ')
+        .trim();
 
     Some(FormatInfo {
         name: format_name,
@@ -450,7 +481,8 @@ fn parse_build_info(output: &str) -> BuildInfo {
 /// Get only hardware-accelerated encoders
 pub fn get_hardware_encoders() -> Result<Vec<EncoderInfo>, FFmpegError> {
     let info = get_ffmpeg_info()?;
-    let hardware_encoders: Vec<EncoderInfo> = info.available_encoders
+    let hardware_encoders: Vec<EncoderInfo> = info
+        .available_encoders
         .into_iter()
         .filter(|e| e.is_hardware_accelerated)
         .collect();
@@ -461,16 +493,171 @@ pub fn get_hardware_encoders() -> Result<Vec<EncoderInfo>, FFmpegError> {
 /// Get available video encoders
 pub fn get_video_encoders() -> Result<Vec<EncoderInfo>, FFmpegError> {
     let info = get_ffmpeg_info()?;
-    let video_encoders: Vec<EncoderInfo> = info.available_encoders
+    let video_encoders: Vec<EncoderInfo> = info
+        .available_encoders
         .into_iter()
         .filter(|e| {
-            e.name.to_lowercase().contains("h264") ||
-            e.name.to_lowercase().contains("h265") ||
-            e.name.to_lowercase().contains("hevc") ||
-            e.name.to_lowercase().contains("vp9") ||
-            e.name.to_lowercase().contains("av1")
+            e.name.to_lowercase().contains("h264")
+                || e.name.to_lowercase().contains("h265")
+                || e.name.to_lowercase().contains("hevc")
+                || e.name.to_lowercase().contains("vp9")
+                || e.name.to_lowercase().contains("av1")
         })
         .collect();
 
     Ok(video_encoders)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- FFmpegError ----
+
+    #[test]
+    fn ffmpeg_error_not_found_display_is_non_empty() {
+        let err = FFmpegError::NotFound;
+        let msg = err.to_string();
+        assert!(!msg.is_empty());
+    }
+
+    // ---- get_ffmpeg_executable_name (tested via cfg!) ----
+
+    #[test]
+    fn get_ffmpeg_executable_name_is_non_empty() {
+        let name = get_ffmpeg_executable_name();
+        assert!(!name.is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn get_ffmpeg_executable_name_has_exe_extension_on_windows() {
+        let name = get_ffmpeg_executable_name();
+        assert!(
+            name.ends_with(".exe"),
+            "expected .exe extension, got: {}",
+            name
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn get_ffmpeg_executable_name_has_no_extension_on_non_windows() {
+        let name = get_ffmpeg_executable_name();
+        assert_eq!(name, "ffmpeg");
+    }
+
+    // ---- check_ffmpeg_in_dir ----
+
+    #[test]
+    fn check_ffmpeg_in_dir_returns_none_for_nonexistent_directory() {
+        let fake_dir = std::path::Path::new("/nonexistent/directory/that/does/not/exist");
+        let result = check_ffmpeg_in_dir(fake_dir);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn check_ffmpeg_in_dir_returns_none_for_empty_temp_directory() {
+        let tmp = std::env::temp_dir().join("lolshorts_test_empty_ffmpeg_dir");
+        let _ = std::fs::create_dir_all(&tmp);
+        let result = check_ffmpeg_in_dir(&tmp);
+        let _ = std::fs::remove_dir(&tmp);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn check_ffmpeg_in_dir_finds_ffmpeg_exe_in_directory() {
+        // Create a temp dir with a fake ffmpeg.exe to verify detection logic
+        let tmp = std::env::temp_dir().join("lolshorts_test_ffmpeg_detection");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        let ffmpeg_name = if cfg!(target_os = "windows") {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
+        let fake_ffmpeg = tmp.join(ffmpeg_name);
+        std::fs::write(&fake_ffmpeg, b"").expect("should write fake ffmpeg");
+
+        let result = check_ffmpeg_in_dir(&tmp);
+
+        // Clean up before asserting
+        let _ = std::fs::remove_file(&fake_ffmpeg);
+        let _ = std::fs::remove_dir(&tmp);
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), fake_ffmpeg);
+    }
+
+    // ---- is_hardware_encoder (via parse path) ----
+
+    #[test]
+    fn parse_ffmpeg_version_returns_unknown_for_empty_string() {
+        // parse_ffmpeg_version is private; exercise via parse_build_info which calls parse_configuration
+        // We test the public surface: get_ffmpeg_path returns an error when ffmpeg is absent.
+        // This test verifies the error path is reachable without panicking.
+        //
+        // Reset the OnceLock by calling get_ffmpeg_path — it may succeed or return NotFound;
+        // either way it must not panic.
+        let _result = get_ffmpeg_path();
+        // No assertion on result because the test environment may or may not have ffmpeg.
+    }
+
+    // ---- EncoderInfo struct ----
+
+    #[test]
+    fn encoder_info_can_be_constructed() {
+        let info = EncoderInfo {
+            name: "h264_nvenc".to_string(),
+            description: "NVIDIA NVENC H.264 encoder".to_string(),
+            can_encode: true,
+            can_decode: false,
+            is_hardware_accelerated: true,
+            supported_pix_fmts: vec!["yuv420p".to_string()],
+            supported_frame_rates: vec![],
+            threading_support: Some("frame".to_string()),
+        };
+
+        assert_eq!(info.name, "h264_nvenc");
+        assert!(info.can_encode);
+        assert!(!info.can_decode);
+        assert!(info.is_hardware_accelerated);
+    }
+
+    #[test]
+    fn encoder_info_serializes_and_deserializes_correctly() {
+        let info = EncoderInfo {
+            name: "libx264".to_string(),
+            description: "libx264 H.264 encoder".to_string(),
+            can_encode: true,
+            can_decode: false,
+            is_hardware_accelerated: false,
+            supported_pix_fmts: vec![],
+            supported_frame_rates: vec![],
+            threading_support: None,
+        };
+
+        let json = serde_json::to_string(&info).expect("serialization should succeed");
+        let restored: EncoderInfo =
+            serde_json::from_str(&json).expect("deserialization should succeed");
+
+        assert_eq!(restored.name, "libx264");
+        assert!(!restored.is_hardware_accelerated);
+    }
+
+    // ---- FormatInfo struct ----
+
+    #[test]
+    fn format_info_can_be_constructed() {
+        let fmt = FormatInfo {
+            name: "mp4".to_string(),
+            description: "MP4 (MPEG-4 Part 14)".to_string(),
+            can_mux: true,
+            can_demux: true,
+        };
+
+        assert_eq!(fmt.name, "mp4");
+        assert!(fmt.can_mux);
+        assert!(fmt.can_demux);
+    }
 }

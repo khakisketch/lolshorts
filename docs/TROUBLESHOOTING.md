@@ -615,7 +615,7 @@ Try:
 
 **4. Check Device/Platform**:
 - ✅ Quality may appear lower on mobile vs desktop
-- ✅ Upload to YouTube/TikTok to see platform quality
+- ✅ Review the exported file on your target platform or device to check final quality
 - ✅ Platform compression affects final quality
 
 ---

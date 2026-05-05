@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 /// Simple counter-based statistics - remove over-engineering
 pub struct ClipStatistics {

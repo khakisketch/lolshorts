@@ -1,0 +1,11 @@
+Read the file src/pages/Dashboard.tsx in this project. This is a LoLShorts app - a League of Legends auto-recording and highlight editing desktop app built with Tauri + React + TypeScript + shadcn/ui.
+
+Redesign the Dashboard UI with a CLEAN/MINIMALIST aesthetic (Apple/Linear style) and create a standalone HTML mockup file. Design direction:
+- Light theme, abundant whitespace
+- Soft shadows, rounded cards, subtle hover animations
+- Typography-centered information hierarchy
+- Monochrome palette + one accent color (indigo or blue)
+- Status indicators as minimal dots/badges
+- Use Korean text for all UI labels
+
+Write the complete standalone HTML file with all CSS and JS inline to docs/ui-mockups/concept-b-minimal.html. It must open directly in a browser.

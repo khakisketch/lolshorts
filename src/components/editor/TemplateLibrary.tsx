@@ -8,13 +8,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, Trash2, FileImage, Type, AlertCircle } from 'lucide-react';
 import { CanvasTemplate, CanvasTemplateInfo } from '@/types/autoEdit';
 import { useAutoEdit } from '@/hooks/useAutoEdit';
 import { getErrorMessage } from '@/lib/utils';
+import { logger } from '@/lib/logger';
 
 interface TemplateLibraryProps {
   open: boolean;
@@ -39,7 +39,7 @@ export function TemplateLibrary({ open, onOpenChange, onTemplateSelect }: Templa
       const templateList = await listCanvasTemplates();
       setTemplates(templateList);
     } catch (err) {
-      console.error('Failed to fetch templates:', err);
+      logger.error('Failed to fetch templates:', err);
       setError(getErrorMessage(err));
     } finally {
       setIsLoading(false);
@@ -58,7 +58,7 @@ export function TemplateLibrary({ open, onOpenChange, onTemplateSelect }: Templa
       onTemplateSelect(template);
       onOpenChange(false);
     } catch (err) {
-      console.error('Failed to load template:', err);
+      logger.error('Failed to load template:', err);
       setError(getErrorMessage(err));
     }
   };
@@ -70,7 +70,7 @@ export function TemplateLibrary({ open, onOpenChange, onTemplateSelect }: Templa
       await deleteCanvasTemplate(templateId);
       await fetchTemplates(); // Refresh list
     } catch (err) {
-      console.error('Failed to delete template:', err);
+      logger.error('Failed to delete template:', err);
       setError(getErrorMessage(err));
     } finally {
       setDeletingId(null);
@@ -113,14 +113,14 @@ export function TemplateLibrary({ open, onOpenChange, onTemplateSelect }: Templa
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {templates.map((template) => (
-              <Card key={template.id} className="relative">
-                <CardHeader>
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <div key={template.id} className="bg-black/40 rounded-lg border border-white/5 relative">
+                <div className="p-4">
+                  <h3 className="text-sm font-medium flex items-center gap-2">
                     <FileImage className="w-4 h-4" />
                     {template.name}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
+                  </h3>
+                </div>
+                <div className="px-4 pb-2">
                   <div className="aspect-[9/16] bg-muted rounded-lg flex items-center justify-center text-muted-foreground text-xs">
                     {getBackgroundPreview(template)}
                   </div>
@@ -130,8 +130,8 @@ export function TemplateLibrary({ open, onOpenChange, onTemplateSelect }: Templa
                       {template.element_count} {t('autoEdit.elements')}
                     </Badge>
                   </div>
-                </CardContent>
-                <CardFooter className="flex gap-2">
+                </div>
+                <div className="flex gap-2 p-4 border-t border-white/5">
                   <Button
                     variant="default"
                     size="sm"
@@ -152,8 +152,8 @@ export function TemplateLibrary({ open, onOpenChange, onTemplateSelect }: Templa
                       <Trash2 className="w-4 h-4" />
                     )}
                   </Button>
-                </CardFooter>
-              </Card>
+                </div>
+              </div>
             ))}
           </div>
         )}

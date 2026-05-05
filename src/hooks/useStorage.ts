@@ -1,29 +1,30 @@
 import { useState, useCallback } from 'react';
 import { storageApi } from '@/api/storage';
-import { Game, GameMetadata, EventData, ClipMetadata, StorageStats } from '@/types/storage';
+import { GameMetadata, EventData, ClipMetadata, StorageStats } from '@/types/storage';
 
 export function useStorage() {
-  const [loading, setLoading] = useState(false);
+  const [loadingCount, setLoadingCount] = useState(0);
+  const loading = loadingCount > 0;
   const [error, setError] = useState<string | null>(null);
 
-  const listGames = useCallback(async (): Promise<Game[]> => {
-    setLoading(true);
-    setError(null);
+  const clearError = useCallback(() => setError(null), []);
+
+  const listGames = useCallback(async (): Promise<string[]> => {
+    setLoadingCount(c => c + 1);
     try {
-      const games = await storageApi.listGames();
-      return games;
+      const gameIds = await storageApi.listGames();
+      return gameIds;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       setError(errorMsg);
       throw err;
     } finally {
-      setLoading(false);
+      setLoadingCount(c => c - 1);
     }
   }, []);
 
   const getGameMetadata = useCallback(async (gameId: string): Promise<GameMetadata> => {
-    setLoading(true);
-    setError(null);
+    setLoadingCount(c => c + 1);
     try {
       const metadata = await storageApi.getGameMetadata(gameId);
       return metadata;
@@ -32,18 +33,17 @@ export function useStorage() {
       setError(errorMsg);
       throw err;
     } finally {
-      setLoading(false);
+      setLoadingCount(c => c - 1);
     }
   }, []);
 
   const getAllGames = useCallback(async (): Promise<GameMetadata[]> => {
-    setLoading(true);
-    setError(null);
+    setLoadingCount(c => c + 1);
     try {
-      const games = await storageApi.listGames();
+      const gameIds = await storageApi.listGames();
       // Use Promise.allSettled to handle partial failures gracefully
       const results = await Promise.allSettled(
-        games.map((game) => storageApi.getGameMetadata(game.game_id))
+        gameIds.map((id) => storageApi.getGameMetadata(id))
       );
       // Filter only successful results
       const detailedGames = results
@@ -57,13 +57,12 @@ export function useStorage() {
       setError(errorMsg);
       throw err;
     } finally {
-      setLoading(false);
+      setLoadingCount(c => c - 1);
     }
   }, []);
 
   const saveGameMetadata = useCallback(async (gameId: string, metadata: GameMetadata): Promise<void> => {
-    setLoading(true);
-    setError(null);
+    setLoadingCount(c => c + 1);
     try {
       await storageApi.saveGameMetadata(gameId, metadata);
     } catch (err) {
@@ -71,13 +70,12 @@ export function useStorage() {
       setError(errorMsg);
       throw err;
     } finally {
-      setLoading(false);
+      setLoadingCount(c => c - 1);
     }
   }, []);
 
   const getGameEvents = useCallback(async (gameId: string): Promise<EventData[]> => {
-    setLoading(true);
-    setError(null);
+    setLoadingCount(c => c + 1);
     try {
       const events = await storageApi.getGameEvents(gameId);
       return events;
@@ -86,13 +84,12 @@ export function useStorage() {
       setError(errorMsg);
       throw err;
     } finally {
-      setLoading(false);
+      setLoadingCount(c => c - 1);
     }
   }, []);
 
   const saveGameEvents = useCallback(async (gameId: string, events: EventData[]): Promise<void> => {
-    setLoading(true);
-    setError(null);
+    setLoadingCount(c => c + 1);
     try {
       await storageApi.saveGameEvents(gameId, events);
     } catch (err) {
@@ -100,13 +97,12 @@ export function useStorage() {
       setError(errorMsg);
       throw err;
     } finally {
-      setLoading(false);
+      setLoadingCount(c => c - 1);
     }
   }, []);
 
   const saveClipMetadata = useCallback(async (gameId: string, clip: ClipMetadata): Promise<void> => {
-    setLoading(true);
-    setError(null);
+    setLoadingCount(c => c + 1);
     try {
       await storageApi.saveClipMetadata(gameId, clip);
     } catch (err) {
@@ -114,13 +110,12 @@ export function useStorage() {
       setError(errorMsg);
       throw err;
     } finally {
-      setLoading(false);
+      setLoadingCount(c => c - 1);
     }
   }, []);
 
   const deleteGame = useCallback(async (gameId: string): Promise<void> => {
-    setLoading(true);
-    setError(null);
+    setLoadingCount(c => c + 1);
     try {
       await storageApi.deleteGame(gameId);
     } catch (err) {
@@ -128,13 +123,12 @@ export function useStorage() {
       setError(errorMsg);
       throw err;
     } finally {
-      setLoading(false);
+      setLoadingCount(c => c - 1);
     }
   }, []);
 
   const getStorageStats = useCallback(async (): Promise<StorageStats> => {
-    setLoading(true);
-    setError(null);
+    setLoadingCount(c => c + 1);
     try {
       const stats = await storageApi.getStorageStats();
       return stats;
@@ -143,13 +137,14 @@ export function useStorage() {
       setError(errorMsg);
       throw err;
     } finally {
-      setLoading(false);
+      setLoadingCount(c => c - 1);
     }
   }, []);
 
   return {
     isLoading: loading,
     error,
+    clearError,
     listGames,
     getAllGames,
     getGameMetadata,

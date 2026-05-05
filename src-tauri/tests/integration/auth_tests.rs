@@ -1,8 +1,8 @@
 // Integration tests for authentication system
 #![cfg(test)]
 
-use lolshorts_tauri::auth::{AuthManager, User, SubscriptionTier, AuthError};
-use lolshorts_tauri::auth::middleware::{require_auth, require_tier};
+use lolshorts::auth::middleware::{require_auth, require_tier};
+use lolshorts::auth::{AuthError, AuthManager, SubscriptionTier, User};
 use std::sync::Arc;
 use tokio;
 
@@ -133,7 +133,7 @@ async fn test_require_tier_free_user_pro_feature() {
     match result {
         Err(AuthError::Failed(msg)) => {
             assert!(msg.contains("PRO subscription required"));
-        },
+        }
         _ => panic!("Expected Failed error with PRO message"),
     }
 }
@@ -178,7 +178,7 @@ async fn test_token_expiration_check() {
 
     auth.login(expired_user.clone()).unwrap();
 
-    let is_expired = lolshorts_tauri::auth::middleware::is_token_expired(&expired_user);
+    let is_expired = lolshorts::auth::middleware::is_token_expired(&expired_user);
     assert!(is_expired);
 
     // Create user with valid token (1 hour in future)
@@ -191,7 +191,7 @@ async fn test_token_expiration_check() {
         expires_at: chrono::Utc::now().timestamp() + 3600,
     };
 
-    let is_expired_valid = lolshorts_tauri::auth::middleware::is_token_expired(&valid_user);
+    let is_expired_valid = lolshorts::auth::middleware::is_token_expired(&valid_user);
     assert!(!is_expired_valid);
 }
 
@@ -216,9 +216,7 @@ async fn test_concurrent_auth_operations() {
     let mut handles = vec![];
     for _ in 0..10 {
         let auth_clone = Arc::clone(&auth);
-        let handle = task::spawn(async move {
-            require_auth(&auth_clone)
-        });
+        let handle = task::spawn(async move { require_auth(&auth_clone) });
         handles.push(handle);
     }
 

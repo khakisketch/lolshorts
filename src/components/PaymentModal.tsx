@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
 import {
   Dialog,
   DialogContent,
@@ -13,48 +12,15 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Crown, Check, AlertCircle } from "lucide-react";
-import { open } from "@tauri-apps/plugin-shell";
-import { getErrorMessage } from "@/lib/utils";
 
 interface PaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-interface SubscriptionResponse {
-  checkout_url: string;
-  order_id: string;
-}
-
 export function PaymentModal({ isOpen, onClose }: PaymentModalProps) {
   const { t } = useTranslation();
   const [period, setPeriod] = useState<"MONTHLY" | "YEARLY">("MONTHLY");
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubscribe = async () => {
-    setIsProcessing(true);
-    setError(null);
-
-    try {
-      const response = await invoke<SubscriptionResponse>("create_subscription", {
-        request: { period }
-      });
-
-      // Open checkout URL in external browser
-      await open(response.checkout_url);
-
-      // Store order_id for later confirmation
-      sessionStorage.setItem("pending_order_id", response.order_id);
-      sessionStorage.setItem("pending_amount", period === "MONTHLY" ? "9900" : "99000");
-
-      onClose();
-    } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setIsProcessing(false);
-    }
-  };
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -70,7 +36,14 @@ export function PaymentModal({ isOpen, onClose }: PaymentModalProps) {
         </DialogHeader>
 
         <div className="space-y-6">
-          {/* Plan Selection */}
+          <Alert>
+            <AlertCircle className="w-4 h-4" />
+            <AlertDescription>
+              Payment and PRO upgrades are deferred until non-payment field readiness is verified. Local export and current app workflows remain available without starting checkout.
+            </AlertDescription>
+          </Alert>
+
+          {/* Plan Selection (policy preview only) */}
           <RadioGroup value={period} onValueChange={(val) => setPeriod(val as "MONTHLY" | "YEARLY")}>
             <div className="space-y-3">
               {/* Monthly Plan */}
@@ -174,35 +147,26 @@ export function PaymentModal({ isOpen, onClose }: PaymentModalProps) {
             </div>
           </div>
 
-          {/* Error Display */}
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="w-4 h-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-
           {/* Action Buttons */}
           <div className="flex gap-3">
             <Button
               variant="outline"
               onClick={onClose}
-              disabled={isProcessing}
               className="flex-1"
             >
               {t('common.cancel')}
             </Button>
             <Button
-              onClick={handleSubscribe}
-              disabled={isProcessing}
+              type="button"
+              disabled
               className="flex-1"
             >
-              {isProcessing ? t('payment.processing') : t('payment.selectPlan')}
+              {t('payment.selectPlan')}
             </Button>
           </div>
 
           <p className="text-xs text-center text-muted-foreground">
-            {t('common.redirectToPayment')}
+            Payment checkout is intentionally unavailable in this readiness build.
           </p>
         </div>
       </DialogContent>

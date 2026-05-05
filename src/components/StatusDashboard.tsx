@@ -5,12 +5,16 @@
  * and system health for production deployments.
  */
 
-import { useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useRecordingStore } from "@/stores/recordingStore";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Spinner } from "@/components/ui/spinner";
+import { Button } from "@/components/ui/button";
+import { utilsApi } from "@/api/utils";
+import type { DiagnosticsStatus } from "@/api/utils";
 import {
   Activity,
   AlertTriangle,
@@ -19,9 +23,12 @@ import {
   Cpu,
   HardDrive,
   Radio,
-  Clock
-} from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+  Clock,
+  WifiOff,
+  ShieldCheck,
+} from "lucide-react";
+import { cmd } from "@/api/client";
+import { logger } from "@/lib/logger";
 
 interface RecordingMetrics {
   fps: number;
@@ -41,151 +48,432 @@ interface SystemMetrics {
   gpu_memory_mb?: number;
 }
 
-type HealthStatus = 'Healthy' | 'Warning' | 'Critical';
+type HealthStatus = "Healthy" | "Warning" | "Critical";
 
 interface RecordingStatus {
-  status: 'Idle' | 'Buffering' | 'Recording' | 'Error';
+  status: "idle" | "buffering" | "recording" | "processing" | "error";
   is_monitoring: boolean;
   buffer_duration_secs: number;
 }
 
+const MAX_BUFFER_SEGMENTS = 6;
+const MAX_MEMORY_MB = 2048;
+
+const getCommandErrorMessage = (error: unknown): string => {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+
+  return error instanceof Error
+    ? error.message
+    : "Diagnostics are currently unavailable.";
+};
+
+const getDiagnosticBadgeVariant = (
+  status:
+    | DiagnosticsStatus["overall_status"]
+    | DiagnosticsStatus["checks"][number]["status"],
+) => {
+  switch (status) {
+    case "ok":
+      return "default";
+    case "warning":
+      return "secondary";
+    case "blocked":
+      return "destructive";
+  }
+};
+
 export function StatusDashboard() {
   const { t } = useTranslation();
-  const [recordingMetrics, setRecordingMetrics] = useState<RecordingMetrics | null>(null);
-  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
-  const [healthStatus, setHealthStatus] = useState<HealthStatus>('Healthy');
+  const { readiness } = useRecordingStore();
+  const [recordingMetrics, setRecordingMetrics] =
+    useState<RecordingMetrics | null>(null);
+  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(
+    null,
+  );
+  const [healthStatus, setHealthStatus] = useState<HealthStatus>("Healthy");
+  const [diagnosticsStatus, setDiagnosticsStatus] =
+    useState<DiagnosticsStatus | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  const [diagnosticsExportPath, setDiagnosticsExportPath] = useState<
+    string | null
+  >(null);
+  const [isExportingDiagnostics, setIsExportingDiagnostics] = useState(false);
   const [recordingStatus, setRecordingStatus] = useState<RecordingStatus>({
-    status: 'Idle',
+    status: "idle",
     is_monitoring: false,
-    buffer_duration_secs: 0
+    buffer_duration_secs: 0,
   });
 
   useEffect(() => {
-    // Poll metrics every 2 seconds
-    const interval = setInterval(async () => {
+    const pollStatus = async () => {
       try {
         // Fetch recording status
-        const status = await invoke<RecordingStatus>('get_detailed_recording_status');
+        const status = await cmd<RecordingStatus>(
+          "get_detailed_recording_status",
+        );
         setRecordingStatus(status);
 
         // Fetch performance metrics if recording
-        if (status.status === 'Buffering' || status.status === 'Recording') {
+        if (status.status === "buffering" || status.status === "recording") {
           // Fetch actual metrics from backend
-          const recMetrics = await invoke<RecordingMetrics>('get_recording_metrics');
+          const recMetrics = await cmd<RecordingMetrics>(
+            "get_recording_metrics",
+          );
           if (recMetrics) {
             setRecordingMetrics(recMetrics);
           }
 
-          const sysMetrics = await invoke<SystemMetrics>('get_system_metrics');
+          const sysMetrics = await cmd<SystemMetrics>("get_system_metrics");
           setSystemMetrics(sysMetrics);
 
           // Determine health status (only if recMetrics exists)
           if (recMetrics) {
             if (recMetrics.fps < 45 || recMetrics.cpu_percent > 95) {
-              setHealthStatus('Critical');
+              setHealthStatus("Critical");
             } else if (recMetrics.fps < 55 || recMetrics.cpu_percent > 80) {
-              setHealthStatus('Warning');
+              setHealthStatus("Warning");
             } else {
-              setHealthStatus('Healthy');
+              setHealthStatus("Healthy");
             }
           }
         }
       } catch (error) {
-        console.error('Failed to fetch metrics:', error);
+        logger.error("Failed to fetch metrics:", error);
       }
-    }, 2000);
+
+      try {
+        setDiagnosticsStatus(await utilsApi.getDiagnosticsStatus());
+        setDiagnosticsError(null);
+      } catch (error) {
+        setDiagnosticsStatus(null);
+        setDiagnosticsError(getCommandErrorMessage(error));
+        logger.error("Failed to fetch diagnostics:", error);
+      }
+    };
+
+    pollStatus();
+
+    // Poll metrics every 2 seconds
+    const interval = setInterval(pollStatus, 2000);
 
     return () => clearInterval(interval);
   }, []);
 
   const getStatusBadgeVariant = (status: string) => {
     switch (status) {
-      case 'Buffering': return 'default';
-      case 'Recording': return 'destructive';
-      case 'Error': return 'destructive';
-      default: return 'secondary';
+      case "buffering":
+        return "default";
+      case "recording":
+        return "destructive";
+      case "processing":
+        return "default";
+      case "error":
+        return "destructive";
+      default:
+        return "secondary";
     }
   };
 
   const getHealthBadgeVariant = (health: HealthStatus) => {
     switch (health) {
-      case 'Healthy': return 'default';
-      case 'Warning': return 'secondary';
-      case 'Critical': return 'destructive';
+      case "Healthy":
+        return "default";
+      case "Warning":
+        return "secondary";
+      case "Critical":
+        return "destructive";
     }
   };
 
   const getHealthIcon = (health: HealthStatus) => {
     switch (health) {
-      case 'Healthy': return <CheckCircle2 className="h-4 w-4" />;
-      case 'Warning': return <AlertTriangle className="h-4 w-4" />;
-      case 'Critical': return <XCircle className="h-4 w-4" />;
+      case "Healthy":
+        return <CheckCircle2 className="h-4 w-4" />;
+      case "Warning":
+        return <AlertTriangle className="h-4 w-4" />;
+      case "Critical":
+        return <XCircle className="h-4 w-4" />;
+    }
+  };
+
+  const handleExportDiagnostics = async () => {
+    setIsExportingDiagnostics(true);
+    setDiagnosticsExportPath(null);
+    try {
+      const result = await utilsApi.exportDiagnosticsBundle(true);
+      setDiagnosticsExportPath(result.output_path);
+      setDiagnosticsError(null);
+    } catch (error) {
+      const message = getCommandErrorMessage(error);
+      setDiagnosticsError(message);
+      logger.error("Failed to export diagnostics bundle:", error);
+    } finally {
+      setIsExportingDiagnostics(false);
     }
   };
 
   return (
-    <div className="space-y-4">
-      {/* Recording Status Card */}
-      <Card>
-        <CardHeader>
+    <div data-testid="status-dashboard" className="space-y-4">
+      {/* Pre-flight Readiness Check */}
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
           <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-gaming-cyan" />
+              {t("statusDashboard.readiness.title", "Pre-flight Readiness")}
+            </h3>
+            <Badge variant={readiness?.ready ? "default" : "destructive"}>
+              {readiness?.ready
+                ? t("statusDashboard.readiness.ready")
+                : t("statusDashboard.readiness.notReady")}
+            </Badge>
+          </div>
+        </div>
+
+        {readiness ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <p className="text-xs font-bold uppercase text-muted-foreground mb-2">
+                {t("statusDashboard.readiness.components")}
+              </p>
+              <div className="grid grid-cols-1 gap-1">
+                {Object.entries(readiness.component_statuses).map(
+                  ([comp, data]) => (
+                    <div
+                      key={comp}
+                      className="flex items-center justify-between text-xs p-2 bg-black/20 rounded border border-white/5"
+                    >
+                      <span className="capitalize">{comp}</span>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={
+                            data.status === "ok"
+                              ? "text-green-400"
+                              : data.status === "warning"
+                                ? "text-yellow-400"
+                                : "text-red-400"
+                          }
+                        >
+                          {data.status}
+                        </span>
+                        <div
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            data.status === "ok"
+                              ? "bg-green-500"
+                              : data.status === "warning"
+                                ? "bg-yellow-500"
+                                : "bg-red-500"
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  ),
+                )}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs font-bold uppercase text-muted-foreground mb-2">
+                {t("statusDashboard.readiness.blockers")}
+              </p>
+              {readiness.blockers.length > 0 ? (
+                <div className="space-y-2">
+                  {readiness.blockers.map((b, i) => (
+                    <div
+                      key={i}
+                      className={`text-xs p-2 rounded border ${
+                        b.severity === "critical"
+                          ? "bg-red-500/10 border-red-500/20 text-red-400"
+                          : "bg-yellow-500/10 border-yellow-500/20 text-yellow-400"
+                      }`}
+                    >
+                      {b.message}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs p-4 text-center bg-green-500/10 border border-green-500/20 text-green-400 rounded">
+                  {t("statusDashboard.readiness.noBlockers")}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center p-8">
+            <Spinner size="sm" />
+          </div>
+        )}
+      </div>
+
+      {/* Commercial Readiness Diagnostics */}
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-gaming-cyan" />
+              {t("statusDashboard.diagnostics.title", "Diagnostics & Updates")}
+            </h3>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleExportDiagnostics}
+                disabled={isExportingDiagnostics}
+              >
+                {isExportingDiagnostics
+                  ? t("statusDashboard.diagnostics.exporting", "Exporting")
+                  : t("statusDashboard.diagnostics.export", "Export")}
+              </Button>
+              {diagnosticsStatus && (
+                <Badge
+                  variant={getDiagnosticBadgeVariant(
+                    diagnosticsStatus.overall_status,
+                  )}
+                >
+                  {diagnosticsStatus.overall_status}
+                </Badge>
+              )}
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {t(
+              "statusDashboard.diagnostics.description",
+              "Updater, signing, and runtime configuration visibility",
+            )}
+          </p>
+        </div>
+
+        {diagnosticsError ? (
+          <Alert>
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>
+              {t(
+                "statusDashboard.diagnostics.unavailable",
+                "Desktop diagnostics unavailable",
+              )}
+            </AlertTitle>
+            <AlertDescription>{diagnosticsError}</AlertDescription>
+          </Alert>
+        ) : diagnosticsStatus ? (
+          <div className="space-y-2">
+            {diagnosticsExportPath && (
+              <Alert>
+                <AlertTitle>
+                  {t(
+                    "statusDashboard.diagnostics.exportReady",
+                    "Diagnostics exported",
+                  )}
+                </AlertTitle>
+                <AlertDescription>{diagnosticsExportPath}</AlertDescription>
+              </Alert>
+            )}
+            {diagnosticsStatus.checks.map((check) => (
+              <div
+                key={check.key}
+                className="p-3 bg-black/20 rounded border border-white/5"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="font-medium text-sm">{check.label}</div>
+                  <Badge variant={getDiagnosticBadgeVariant(check.status)}>
+                    {check.status}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {check.message}
+                </p>
+                <p className="text-xs text-gaming-cyan mt-1">{check.action}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex items-center justify-center p-4">
+            <Spinner size="sm" />
+          </div>
+        )}
+      </div>
+
+      {/* Recording Status Card */}
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
               <Radio className="h-5 w-5" />
-              {t('statusDashboard.recordingStatus')}
-            </CardTitle>
-            <Badge variant={getStatusBadgeVariant(recordingStatus.status)}>
+              {t("statusDashboard.recordingStatus")}
+            </h3>
+            <Badge
+              data-testid="status-indicator"
+              variant={getStatusBadgeVariant(recordingStatus.status)}
+            >
               {recordingStatus.status}
             </Badge>
           </div>
-          <CardDescription>
+          <p className="text-sm text-muted-foreground">
             {recordingStatus.is_monitoring
-              ? t('statusDashboard.autoCapture.active')
-              : t('statusDashboard.autoCapture.pressF8')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <div className="text-sm text-muted-foreground">{t('statusDashboard.bufferDuration')}</div>
-              <div className="text-2xl font-bold">{recordingStatus.buffer_duration_secs}s</div>
+              ? t("statusDashboard.autoCapture.active")
+              : t("statusDashboard.autoCapture.pressF8")}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <div className="text-sm text-muted-foreground">
+              {t("statusDashboard.bufferDuration")}
             </div>
-            {recordingMetrics && (
-              <div>
-                <div className="text-sm text-muted-foreground">{t('statusDashboard.bufferSegments')}</div>
-                <div className="text-2xl font-bold">{recordingMetrics.buffer_segments}/6</div>
-              </div>
-            )}
+            <div className="text-2xl font-bold">
+              {recordingStatus.buffer_duration_secs}s
+            </div>
           </div>
-        </CardContent>
-      </Card>
+          {recordingMetrics && (
+            <div>
+              <div className="text-sm text-muted-foreground">
+                {t("statusDashboard.bufferSegments")}
+              </div>
+              <div className="text-2xl font-bold">
+                {recordingMetrics.buffer_segments}/{MAX_BUFFER_SEGMENTS}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Performance Metrics */}
       {recordingMetrics && (
-        <Card>
-          <CardHeader>
+        <div className="gaming-panel p-6">
+          <div className="mb-4">
             <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
                 <Activity className="h-5 w-5" />
-                {t('statusDashboard.performanceMetrics')}
-              </CardTitle>
+                {t("statusDashboard.performanceMetrics")}
+              </h3>
               <Badge variant={getHealthBadgeVariant(healthStatus)}>
                 {getHealthIcon(healthStatus)}
-                <span className="ml-1">{t(`statusDashboard.${healthStatus.toLowerCase()}`)}</span>
+                <span className="ml-1">
+                  {t(`statusDashboard.${healthStatus.toLowerCase()}`)}
+                </span>
               </Badge>
             </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
+          </div>
+          <div className="space-y-4">
             {/* FPS */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{t('statusDashboard.fps')}</span>
+                <span className="text-sm font-medium">
+                  {t("statusDashboard.fps")}
+                </span>
                 <span className="text-sm text-muted-foreground">
                   {recordingMetrics.fps.toFixed(1)} / 60
                 </span>
               </div>
               <Progress
                 value={(recordingMetrics.fps / 60) * 100}
-                className={recordingMetrics.fps < 55 ? 'bg-yellow-500' : ''}
+                className={recordingMetrics.fps < 55 ? "bg-yellow-500" : ""}
               />
             </div>
 
@@ -194,7 +482,7 @@ export function StatusDashboard() {
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium flex items-center gap-1">
                   <Cpu className="h-4 w-4" />
-                  {t('statusDashboard.ffmpegCpu')}
+                  {t("statusDashboard.ffmpegCpu")}
                 </span>
                 <span className="text-sm text-muted-foreground">
                   {recordingMetrics.cpu_percent.toFixed(1)}%
@@ -202,7 +490,9 @@ export function StatusDashboard() {
               </div>
               <Progress
                 value={recordingMetrics.cpu_percent}
-                className={recordingMetrics.cpu_percent > 80 ? 'bg-orange-500' : ''}
+                className={
+                  recordingMetrics.cpu_percent > 80 ? "bg-orange-500" : ""
+                }
               />
             </div>
 
@@ -211,19 +501,23 @@ export function StatusDashboard() {
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium flex items-center gap-1">
                   <HardDrive className="h-4 w-4" />
-                  {t('statusDashboard.memory')}
+                  {t("statusDashboard.memory")}
                 </span>
                 <span className="text-sm text-muted-foreground">
                   {recordingMetrics.memory_mb.toFixed(0)} MB
                 </span>
               </div>
-              <Progress value={(recordingMetrics.memory_mb / 2048) * 100} />
+              <Progress
+                value={(recordingMetrics.memory_mb / MAX_MEMORY_MB) * 100}
+              />
             </div>
 
             {/* Bitrate */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{t('statusDashboard.bitrate')}</span>
+                <span className="text-sm font-medium">
+                  {t("statusDashboard.bitrate")}
+                </span>
                 <span className="text-sm text-muted-foreground">
                   {(recordingMetrics.bitrate_kbps / 1000).toFixed(1)} Mbps
                 </span>
@@ -234,48 +528,60 @@ export function StatusDashboard() {
             {recordingMetrics.frame_drops > 0 && (
               <Alert variant="destructive">
                 <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>{t('statusDashboard.frameDropsDetected')}</AlertTitle>
+                <AlertTitle>
+                  {t("statusDashboard.frameDropsDetected")}
+                </AlertTitle>
                 <AlertDescription>
-                  {t('statusDashboard.frameDropsMessage', { count: recordingMetrics.frame_drops })}
+                  {t("statusDashboard.frameDropsMessage", {
+                    count: recordingMetrics.frame_drops,
+                  })}
                 </AlertDescription>
               </Alert>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
 
       {/* System Resources */}
       {systemMetrics && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
+        <div className="gaming-panel p-6">
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
               <Cpu className="h-5 w-5" />
-              {t('statusDashboard.systemResources')}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+              {t("statusDashboard.systemResources")}
+            </h3>
+          </div>
+          <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <div className="text-sm text-muted-foreground">{t('statusDashboard.totalCpu')}</div>
+                <div className="text-sm text-muted-foreground">
+                  {t("statusDashboard.totalCpu")}
+                </div>
                 <div className="text-2xl font-bold">
                   {systemMetrics.total_cpu_percent.toFixed(1)}%
                 </div>
               </div>
               <div>
-                <div className="text-sm text-muted-foreground">{t('statusDashboard.availableRam')}</div>
+                <div className="text-sm text-muted-foreground">
+                  {t("statusDashboard.availableRam")}
+                </div>
                 <div className="text-2xl font-bold">
                   {systemMetrics.available_ram_gb.toFixed(1)} GB
                 </div>
               </div>
               <div>
-                <div className="text-sm text-muted-foreground">{t('statusDashboard.availableDisk')}</div>
+                <div className="text-sm text-muted-foreground">
+                  {t("statusDashboard.availableDisk")}
+                </div>
                 <div className="text-2xl font-bold">
                   {systemMetrics.available_disk_gb.toFixed(1)} GB
                 </div>
               </div>
               {systemMetrics.gpu_percent && (
                 <div>
-                  <div className="text-sm text-muted-foreground">{t('statusDashboard.gpu')}</div>
+                  <div className="text-sm text-muted-foreground">
+                    {t("statusDashboard.gpu")}
+                  </div>
                   <div className="text-2xl font-bold">
                     {systemMetrics.gpu_percent.toFixed(1)}%
                   </div>
@@ -287,41 +593,82 @@ export function StatusDashboard() {
             {systemMetrics.available_disk_gb < 5 && (
               <Alert variant="destructive">
                 <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>{t('statusDashboard.lowDiskSpace')}</AlertTitle>
+                <AlertTitle>{t("statusDashboard.lowDiskSpace")}</AlertTitle>
                 <AlertDescription>
-                  {t('statusDashboard.lowDiskSpaceMessage')}
+                  {t("statusDashboard.lowDiskSpaceMessage")}
                 </AlertDescription>
               </Alert>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
+      )}
+
+      {/* Error state with actionable hints */}
+      {recordingStatus.status === "error" && (
+        <div className="gaming-panel p-6">
+          <div className="space-y-3">
+            <Alert variant="destructive">
+              <XCircle className="h-4 w-4" />
+              <AlertTitle>{t("errors.recordingFailed")}</AlertTitle>
+              <AlertDescription>
+                <div className="mt-2 space-y-2 text-sm">
+                  <p className="font-medium">
+                    {t("statusDashboard.errorHints.checkThese")}
+                  </p>
+                  <ul className="list-disc list-inside space-y-1">
+                    <li>{t("statusDashboard.errorHints.gameRunning")}</li>
+                    <li>{t("statusDashboard.errorHints.ffmpegPresent")}</li>
+                    <li>{t("statusDashboard.errorHints.audioDevice")}</li>
+                    <li>{t("statusDashboard.errorHints.diskSpace")}</li>
+                  </ul>
+                </div>
+              </AlertDescription>
+            </Alert>
+          </div>
+        </div>
+      )}
+
+      {/* Not monitoring hint */}
+      {!recordingStatus.is_monitoring && recordingStatus.status === "idle" && (
+        <div className="gaming-panel p-6">
+          <Alert>
+            <WifiOff className="h-4 w-4" />
+            <AlertDescription>
+              {t("statusDashboard.autoCapture.pressF8")}
+            </AlertDescription>
+          </Alert>
+        </div>
       )}
 
       {/* Hotkey Reference */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
             <Clock className="h-5 w-5" />
-            {t('statusDashboard.hotkeyReference')}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('statusDashboard.toggleAutoCapture')}</span>
-              <kbd className="px-2 py-1 bg-muted rounded">F8</kbd>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('statusDashboard.save60sReplay')}</span>
-              <kbd className="px-2 py-1 bg-muted rounded">F9</kbd>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('statusDashboard.save30sReplay')}</span>
-              <kbd className="px-2 py-1 bg-muted rounded">F10</kbd>
-            </div>
+            {t("statusDashboard.hotkeyReference")}
+          </h3>
+        </div>
+        <div className="space-y-2 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">
+              {t("statusDashboard.toggleAutoCapture")}
+            </span>
+            <kbd className="px-2 py-1 bg-muted rounded">F8</kbd>
           </div>
-        </CardContent>
-      </Card>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">
+              {t("statusDashboard.save60sReplay")}
+            </span>
+            <kbd className="px-2 py-1 bg-muted rounded">F9</kbd>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">
+              {t("statusDashboard.save30sReplay")}
+            </span>
+            <kbd className="px-2 py-1 bg-muted rounded">F10</kbd>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

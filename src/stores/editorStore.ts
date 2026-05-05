@@ -143,7 +143,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   removeFromTimeline: (clipId) => {
     const { timelineClips } = get();
     const newTimeline = timelineClips
-      .filter(c => c.clip_id !== clipId)
+      .filter(c => c.file_path !== clipId)
       .map((c, index) => ({ ...c, order: index }));
     const totalDuration = newTimeline.reduce((sum, c) => sum + c.duration, 0);
 
@@ -177,7 +177,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setClipTrimStart: (clipId, trimStart) => {
     const { timelineClips } = get();
     const newTimeline = timelineClips.map(clip => {
-      if (clip.clip_id === clipId) {
+      if (clip.file_path === clipId) {
         const maxTrimStart = (clip.trimEnd ?? clip.duration) - 0.5; // Min 0.5s duration
         return {
           ...clip,
@@ -199,7 +199,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setClipTrimEnd: (clipId, trimEnd) => {
     const { timelineClips } = get();
     const newTimeline = timelineClips.map(clip => {
-      if (clip.clip_id === clipId) {
+      if (clip.file_path === clipId) {
         const minTrimEnd = (clip.trimStart ?? 0) + 0.5; // Min 0.5s duration
         return {
           ...clip,

@@ -41,47 +41,45 @@ jobs:
           body: |
             ## LoLShorts ${{ steps.get_version.outputs.version }}
 
-            ### 🎮 What's New
+            ### Release Candidate Scope
 
-            **Release highlights will be added here**
+            This automated release is a non-payment Windows release-candidate artifact until Field QA evidence is attached and the release owner explicitly promotes it. Do not treat this build as production-ready, commercially ready, payment-ready, or support-ready from CI success alone.
 
-            ### 📦 Downloads
+            ### Downloads
 
-            - **Windows Installer (MSI)**: Recommended for most users
-            - **Windows Installer (NSIS)**: Alternative installer format
-            - **Portable Version**: Coming soon
+            - **Windows Installer (MSI)**: Field QA candidate
+            - **Windows Installer (NSIS)**: Field QA candidate
 
-            ### 📝 Installation
+            ### Installation
 
             1. Download the MSI or NSIS installer
             2. Run the installer
             3. Follow the installation wizard
             4. Launch LoLShorts from the Start Menu
 
-            ### ⚠️ Important Notes
+            ### Required Before Public Promotion
 
             - Requires Windows 10+ (64-bit)
             - FFmpeg is bundled (no separate installation needed)
             - League of Legends must be installed
-            - First launch may take a few seconds
+            - Complete `docs/FIELD_QA_COMMERCIAL_READINESS.md` with real Windows, LoL/LCU, replay, YouTube, installer/updater, recovery, and support evidence
+            - Keep Toss/live billing, paid PRO sales, payment webhooks, and subscription enforcement disabled
 
-            ### 🔒 Legal
+            ### Legal
 
             - See [Terms of Service](https://github.com/LoLShorts/lolshorts/blob/main/TERMS_OF_SERVICE.md)
             - See [Privacy Policy](https://github.com/LoLShorts/lolshorts/blob/main/PRIVACY_POLICY.md)
             - See [Riot Compliance](https://github.com/LoLShorts/lolshorts/blob/main/RIOT_COMPLIANCE.md)
 
-            ### 📞 Support
+            ### Support
 
-            - [Documentation](https://docs.lolshorts.com)
-            - [Discord Community](https://discord.gg/lolshorts)
             - [Report Issues](https://github.com/LoLShorts/lolshorts/issues)
 
             ---
 
             **Full Changelog**: https://github.com/LoLShorts/lolshorts/compare/${{ github.ref }}
-          draft: false
-          prerelease: false
+          draft: true
+          prerelease: true
 
   # Build and upload Windows installers
   build-windows:
@@ -121,11 +119,33 @@ jobs:
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --verbose
 
+      - name: Validate release signing configuration
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            Write-Error "Missing TAURI_PRIVATE_KEY secret"
+            exit 1
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            Write-Error "Missing TAURI_KEY_PASSWORD secret"
+            exit 1
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_UPDATER_PUBKEY)) {
+            Write-Error "Missing TAURI_UPDATER_PUBKEY secret"
+            exit 1
+          }
+
       - name: Build application (Release)
         run: cargo tauri build --verbose
         env:
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
 
       - name: Verify build artifacts
         run: |
@@ -152,9 +172,16 @@ jobs:
         run: |
           $msiPath = (Get-ChildItem -Path "src-tauri/target/release/bundle/msi" -Filter "*.msi" | Select-Object -First 1).FullName
           $nsisPath = (Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1).FullName
+          $nsisSigPath = "$nsisPath.sig"
+
+          if (-not (Test-Path $nsisSigPath)) {
+            Write-Error "Updater signature file not found: $nsisSigPath"
+            exit 1
+          }
 
           Write-Output "msi_path=$msiPath" >> $env:GITHUB_OUTPUT
           Write-Output "nsis_path=$nsisPath" >> $env:GITHUB_OUTPUT
+          Write-Output "nsis_sig_path=$nsisSigPath" >> $env:GITHUB_OUTPUT
 
           $msiName = Split-Path $msiPath -Leaf
           $nsisName = Split-Path $nsisPath -Leaf
@@ -219,6 +246,7 @@ jobs:
           path: |
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*.sig
           retention-days: 7
 
   # Update Tauri auto-updater manifest
@@ -231,9 +259,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: installers-${{ github.sha }}
+          path: ./release-artifacts
+
       - name: Generate updater manifest
         run: |
           $version = "${{ needs.create-release.outputs.release_version }}"
+          $nsisPath = (Get-ChildItem -Path "./release-artifacts" -Filter "*-setup.exe" -Recurse | Select-Object -First 1).FullName
+          $nsisSigPath = (Get-ChildItem -Path "./release-artifacts" -Filter "*.sig" -Recurse | Select-Object -First 1).FullName
+
+          if (-not $nsisPath) {
+            Write-Error "NSIS updater artifact not found"
+            exit 1
+          }
+
+          if (-not $nsisSigPath) {
+            Write-Error "Updater signature artifact not found"
+            exit 1
+          }
+
+          $signature = (Get-Content $nsisSigPath -Raw).Trim()
+          $nsisName = Split-Path $nsisPath -Leaf
 
           $manifest = @{
               version = $version
@@ -241,26 +290,32 @@ jobs:
               pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
               platforms = @{
                   "windows-x86_64" = @{
-                      signature = ""
-                      url = "https://github.com/LoLShorts/lolshorts/releases/download/v$version/LoLShorts_${version}_x64-setup.exe"
+                      signature = $signature
+                      url = "https://github.com/LoLShorts/lolshorts/releases/download/v$version/$nsisName"
                   }
               }
           } | ConvertTo-Json -Depth 10
 
-          $manifest | Out-File -FilePath "updater-manifest.json" -Encoding UTF8
+          $manifest | Out-File -FilePath "latest.json" -Encoding UTF8
 
           Write-Host "Generated updater manifest:"
-          Get-Content "updater-manifest.json"
+          Get-Content "latest.json"
 
-      # Upload manifest to release or update server
-      # This step would typically upload to your update server
-      # For now, we'll just create it as an artifact
+      - name: Upload updater manifest to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: latest.json
+          asset_name: latest.json
+          asset_content_type: application/json
 
       - name: Upload manifest artifact
         uses: actions/upload-artifact@v4
         with:
           name: updater-manifest
-          path: updater-manifest.json
+          path: latest.json
 
   # Post-release validation
   validate-release:

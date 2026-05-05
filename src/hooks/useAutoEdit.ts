@@ -132,6 +132,24 @@ export function useAutoEdit() {
       if (progress) {
         setProgress(progress);
 
+        if (progress.status === 'Complete' && progress.output_path) {
+          const currentResult = useAutoEditStore.getState().result;
+
+          if (currentResult) {
+            if (!currentResult.job_id && progress.job_id) {
+              setResult({ ...currentResult, job_id: progress.job_id });
+            }
+          } else {
+            setResult({
+              job_id: progress.job_id,
+              output_path: progress.output_path,
+              duration: 0,
+              clips_used: 0,
+              file_size_bytes: 0,
+            });
+          }
+        }
+
         // Stop polling if complete or failed
         if (progress.status === 'Complete' || progress.status === 'Failed') {
           if (progressIntervalRef.current) {
@@ -146,7 +164,7 @@ export function useAutoEdit() {
       // Polling failure is non-critical - will retry next interval
       return null;
     }
-  }, [setProgress]);
+  }, [setProgress, setResult]);
 
   /**
    * Start polling for progress (call after starting auto-edit)

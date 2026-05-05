@@ -19,8 +19,22 @@ pub enum AppError {
     Validation(String),
     #[error("Resource not found: {0}")]
     NotFound(String),
+    #[error("Recording error: {0}")]
+    Recording(String),
     #[error("Internal system error: {0}")]
     Internal(String),
+    #[error("Out of memory: {0}")]
+    OutOfMemory(String),
+    #[error("Process timeout: {0}")]
+    ProcessTimeout(String),
+    #[error("Corrupted file: {0}")]
+    CorruptedFile(String),
+    #[error("Device disconnected: {0}")]
+    DeviceDisconnected(String),
+    #[error("Rate limited: {0}")]
+    RateLimited(String),
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 // Serialize implementation to provide structured error response to Frontend
@@ -29,21 +43,28 @@ impl Serialize for AppError {
     where
         S: serde::Serializer,
     {
-        let code = match self {
-            AppError::Database(_) => "DATABASE_ERROR",
-            AppError::Network(_) => "NETWORK_ERROR",
-            AppError::Io(_) => "IO_ERROR",
-            AppError::Video(_) => "VIDEO_ERROR",
-            AppError::Lcu(_) => "LCU_ERROR",
-            AppError::Auth(_) => "AUTH_ERROR",
-            AppError::Validation(_) => "VALIDATION_ERROR",
-            AppError::NotFound(_) => "NOT_FOUND",
-            AppError::Internal(_) => "INTERNAL_ERROR",
+        let (code, message) = match self {
+            AppError::Database(msg) => ("DATABASE_ERROR", msg.clone()),
+            AppError::Network(msg) => ("NETWORK_ERROR", msg.clone()),
+            AppError::Io(msg) => ("IO_ERROR", msg.clone()),
+            AppError::Video(msg) => ("VIDEO_ERROR", msg.clone()),
+            AppError::Lcu(msg) => ("LCU_ERROR", msg.clone()),
+            AppError::Auth(msg) => ("AUTH_ERROR", msg.clone()),
+            AppError::Validation(msg) => ("VALIDATION_ERROR", msg.clone()),
+            AppError::NotFound(msg) => ("NOT_FOUND", msg.clone()),
+            AppError::Recording(msg) => ("RECORDING_ERROR", msg.clone()),
+            AppError::Internal(msg) => ("INTERNAL_ERROR", msg.clone()),
+            AppError::OutOfMemory(msg) => ("OUT_OF_MEMORY", msg.clone()),
+            AppError::ProcessTimeout(msg) => ("PROCESS_TIMEOUT", msg.clone()),
+            AppError::CorruptedFile(msg) => ("CORRUPTED_FILE", msg.clone()),
+            AppError::DeviceDisconnected(msg) => ("DEVICE_DISCONNECTED", msg.clone()),
+            AppError::RateLimited(msg) => ("RATE_LIMITED", msg.clone()),
+            AppError::ServiceUnavailable(msg) => ("SERVICE_UNAVAILABLE", msg.clone()),
         };
 
         let response = ErrorResponse {
             code: code.to_string(),
-            message: self.to_string(),
+            message,
         };
 
         response.serialize(serializer)
@@ -70,5 +91,85 @@ impl From<anyhow::Error> for AppError {
 impl From<std::io::Error> for AppError {
     fn from(err: std::io::Error) -> Self {
         AppError::Io(err.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_out_of_memory_error_serializes() {
+        let err = AppError::OutOfMemory("buffer allocation failed".into());
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["code"], "OUT_OF_MEMORY");
+        assert_eq!(json["message"], "buffer allocation failed");
+    }
+
+    #[test]
+    fn test_process_timeout_error_serializes() {
+        let err = AppError::ProcessTimeout("FFmpeg exceeded 10min".into());
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["code"], "PROCESS_TIMEOUT");
+        assert_eq!(json["message"], "FFmpeg exceeded 10min");
+    }
+
+    #[test]
+    fn test_corrupted_file_error_serializes() {
+        let err = AppError::CorruptedFile("segment_003.mp4".into());
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["code"], "CORRUPTED_FILE");
+        assert_eq!(json["message"], "segment_003.mp4");
+    }
+
+    #[test]
+    fn test_device_disconnected_error_serializes() {
+        let err = AppError::DeviceDisconnected("USB Headset".into());
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["code"], "DEVICE_DISCONNECTED");
+        assert_eq!(json["message"], "USB Headset");
+    }
+
+    #[test]
+    fn test_rate_limited_error_serializes() {
+        let err = AppError::RateLimited("recording commands".into());
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["code"], "RATE_LIMITED");
+        assert_eq!(json["message"], "recording commands");
+    }
+
+    #[test]
+    fn test_service_unavailable_error_serializes() {
+        let err = AppError::ServiceUnavailable("LCU API".into());
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["code"], "SERVICE_UNAVAILABLE");
+        assert_eq!(json["message"], "LCU API");
+    }
+
+    #[test]
+    fn test_all_variants_have_code_and_message() {
+        let variants: Vec<AppError> = vec![
+            AppError::Database("test".into()),
+            AppError::Network("test".into()),
+            AppError::Io("test".into()),
+            AppError::Video("test".into()),
+            AppError::Auth("test".into()),
+            AppError::Validation("test".into()),
+            AppError::NotFound("test".into()),
+            AppError::Recording("test".into()),
+            AppError::Internal("test".into()),
+            AppError::Lcu("test".into()),
+            AppError::OutOfMemory("test".into()),
+            AppError::ProcessTimeout("test".into()),
+            AppError::CorruptedFile("test".into()),
+            AppError::DeviceDisconnected("test".into()),
+            AppError::RateLimited("test".into()),
+            AppError::ServiceUnavailable("test".into()),
+        ];
+        for err in &variants {
+            let json = serde_json::to_value(err).unwrap();
+            assert!(json["code"].is_string(), "Missing code for {:?}", err);
+            assert!(json["message"].is_string(), "Missing message for {:?}", err);
+        }
     }
 }

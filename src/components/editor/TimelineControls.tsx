@@ -56,6 +56,7 @@ export function TimelineControls() {
             onClick={zoomOut}
             disabled={zoom <= 0.5}
             className="h-7 px-2"
+            aria-label={t('editor.timeline.zoomOut')}
           >
             <ZoomOut className="w-4 h-4" />
           </Button>
@@ -70,6 +71,7 @@ export function TimelineControls() {
             onClick={zoomIn}
             disabled={zoom >= 4.0}
             className="h-7 px-2"
+            aria-label={t('editor.timeline.zoomIn')}
           >
             <ZoomIn className="w-4 h-4" />
           </Button>
@@ -80,6 +82,7 @@ export function TimelineControls() {
             onClick={resetZoom}
             disabled={zoom === 1.0}
             className="h-7 px-2"
+            aria-label={t('editor.timeline.resetZoom')}
           >
             <RotateCcw className="w-4 h-4" />
           </Button>

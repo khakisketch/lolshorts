@@ -3,11 +3,12 @@ pub mod error;
 pub mod feature_gate;
 pub mod hotkey;
 pub mod lcu;
-pub mod payments;
+pub mod overlay;
 pub mod recording;
 pub mod settings;
 pub mod storage;
 pub mod supabase;
+pub mod tray;
 pub mod utils;
 pub mod video;
 pub mod youtube;
@@ -35,4 +36,6 @@ pub struct AppState {
     pub video_processor: Arc<video::VideoProcessor>,
     pub youtube_manager: Arc<youtube::commands::YouTubeManager>,
     pub lcu_client: Arc<tokio::sync::Mutex<lcu::LcuClient>>,
+    pub startup_issues: Arc<RwLock<Vec<String>>>,
+    pub recording_disk_monitor: Arc<RwLock<Option<tokio::sync::watch::Sender<bool>>>>,
 }

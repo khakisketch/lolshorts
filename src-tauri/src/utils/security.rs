@@ -11,7 +11,8 @@
 //
 // All Tauri commands MUST use these validators before processing user input.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -31,6 +32,12 @@ pub enum SecurityError {
     #[error("Path does not exist: {path}")]
     PathNotFound { path: String },
 
+    #[error("Path is outside allowed roots: {path}")]
+    PathOutsideAllowedRoots { path: String },
+
+    #[error("Failed to delete file: {path}: {reason}")]
+    DeleteFailed { path: String, reason: String },
+
     #[error("Invalid string: {reason}")]
     InvalidString { reason: String },
 
@@ -42,6 +49,13 @@ pub enum SecurityError {
 }
 
 pub type Result<T> = std::result::Result<T, SecurityError>;
+
+/// Result of a safe-delete attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SafeDeleteOutcome {
+    Deleted(PathBuf),
+    Missing(PathBuf),
+}
 
 // ========================================================================
 // Path Validation
@@ -251,6 +265,161 @@ pub fn validate_audio_level(level: u32) -> Result<u32> {
 }
 
 // ========================================================================
+// Directory Containment Validation
+// ========================================================================
+
+/// Verify that a path resolves to a location within the allowed directory.
+/// Prevents path traversal attacks (e.g., ../../etc/passwd).
+pub fn validate_path_within_directory(
+    path: &std::path::Path,
+    allowed_dir: &std::path::Path,
+) -> Result<std::path::PathBuf> {
+    // Check for .. components before canonicalization
+    let path_str = path.to_string_lossy();
+    if path_str.contains("..") {
+        return Err(SecurityError::PathTraversal {
+            path: path.display().to_string(),
+        });
+    }
+
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| SecurityError::PathNotFound {
+            path: path.display().to_string(),
+        })?;
+    let canonical_dir = allowed_dir
+        .canonicalize()
+        .map_err(|_| SecurityError::PathNotFound {
+            path: allowed_dir.display().to_string(),
+        })?;
+
+    if !canonical.starts_with(&canonical_dir) {
+        return Err(SecurityError::PathTraversal {
+            path: path.display().to_string(),
+        });
+    }
+    Ok(canonical)
+}
+
+/// Delete a file only after proving its resolved path is contained in one of the
+/// allowed app-owned roots.
+///
+/// Missing target files are treated as a successful no-op after the same path
+/// containment checks that can be performed without the final file existing.
+/// Existing symlinks are canonicalized before containment checks, so links that
+/// resolve outside the allowed roots are rejected instead of deleted.
+pub fn safe_delete_file_within_roots(
+    path: impl AsRef<Path>,
+    allowed_roots: &[PathBuf],
+) -> Result<SafeDeleteOutcome> {
+    let path = path.as_ref();
+    let resolved_path = resolve_existing_or_missing_path(path)?;
+
+    let is_allowed = allowed_roots
+        .iter()
+        .filter_map(|root| match resolve_existing_or_missing_path(root) {
+            Ok(resolved_root) => Some(resolved_root),
+            Err(err) => {
+                tracing::warn!("Skipping invalid safe-delete root {:?}: {}", root, err);
+                None
+            }
+        })
+        .any(|resolved_root| path_starts_with(&resolved_path, &resolved_root));
+
+    if !is_allowed {
+        return Err(SecurityError::PathOutsideAllowedRoots {
+            path: path.display().to_string(),
+        });
+    }
+
+    if !path.exists() {
+        tracing::warn!(
+            "Safe delete skipped missing file {:?} (resolved as {:?})",
+            path,
+            resolved_path
+        );
+        return Ok(SafeDeleteOutcome::Missing(resolved_path));
+    }
+
+    std::fs::remove_file(path).map_err(|e| SecurityError::DeleteFailed {
+        path: path.display().to_string(),
+        reason: e.to_string(),
+    })?;
+
+    tracing::info!("Safe deleted file {:?}", resolved_path);
+    Ok(SafeDeleteOutcome::Deleted(resolved_path))
+}
+
+fn resolve_existing_or_missing_path(path: &Path) -> Result<PathBuf> {
+    if contains_parent_dir(path) {
+        return Err(SecurityError::PathTraversal {
+            path: path.display().to_string(),
+        });
+    }
+
+    if !path.is_absolute() {
+        return Err(SecurityError::NotAbsolutePath {
+            path: path.display().to_string(),
+        });
+    }
+
+    if path.exists() {
+        return path
+            .canonicalize()
+            .map_err(|_| SecurityError::PathNotFound {
+                path: path.display().to_string(),
+            });
+    }
+
+    let mut current = path;
+    let mut missing_components: Vec<OsString> = Vec::new();
+
+    while !current.exists() {
+        let file_name = current
+            .file_name()
+            .ok_or_else(|| SecurityError::PathNotFound {
+                path: path.display().to_string(),
+            })?;
+        missing_components.push(file_name.to_os_string());
+        current = current
+            .parent()
+            .ok_or_else(|| SecurityError::PathNotFound {
+                path: path.display().to_string(),
+            })?;
+    }
+
+    let mut resolved = current
+        .canonicalize()
+        .map_err(|_| SecurityError::PathNotFound {
+            path: current.display().to_string(),
+        })?;
+    for component in missing_components.iter().rev() {
+        resolved.push(component);
+    }
+
+    Ok(resolved)
+}
+
+fn contains_parent_dir(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, Component::ParentDir))
+}
+
+fn path_starts_with(path: &Path, root: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let path = path.to_string_lossy().replace('/', "\\").to_lowercase();
+        let root = root.to_string_lossy().replace('/', "\\").to_lowercase();
+        path == root || path.starts_with(&format!("{}\\", root.trim_end_matches('\\')))
+    }
+
+    #[cfg(not(windows))]
+    {
+        path.starts_with(root)
+    }
+}
+
+// ========================================================================
 // Tests
 // ========================================================================
 
@@ -355,5 +524,122 @@ mod tests {
 
         assert!(validate_audio_level(101).is_err());
         assert!(validate_audio_level(255).is_err());
+    }
+
+    #[test]
+    fn test_path_within_directory_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        std::fs::write(&file_path, "test").unwrap();
+        assert!(validate_path_within_directory(&file_path, dir.path()).is_ok());
+    }
+
+    #[test]
+    fn test_path_traversal_with_dotdot_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad_path = dir.path().join("..").join("etc").join("passwd");
+        assert!(validate_path_within_directory(&bad_path, dir.path()).is_err());
+    }
+
+    #[test]
+    fn test_path_outside_directory_rejected() {
+        let dir1 = tempfile::tempdir().unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+        let file_path = dir2.path().join("test.txt");
+        std::fs::write(&file_path, "test").unwrap();
+        assert!(validate_path_within_directory(&file_path, dir1.path()).is_err());
+    }
+
+    #[test]
+    fn test_safe_delete_inside_root_deletes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("clip.mp4");
+        std::fs::write(&file_path, "test").unwrap();
+
+        let outcome = safe_delete_file_within_roots(&file_path, &[dir.path().to_path_buf()])
+            .expect("file inside root should delete");
+
+        assert!(matches!(outcome, SafeDeleteOutcome::Deleted(_)));
+        assert!(!file_path.exists());
+    }
+
+    #[test]
+    fn test_safe_delete_missing_file_is_noop_inside_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("missing.mp4");
+
+        let outcome = safe_delete_file_within_roots(&file_path, &[dir.path().to_path_buf()])
+            .expect("missing file inside root should be a no-op");
+
+        assert!(matches!(outcome, SafeDeleteOutcome::Missing(_)));
+    }
+
+    #[test]
+    fn test_safe_delete_outside_root_rejected() {
+        let allowed = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file_path = outside.path().join("clip.mp4");
+        std::fs::write(&file_path, "test").unwrap();
+
+        let result = safe_delete_file_within_roots(&file_path, &[allowed.path().to_path_buf()]);
+
+        assert!(matches!(
+            result.unwrap_err(),
+            SecurityError::PathOutsideAllowedRoots { .. }
+        ));
+        assert!(file_path.exists());
+    }
+
+    #[test]
+    fn test_safe_delete_traversal_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad_path = dir.path().join("clips").join("..").join("outside.mp4");
+
+        let result = safe_delete_file_within_roots(&bad_path, &[dir.path().to_path_buf()]);
+
+        assert!(matches!(
+            result.unwrap_err(),
+            SecurityError::PathTraversal { .. }
+        ));
+    }
+
+    #[test]
+    fn test_safe_delete_symlink_outside_root_rejected() {
+        let allowed = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("outside.mp4");
+        std::fs::write(&outside_file, "test").unwrap();
+        let link_path = allowed.path().join("linked.mp4");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside_file, &link_path).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&outside_file, &link_path).is_err() {
+            return;
+        }
+
+        let result = safe_delete_file_within_roots(&link_path, &[allowed.path().to_path_buf()]);
+
+        assert!(matches!(
+            result.unwrap_err(),
+            SecurityError::PathOutsideAllowedRoots { .. }
+        ));
+        assert!(outside_file.exists());
+        assert!(link_path.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_safe_delete_windows_style_path_inside_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("Clip.MP4");
+        std::fs::write(&file_path, "test").unwrap();
+        let windows_style = PathBuf::from(file_path.to_string_lossy().replace('/', "\\"));
+
+        let outcome = safe_delete_file_within_roots(&windows_style, &[dir.path().to_path_buf()])
+            .expect("Windows-style path should delete inside root");
+
+        assert!(matches!(outcome, SafeDeleteOutcome::Deleted(_)));
+        assert!(!file_path.exists());
     }
 }

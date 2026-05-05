@@ -106,6 +106,100 @@ impl CleanupManager {
         Ok(())
     }
 
+    /// Clean old saved clips based on auto-delete policy
+    ///
+    /// - Deletes clips older than `auto_delete_days` if `auto_delete_enabled` is true
+    /// - Deletes oldest clips first if total usage exceeds `max_storage_gb`
+    /// - Skips exported clips unless `delete_exported_clips` is true
+    ///
+    /// Returns freed space in MB
+    pub async fn cleanup_old_clips(
+        &self,
+        storage: &crate::settings::models::StorageSettings,
+        clips_dir: &Path,
+    ) -> Result<u64> {
+        if !storage.auto_delete_enabled {
+            return Ok(0);
+        }
+
+        if !clips_dir.exists() {
+            return Ok(0);
+        }
+
+        let now = SystemTime::now();
+        let max_age = Duration::from_secs(u64::from(storage.auto_delete_days) * 24 * 60 * 60);
+        let max_bytes = u64::from(storage.max_storage_gb) * 1024 * 1024 * 1024;
+
+        // Collect all clip files with metadata
+        let mut clip_files: Vec<(PathBuf, SystemTime, u64)> = Vec::new();
+        let mut total_size: u64 = 0;
+
+        let entries = fs::read_dir(clips_dir)
+            .context(format!("Failed to read clips directory: {:?}", clips_dir))?;
+
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !path.is_file() {
+                continue;
+            }
+
+            let metadata = fs::metadata(&path)?;
+            let modified = metadata.modified()?;
+            let size = metadata.len();
+
+            clip_files.push((path, modified, size));
+            total_size += size;
+        }
+
+        // Sort oldest first
+        clip_files.sort_by_key(|(_, modified, _)| *modified);
+
+        let mut freed_bytes: u64 = 0;
+
+        for (path, modified, size) in &clip_files {
+            let age = now.duration_since(*modified).unwrap_or(Duration::ZERO);
+            let exceeds_storage = (total_size - freed_bytes) > max_bytes;
+            let too_old = age > max_age;
+
+            if !too_old && !exceeds_storage {
+                continue;
+            }
+
+            // Skip exported clips if policy says so
+            if !storage.delete_exported_clips {
+                // Exported clips have a sidecar marker file (.exported)
+                let marker = path.with_extension("exported");
+                if marker.exists() {
+                    debug!("Skipping exported clip: {:?}", path);
+                    continue;
+                }
+            }
+
+            let reason = if too_old { "age" } else { "storage limit" };
+            info!(
+                "Deleting old clip ({} days, reason: {}): {:?}",
+                age.as_secs() / 86400,
+                reason,
+                path
+            );
+
+            if let Err(e) = fs::remove_file(path) {
+                warn!("Failed to remove clip {:?}: {}", path, e);
+            } else {
+                freed_bytes += size;
+            }
+        }
+
+        let freed_mb = freed_bytes / 1024 / 1024;
+        if freed_mb > 0 {
+            info!("Clip auto-delete freed {} MB", freed_mb);
+        }
+
+        Ok(freed_mb)
+    }
+
     /// Clean files older than specified age
     ///
     /// Returns freed space in MB
@@ -246,9 +340,9 @@ impl CleanupManager {
             };
 
             let (free_bytes_available, _total_bytes) = unsafe {
-                use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
                 use std::ffi::OsStr;
                 use std::os::windows::ffi::OsStrExt;
+                use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
                 let wide_path: Vec<u16> = OsStr::new(&volume_path)
                     .encode_wide()
@@ -274,7 +368,11 @@ impl CleanupManager {
             };
 
             let free_gb = free_bytes_available as f64 / (1024.0 * 1024.0 * 1024.0);
-            tracing::debug!("Disk space check: {:.2} GB available on {}", free_gb, volume_path);
+            tracing::debug!(
+                "Disk space check: {:.2} GB available on {}",
+                free_gb,
+                volume_path
+            );
 
             Ok(free_gb)
         }
@@ -288,8 +386,7 @@ impl CleanupManager {
             let path = CString::new(self.app_data_dir.to_string_lossy().as_bytes())
                 .context("Failed to create CString from path")?;
 
-            let stats = statvfs(&path)
-                .context("Failed to get filesystem statistics")?;
+            let stats = statvfs(&path).context("Failed to get filesystem statistics")?;
 
             let block_size = stats.f_bsize as u64;
             let available_blocks = stats.f_bavail as u64;
@@ -316,9 +413,9 @@ impl CleanupManager {
             };
 
             let (free_bytes_available, total_bytes) = unsafe {
-                use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
                 use std::ffi::OsStr;
                 use std::os::windows::ffi::OsStrExt;
+                use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
                 let wide_path: Vec<u16> = OsStr::new(&volume_path)
                     .encode_wide()
@@ -346,8 +443,12 @@ impl CleanupManager {
             let free_gb = free_bytes_available as f64 / (1024.0 * 1024.0 * 1024.0);
             let total_gb = total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
 
-            tracing::debug!("Disk space info: {:.2} GB available, {:.2} GB total on {}",
-                           free_gb, total_gb, volume_path);
+            tracing::debug!(
+                "Disk space info: {:.2} GB available, {:.2} GB total on {}",
+                free_gb,
+                total_gb,
+                volume_path
+            );
 
             Ok((free_gb, total_gb))
         }
@@ -361,8 +462,7 @@ impl CleanupManager {
             let path = CString::new(self.app_data_dir.to_string_lossy().as_bytes())
                 .context("Failed to create CString from path")?;
 
-            let stats = statvfs(&path)
-                .context("Failed to get filesystem statistics")?;
+            let stats = statvfs(&path).context("Failed to get filesystem statistics")?;
 
             let block_size = stats.f_bsize as u64;
             let available_blocks = stats.f_bavail as u64;

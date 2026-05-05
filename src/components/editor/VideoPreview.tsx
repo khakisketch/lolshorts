@@ -1,12 +1,15 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useEditorStore } from '@/stores/editorStore';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Play, Pause, Volume2, VolumeX, Maximize } from 'lucide-react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { formatDuration } from '@/lib/utils';
+import { logger } from '@/lib/logger';
 
 export function VideoPreview() {
+  const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [volume, setVolume] = useState(1.0);
   const [isMuted, setIsMuted] = useState(false);
@@ -23,7 +26,7 @@ export function VideoPreview() {
   } = useEditorStore();
 
   // Get selected clip
-  const selectedClip = availableClips.find(c => c.clip_id === selectedClipId);
+  const selectedClip = availableClips.find(c => c.file_path === selectedClipId);
 
   // Update video source when clip changes
   useEffect(() => {
@@ -38,7 +41,7 @@ export function VideoPreview() {
   useEffect(() => {
     if (videoRef.current) {
       if (isPlaying) {
-        videoRef.current.play().catch(err => console.error('Play failed:', err));
+        videoRef.current.play().catch(err => logger.error('Play failed:', err));
       } else {
         videoRef.current.pause();
       }
@@ -111,13 +114,13 @@ export function VideoPreview() {
             onLoadedMetadata={handleLoadedMetadata}
             onEnded={() => pause()}
           >
-            <track kind="captions" label="No captions available" />
+            <track kind="captions" label={t('editor.preview.noCaptions')} />
           </video>
         ) : (
           <div className="text-center p-8">
             <Play className="w-24 h-24 mx-auto text-muted-foreground mb-4" />
             <p className="text-muted-foreground">
-              Select a clip from the library to preview
+              {t('editor.preview.selectClipHint')}
             </p>
           </div>
         )}

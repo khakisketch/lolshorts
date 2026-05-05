@@ -138,7 +138,8 @@
     "timeline": {
       "title": "Cronologie",
       "addClip": "Adaugă clip",
-      "removeClip": "Elimină clip"
+      "removeClip": "Elimină clip",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "Decupează",
@@ -152,7 +153,8 @@
       "title": "Export",
       "quality": "Calitate",
       "format": "Format",
-      "exportVideo": "Exportă video"
+      "exportVideo": "Exportă video",
+      "noClipSourcePath": "No clip source path available"
     },
     "selectGameTitle": "Select a Game to Edit",
     "selectGameDescription": "Choose a game from your recorded sessions to start editing",
@@ -234,6 +236,18 @@
       "upload": "Upload",
       "history": "History",
       "account": "Account"
+    },
+    "schedule": {
+      "scheduleButton": "Programează",
+      "confirmSchedule": "Confirmă programarea",
+      "publishAt": "Publică la",
+      "publishAtHint": "Lăsați gol pentru a pune în coadă fără oră de publicare. YouTube necesită cel puțin 15 minute în viitor.",
+      "scheduleSuccessful": "Încărcarea a fost programată cu succes!",
+      "scheduleFailed": "Programarea încărcării a eșuat",
+      "queueTitle": "Coada de încărcare",
+      "scheduledFor": "Programat pentru",
+      "queued": "În coadă",
+      "cancelScheduled": "Anulați încărcarea programată"
     }
   },
   "settings": {

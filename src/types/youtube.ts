@@ -9,6 +9,7 @@ export interface YouTubeVideo {
   title: string;
   description: string;
   thumbnail_url: string | null;
+  published_at: string;
   privacy_status: string;
   view_count: number | null;
 }
@@ -79,4 +80,41 @@ export interface AuthStatus {
   authenticated: boolean;
   expires_at: number | null; // Unix timestamp
   has_refresh_token: boolean;
+}
+
+/**
+ * Schedule info for a queued upload (matches UploadSchedule in Rust)
+ */
+export interface UploadSchedule {
+  scheduled_at: string | null; // ISO 8601
+  queue_position: number | null;
+}
+
+// Matches Rust ScheduledUploadStatus enum (lowercase serialization)
+export type ScheduledUploadStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+/**
+ * Pending scheduled upload entry (matches ScheduledUpload in Rust)
+ */
+export interface ScheduledUpload {
+  id: string;
+  video_path: string;
+  title: string;
+  description: string;
+  tags: string[];
+  privacy_status: string;
+  thumbnail_path: string | null;
+  schedule: UploadSchedule;
+  created_at: number; // Unix timestamp
+  status: ScheduledUploadStatus;
+  error: string | null;
+  error_message?: string | null; // Backend compatibility field
+  attempts?: number;
+  completed_video_id?: string | null;
+  updated_at?: number | null;
 }

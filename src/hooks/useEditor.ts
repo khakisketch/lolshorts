@@ -84,16 +84,11 @@ export function useEditor() {
     timestamp: number,
     outputPath?: string // Optional, needed for new API
   ): Promise<string> => {
-    try {
-      if (outputPath) {
-          return await videoApi.generateThumbnail(videoPath, outputPath, timestamp);
-      } else {
-          // Fallback to auto-generation if no output path provided (using preview logic)
-          return await videoApi.generateClipThumbnail(videoPath);
-      }
-    } catch (err) {
-      // Thumbnail generation failure is non-critical, just rethrow
-      throw err;
+    if (outputPath) {
+        return await videoApi.generateThumbnail(videoPath, outputPath, timestamp);
+    } else {
+        // Fallback to auto-generation if no output path provided (using preview logic)
+        return await videoApi.generateClipThumbnail(videoPath);
     }
   }, []);
 

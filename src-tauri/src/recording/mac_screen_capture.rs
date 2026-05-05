@@ -114,18 +114,23 @@ impl MacScreenCaptureManager {
         if !displays.iter().any(|d| d.id == self.config.display_id) {
             // Fallback to main display if specified display not found
             self.config.display_id = K_CG_MAIN_DISPLAY_ID;
-            tracing::warn!("Display {} not found, using main display", self.config.display_id);
+            tracing::warn!(
+                "Display {} not found, using main display",
+                self.config.display_id
+            );
         }
 
         // Initialize capture
         self.is_capturing = true;
         self.frame_count = 0;
 
-        tracing::info!("Started macOS screen capture on display {} ({}x{} @ {} FPS)",
-                      self.config.display_id,
-                      self.config.width,
-                      self.config.height,
-                      self.config.fps);
+        tracing::info!(
+            "Started macOS screen capture on display {} ({}x{} @ {} FPS)",
+            self.config.display_id,
+            self.config.width,
+            self.config.height,
+            self.config.fps
+        );
 
         Ok(())
     }
@@ -138,7 +143,10 @@ impl MacScreenCaptureManager {
 
         self.is_capturing = false;
 
-        tracing::info!("Stopped macOS screen capture. Captured {} frames", self.frame_count);
+        tracing::info!(
+            "Stopped macOS screen capture. Captured {} frames",
+            self.frame_count
+        );
         Ok(())
     }
 
@@ -167,7 +175,7 @@ impl MacScreenCaptureManager {
                     let r = (x * 255 / self.config.width) as u8;
                     let g = (y * 255 / self.config.height) as u8;
                     let b = ((x + y) * 255 / (self.config.width + self.config.height)) as u8;
-                    data[index] = b;     // Blue
+                    data[index] = b; // Blue
                     data[index + 1] = g; // Green
                     data[index + 2] = r; // Red
                     data[index + 3] = 255; // Alpha
@@ -191,7 +199,11 @@ impl MacScreenCaptureManager {
         MacCaptureStats {
             is_capturing: self.is_capturing,
             frame_count: self.frame_count,
-            current_fps: if self.is_capturing { self.config.fps } else { 0.0 },
+            current_fps: if self.is_capturing {
+                self.config.fps
+            } else {
+                0.0
+            },
             display_id: self.config.display_id,
             resolution: (self.config.width, self.config.height),
         }
@@ -235,14 +247,16 @@ impl MacScreenCaptureManager {
         let name = json.get("_name")?.as_str()?.to_string();
 
         // Extract resolution
-        let resolution = json.get("spdisplays_resolution")
+        let resolution = json
+            .get("spdisplays_resolution")
             .and_then(|r| r.as_str())
             .unwrap_or("1920 x 1080");
 
         let (width, height) = Self::parse_resolution(resolution);
 
         // Extract refresh rate
-        let refresh_rate = json.get("spdisplays_refresh_rate")
+        let refresh_rate = json
+            .get("spdisplays_refresh_rate")
             .and_then(|r| r.as_f64())
             .unwrap_or(60.0);
 
@@ -252,7 +266,7 @@ impl MacScreenCaptureManager {
             width,
             height,
             refresh_rate,
-            scale_factor: 1.0, // Default scale factor
+            scale_factor: 1.0,   // Default scale factor
             is_main: index == 0, // Assume first display is main
         })
     }
@@ -467,9 +481,18 @@ mod tests {
 
     #[test]
     fn test_resolution_parsing() {
-        assert_eq!(MacScreenCaptureManager::parse_resolution("1920 x 1080"), (1920, 1080));
-        assert_eq!(MacScreenCaptureManager::parse_resolution("2560 x 1440"), (2560, 1440));
-        assert_eq!(MacScreenCaptureManager::parse_resolution("invalid"), (1920, 1080));
+        assert_eq!(
+            MacScreenCaptureManager::parse_resolution("1920 x 1080"),
+            (1920, 1080)
+        );
+        assert_eq!(
+            MacScreenCaptureManager::parse_resolution("2560 x 1440"),
+            (2560, 1440)
+        );
+        assert_eq!(
+            MacScreenCaptureManager::parse_resolution("invalid"),
+            (1920, 1080)
+        );
     }
 
     #[test]

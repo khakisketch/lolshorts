@@ -86,7 +86,7 @@ export function LoadingState({
       return (
         <div className={cn("flex items-center gap-2", className)}>
           <Spinner size="sm" />
-          <span className="text-muted-foreground">{loadingLabel || "Loading..."}</span>
+          <span className="text-muted-foreground">{loadingLabel || '로딩 중...'}</span>
         </div>
       )
 

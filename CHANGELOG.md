@@ -5,6 +5,8 @@ All notable changes to LoLShorts will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> **Readiness qualification:** Historical entries below include earlier automated-test, build, and production-readiness wording. Treat those as implementation history only, not proof of current field readiness, paid readiness, support readiness, real YouTube account behavior, real LoL/replay behavior, installer/updater readiness, GPU/audio coverage, or payment/Toss readiness. Payment, Toss, billing, paid access, and subscription enforcement remain deferred until non-payment field gates pass and a separate payment QA plan is approved.
+
 ## [Unreleased] - YouTube Integration & Production Hardening (2025-01-09)
 
 ### ⚙️ Hardware Encoder Detection (v1.2.1) - Wave 9
@@ -184,11 +186,11 @@ Complete YouTube Data API v3 integration for direct video uploads with OAuth2 au
 - ✅ Wave 7: Auto-Edit E2E Test Automation
 - ✅ Wave 8: YouTube Integration (OAuth2 + Upload + Quota)
 
-**Overall Progress**: 100% complete (10/10 quality gates) ✅ **PRODUCTION READY**
+**Historical progress note**: Automated and documentation gates were recorded as complete here, but this is not current field-readiness or payment-readiness evidence. Real LoL, YouTube, installer/updater, GPU/audio, support, and payment/Toss readiness remain gated by the field QA policy.
 
 ### 🔒 Security & Production Readiness (Waves 1-5)
 
-Production hardening sprint to achieve 100% deployment-ready status. Currently at **93.3% complete (9.5/10 quality gates)**.
+Production hardening sprint with automated and documentation gates recorded at **93.3% complete (9.5/10 quality gates)**; this does not establish field deployment readiness.
 
 #### Wave 3: Comprehensive Documentation ✅
 *Commit: 02fc9e5*
@@ -433,7 +435,7 @@ Production hardening sprint to achieve 100% deployment-ready status. Currently a
 - ✅ All 28 tests passing
 - ✅ Compilation successful with 0 errors
 - ✅ Test execution time: <0.1 seconds
-- ✅ 100% test coverage for Auto-Edit core algorithms
+- ✅ Full automated test coverage target for Auto-Edit core algorithms; not field-readiness evidence by itself
 
 **Production Readiness Status**:
 - ✅ Wave 1: Functional Correctness (all features working)
@@ -446,7 +448,7 @@ Production hardening sprint to achieve 100% deployment-ready status. Currently a
 - ⏳ Wave 8: Build Validation (pending)
 - ⏳ Wave 9: First Production Deployment (pending)
 
-**Overall Progress**: 88.9% complete (8/9 quality gates) → Target: 100%
+**Overall Progress**: 88.9% complete (8/9 quality gates) toward the historical automated/build target; not field-readiness evidence
 
 ---
 
@@ -543,7 +545,7 @@ First stable production release of LoLShorts - automatic League of Legends gamep
 
 #### Documentation
 - Comprehensive README with installation guide
-- Production readiness documentation
+- Production-readiness documentation with field-evidence limits
 - Production checklist
 - Build guide
 - Deployment guide
@@ -588,7 +590,7 @@ First stable production release of LoLShorts - automatic League of Legends gamep
 - Path traversal prevention
 - Secure LCU communication (HTTPS)
 - No secrets in logs
-- Local-only processing (no data collection)
+- Local-first processing intent for video workflows; external account, upload, support, diagnostics, and future payment paths require separate disclosure and evidence
 
 ### Known Limitations
 
@@ -637,7 +639,7 @@ First stable production release of LoLShorts - automatic League of Legends gamep
 
 ### Planned for v1.3.0 (Q3 2025)
 - **macOS support** (Boot Camp required for League of Legends)
-- TikTok upload integration
+- TikTok direct upload deferred in favor of export-first sharing
 - Multi-account support (multiple YouTube channels)
 - Scheduled uploads
 

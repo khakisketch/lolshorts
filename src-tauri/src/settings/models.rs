@@ -10,6 +10,8 @@ pub struct RecordingSettings {
     pub audio: AudioSettings,
     pub clip_timing: ClipTimingSettings,
     pub hotkeys: HotkeySettings,
+    #[serde(default)]
+    pub storage: StorageSettings,
 
     // General settings
     pub auto_start_with_league: bool,
@@ -17,10 +19,30 @@ pub struct RecordingSettings {
     pub show_notifications: bool,
     #[serde(default = "default_show_replay_popup")]
     pub show_replay_popup: bool,
+    #[serde(default)]
+    pub crash_reporting_enabled: bool,
+    #[serde(default = "default_true")]
+    pub overlay_enabled: bool,
 }
 
 fn default_show_replay_popup() -> bool {
     true
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_audio_target_lufs() -> f64 {
+    -14.0 // YouTube standard
+}
+
+fn default_min_game_duration() -> u32 {
+    300 // 5 minutes
+}
+
+fn default_contest_window() -> u32 {
+    10 // seconds
 }
 
 impl Default for RecordingSettings {
@@ -32,12 +54,70 @@ impl Default for RecordingSettings {
             audio: AudioSettings::default(),
             clip_timing: ClipTimingSettings::default(),
             hotkeys: HotkeySettings::default(),
+            storage: StorageSettings::default(),
 
             auto_start_with_league: true,
             minimize_to_tray: true,
             show_notifications: true,
             show_replay_popup: true,
+            crash_reporting_enabled: false,
+            overlay_enabled: false,
         }
+    }
+}
+
+impl RecordingSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        self.video.validate()?;
+        self.audio.validate()?;
+        self.storage.validate()?;
+        self.event_filter.validate()?;
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Storage Settings
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageSettings {
+    /// Enable automatic deletion of old clips
+    pub auto_delete_enabled: bool,
+    /// Delete clips older than this many days
+    pub auto_delete_days: u32,
+    /// Maximum total clip storage in GB before oldest clips are deleted
+    pub max_storage_gb: u32,
+    /// Whether to also delete clips that have been exported/uploaded
+    pub delete_exported_clips: bool,
+}
+
+impl Default for StorageSettings {
+    fn default() -> Self {
+        Self {
+            auto_delete_enabled: false,
+            auto_delete_days: 30,
+            max_storage_gb: 50,
+            delete_exported_clips: false,
+        }
+    }
+}
+
+impl StorageSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.auto_delete_days == 0 || self.auto_delete_days > 365 {
+            return Err(format!(
+                "auto_delete_days {} out of range 1-365",
+                self.auto_delete_days
+            ));
+        }
+        if self.max_storage_gb == 0 || self.max_storage_gb > 10_000 {
+            return Err(format!(
+                "max_storage_gb {} out of range 1-10000",
+                self.max_storage_gb
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -75,8 +155,30 @@ pub struct EventFilterSettings {
     pub record_game_end: bool,
     pub record_steal: bool,
 
+    // 추가 오브젝트
+    #[serde(default = "default_true")]
+    pub record_voidgrubs: bool,
+    #[serde(default = "default_true")]
+    pub record_atakhan: bool,
+
+    // 고급 이벤트 감지
+    #[serde(default = "default_true")]
+    pub record_outplay: bool, // 1vX outplay detection
+    #[serde(default = "default_true")]
+    pub record_trade_kill: bool, // Trade kill detection (kill then die)
+    #[serde(default = "default_true")]
+    pub record_low_hp: bool, // Low HP outplay detection
+
     // 우선순위 필터
     pub min_priority: u8, // 1-5
+
+    // Task 29: 게임 최소 시간 필터 (리메이크/짧은 게임 제외)
+    #[serde(default = "default_min_game_duration")]
+    pub min_game_duration_secs: u32, // 0-3600, default 300 (5 minutes)
+
+    // Task 30: 스틸 감지 컨테스트 윈도우 (초)
+    #[serde(default = "default_contest_window")]
+    pub contest_window_secs: u32, // 5-30, default 10
 }
 
 impl Default for EventFilterSettings {
@@ -105,8 +207,43 @@ impl Default for EventFilterSettings {
             record_game_end: true,
             record_steal: true,
 
+            record_voidgrubs: true,
+            record_atakhan: true,
+
+            record_outplay: true,
+            record_trade_kill: true,
+            record_low_hp: true,
+
             min_priority: 1, // Allow all events including single kills
+            min_game_duration_secs: default_min_game_duration(),
+            contest_window_secs: default_contest_window(),
         }
+    }
+}
+
+impl EventFilterSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.min_priority < 1 || self.min_priority > 5 {
+            return Err(format!(
+                "min_priority {} out of range 1-5",
+                self.min_priority
+            ));
+        }
+        // Task 29: validate min_game_duration_secs range 0-3600
+        if self.min_game_duration_secs > 3600 {
+            return Err(format!(
+                "min_game_duration_secs {} out of range 0-3600",
+                self.min_game_duration_secs
+            ));
+        }
+        // Task 30: validate contest_window_secs range 5-30
+        if self.contest_window_secs < 5 || self.contest_window_secs > 30 {
+            return Err(format!(
+                "contest_window_secs {} out of range 5-30",
+                self.contest_window_secs
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -154,6 +291,9 @@ pub struct VideoSettings {
     pub bitrate_preset: BitratePreset,
     pub codec: VideoCodec,
     pub encoder: EncoderPreference,
+    /// Monitor index for capture (0 = primary monitor)
+    #[serde(default)]
+    pub monitor_index: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -209,6 +349,7 @@ impl Default for VideoSettings {
             bitrate_preset: BitratePreset::Medium,
             codec: VideoCodec::H265,
             encoder: EncoderPreference::Auto,
+            monitor_index: 0,
         }
     }
 }
@@ -236,10 +377,10 @@ impl VideoSettings {
     /// Convert bitrate preset to actual bitrate in bps
     pub fn get_bitrate(&self) -> u32 {
         match &self.bitrate_preset {
-            BitratePreset::Low => 10_000_000,      // 10 Mbps
-            BitratePreset::Medium => 20_000_000,   // 20 Mbps
-            BitratePreset::High => 40_000_000,     // 40 Mbps
-            BitratePreset::VeryHigh => 80_000_000, // 80 Mbps
+            BitratePreset::Low => 10_000_000,           // 10 Mbps
+            BitratePreset::Medium => 20_000_000,        // 20 Mbps
+            BitratePreset::High => 40_000_000,          // 40 Mbps
+            BitratePreset::VeryHigh => 80_000_000,      // 80 Mbps
             BitratePreset::Custom(kbps) => kbps * 1000, // Convert kbps to bps
         }
     }
@@ -247,6 +388,15 @@ impl VideoSettings {
     /// Check if using H.265 codec
     pub fn is_h265(&self) -> bool {
         matches!(self.codec, VideoCodec::H265)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if let BitratePreset::Custom(kbps) = &self.bitrate_preset {
+            if *kbps < 100 || *kbps > 50_000 {
+                return Err(format!("Custom bitrate {} out of range 100-50000", kbps));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -269,6 +419,19 @@ pub struct AudioSettings {
     // 오디오 품질
     pub sample_rate: SampleRate,
     pub bitrate: AudioBitrate,
+
+    /// Explicit WASAPI device ID for loopback capture (None = system default output device).
+    /// Populated from the list returned by `enumerate_audio_devices()`.
+    #[serde(default)]
+    pub audio_device_id: Option<String>,
+
+    /// Enable LUFS-based audio normalization during video export
+    #[serde(default = "default_true")]
+    pub audio_normalize: bool,
+
+    /// Target integrated loudness in LUFS (-14.0 = YouTube standard)
+    #[serde(default = "default_audio_target_lufs")]
+    pub audio_target_lufs: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -300,11 +463,36 @@ impl Default for AudioSettings {
 
             sample_rate: SampleRate::Hz48000,
             bitrate: AudioBitrate::Kbps192,
+            audio_device_id: None,
+            audio_normalize: true,
+            audio_target_lufs: default_audio_target_lufs(),
         }
     }
 }
 
 impl AudioSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.microphone_volume > 200 {
+            return Err(format!(
+                "Microphone volume {} exceeds max 200",
+                self.microphone_volume
+            ));
+        }
+        if self.system_audio_volume > 200 {
+            return Err(format!(
+                "System audio volume {} exceeds max 200",
+                self.system_audio_volume
+            ));
+        }
+        if self.audio_target_lufs > 0.0 || self.audio_target_lufs < -70.0 {
+            return Err(format!(
+                "audio_target_lufs {:.1} out of range -70.0..0.0",
+                self.audio_target_lufs
+            ));
+        }
+        Ok(())
+    }
+
     /// Convert to recording::audio::AudioConfig
     pub fn to_audio_config(&self) -> crate::recording::audio::AudioConfig {
         crate::recording::audio::AudioConfig {
@@ -497,5 +685,355 @@ mod tests {
             deserialized.event_filter.min_priority,
             settings.event_filter.min_priority
         );
+    }
+
+    #[test]
+    fn test_video_settings_custom_bitrate_valid() {
+        let mut s = VideoSettings::default();
+        s.bitrate_preset = BitratePreset::Custom(5000);
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn test_video_settings_custom_bitrate_too_low() {
+        let mut s = VideoSettings::default();
+        s.bitrate_preset = BitratePreset::Custom(50);
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_video_settings_custom_bitrate_too_high() {
+        let mut s = VideoSettings::default();
+        s.bitrate_preset = BitratePreset::Custom(60000);
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_audio_volume_max_valid() {
+        let mut s = AudioSettings::default();
+        s.microphone_volume = 200;
+        s.system_audio_volume = 200;
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn test_storage_settings_valid() {
+        let mut s = StorageSettings::default();
+        s.auto_delete_days = 30;
+        s.max_storage_gb = 100;
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn test_storage_auto_delete_days_zero_invalid() {
+        let mut s = StorageSettings::default();
+        s.auto_delete_days = 0;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_event_min_priority_out_of_range() {
+        let mut s = EventFilterSettings::default();
+        s.min_priority = 10;
+        assert!(s.validate().is_err());
+    }
+
+    // ---- VideoSettings validate() error paths ----
+
+    #[test]
+    fn test_video_settings_preset_bitrates_always_valid() {
+        let mut s = VideoSettings::default();
+        for preset in [
+            BitratePreset::Low,
+            BitratePreset::Medium,
+            BitratePreset::High,
+            BitratePreset::VeryHigh,
+        ] {
+            s.bitrate_preset = preset;
+            assert!(s.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn test_video_settings_custom_bitrate_boundary_low() {
+        let mut s = VideoSettings::default();
+        s.bitrate_preset = BitratePreset::Custom(100);
+        assert!(s.validate().is_ok());
+        s.bitrate_preset = BitratePreset::Custom(99);
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_video_settings_custom_bitrate_boundary_high() {
+        let mut s = VideoSettings::default();
+        s.bitrate_preset = BitratePreset::Custom(50_000);
+        assert!(s.validate().is_ok());
+        s.bitrate_preset = BitratePreset::Custom(50_001);
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_video_settings_get_resolution() {
+        let mut s = VideoSettings::default();
+        s.resolution = Resolution::R1920x1080;
+        assert_eq!(s.get_resolution(), (1920, 1080));
+        s.resolution = Resolution::R2560x1440;
+        assert_eq!(s.get_resolution(), (2560, 1440));
+        s.resolution = Resolution::R3840x2160;
+        assert_eq!(s.get_resolution(), (3840, 2160));
+    }
+
+    #[test]
+    fn test_video_settings_get_fps() {
+        let mut s = VideoSettings::default();
+        s.frame_rate = FrameRate::Fps30;
+        assert_eq!(s.get_fps(), 30);
+        s.frame_rate = FrameRate::Fps60;
+        assert_eq!(s.get_fps(), 60);
+        s.frame_rate = FrameRate::Fps120;
+        assert_eq!(s.get_fps(), 120);
+        s.frame_rate = FrameRate::Fps144;
+        assert_eq!(s.get_fps(), 144);
+    }
+
+    #[test]
+    fn test_video_settings_get_bitrate() {
+        let s = VideoSettings::default(); // Medium = 20 Mbps
+        assert_eq!(s.get_bitrate(), 20_000_000);
+
+        let mut s2 = VideoSettings::default();
+        s2.bitrate_preset = BitratePreset::Low;
+        assert_eq!(s2.get_bitrate(), 10_000_000);
+
+        let mut s3 = VideoSettings::default();
+        s3.bitrate_preset = BitratePreset::Custom(1000);
+        assert_eq!(s3.get_bitrate(), 1_000_000); // 1000 kbps = 1Mbps
+    }
+
+    #[test]
+    fn test_video_is_h265() {
+        let mut s = VideoSettings::default();
+        s.codec = VideoCodec::H265;
+        assert!(s.is_h265());
+        s.codec = VideoCodec::H264;
+        assert!(!s.is_h265());
+    }
+
+    // ---- AudioSettings validate() error paths ----
+
+    #[test]
+    fn test_audio_microphone_volume_too_high() {
+        let mut s = AudioSettings::default();
+        s.microphone_volume = 201;
+        assert!(s.validate().is_err());
+        let err = s.validate().unwrap_err();
+        assert!(err.contains("Microphone volume"));
+    }
+
+    #[test]
+    fn test_audio_system_volume_too_high() {
+        let mut s = AudioSettings::default();
+        s.system_audio_volume = 201;
+        assert!(s.validate().is_err());
+        let err = s.validate().unwrap_err();
+        assert!(err.contains("System audio volume"));
+    }
+
+    #[test]
+    fn test_audio_both_volumes_at_zero_valid() {
+        let mut s = AudioSettings::default();
+        s.microphone_volume = 0;
+        s.system_audio_volume = 0;
+        assert!(s.validate().is_ok());
+    }
+
+    // ---- StorageSettings validate() error paths ----
+
+    #[test]
+    fn test_storage_auto_delete_days_too_high() {
+        let mut s = StorageSettings::default();
+        s.auto_delete_days = 366;
+        assert!(s.validate().is_err());
+        let err = s.validate().unwrap_err();
+        assert!(err.contains("auto_delete_days"));
+    }
+
+    #[test]
+    fn test_storage_max_storage_gb_zero_invalid() {
+        let mut s = StorageSettings::default();
+        s.max_storage_gb = 0;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_storage_max_storage_gb_too_high() {
+        let mut s = StorageSettings::default();
+        s.max_storage_gb = 10_001;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_storage_boundary_values_valid() {
+        let mut s = StorageSettings::default();
+        s.auto_delete_days = 1;
+        s.max_storage_gb = 1;
+        assert!(s.validate().is_ok());
+        s.auto_delete_days = 365;
+        s.max_storage_gb = 10_000;
+        assert!(s.validate().is_ok());
+    }
+
+    // ---- EventFilterSettings validate() error paths ----
+
+    #[test]
+    fn test_event_min_priority_zero_invalid() {
+        let mut s = EventFilterSettings::default();
+        s.min_priority = 0;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_event_min_priority_boundary_valid() {
+        let mut s = EventFilterSettings::default();
+        s.min_priority = 1;
+        assert!(s.validate().is_ok());
+        s.min_priority = 5;
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn test_contest_window_secs_too_low() {
+        let mut s = EventFilterSettings::default();
+        s.contest_window_secs = 4;
+        assert!(s.validate().is_err());
+        let err = s.validate().unwrap_err();
+        assert!(err.contains("contest_window_secs"));
+    }
+
+    #[test]
+    fn test_contest_window_secs_too_high() {
+        let mut s = EventFilterSettings::default();
+        s.contest_window_secs = 31;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_contest_window_secs_boundary_valid() {
+        let mut s = EventFilterSettings::default();
+        s.contest_window_secs = 5;
+        assert!(s.validate().is_ok());
+        s.contest_window_secs = 30;
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn test_min_game_duration_secs_too_high() {
+        let mut s = EventFilterSettings::default();
+        s.min_game_duration_secs = 3601;
+        assert!(s.validate().is_err());
+        let err = s.validate().unwrap_err();
+        assert!(err.contains("min_game_duration_secs"));
+    }
+
+    #[test]
+    fn test_min_game_duration_secs_zero_valid() {
+        let mut s = EventFilterSettings::default();
+        s.min_game_duration_secs = 0;
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn test_min_game_duration_secs_max_valid() {
+        let mut s = EventFilterSettings::default();
+        s.min_game_duration_secs = 3600;
+        assert!(s.validate().is_ok());
+    }
+
+    // ---- Serialization round-trip with new fields ----
+
+    #[test]
+    fn test_event_filter_serialization_round_trip_with_new_fields() {
+        let mut s = EventFilterSettings::default();
+        s.min_game_duration_secs = 600;
+        s.contest_window_secs = 15;
+        let json = serde_json::to_string(&s).unwrap();
+        let deserialized: EventFilterSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.min_game_duration_secs, 600);
+        assert_eq!(deserialized.contest_window_secs, 15);
+    }
+
+    #[test]
+    fn test_json_missing_new_fields_uses_defaults() {
+        // Simulate old JSON without new serde(default) fields
+        let json = r#"{
+            "record_kills": true,
+            "record_multikills": true,
+            "record_first_blood": true,
+            "record_deaths": false,
+            "record_shutdown": false,
+            "record_assists": false,
+            "record_dragon": true,
+            "record_baron": true,
+            "record_elder": true,
+            "record_herald": true,
+            "record_turret": false,
+            "record_inhibitor": true,
+            "record_nexus": true,
+            "record_ace": true,
+            "record_game_end": true,
+            "record_steal": true,
+            "min_priority": 1
+        }"#;
+        let s: EventFilterSettings = serde_json::from_str(json).unwrap();
+        // serde(default) fields should use their default functions
+        assert_eq!(s.min_game_duration_secs, 300);
+        assert_eq!(s.contest_window_secs, 10);
+        assert!(s.record_voidgrubs);
+        assert!(s.record_atakhan);
+    }
+
+    // ---- Default values ----
+
+    #[test]
+    fn test_storage_default_values() {
+        let s = StorageSettings::default();
+        assert!(!s.auto_delete_enabled);
+        assert_eq!(s.auto_delete_days, 30);
+        assert_eq!(s.max_storage_gb, 50);
+        assert!(!s.delete_exported_clips);
+    }
+
+    #[test]
+    fn test_recording_settings_validate_all_valid() {
+        let s = RecordingSettings::default();
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn test_recording_settings_validate_propagates_video_error() {
+        let mut s = RecordingSettings::default();
+        s.video.bitrate_preset = BitratePreset::Custom(0);
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_recording_settings_validate_propagates_audio_error() {
+        let mut s = RecordingSettings::default();
+        s.audio.microphone_volume = 255;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_recording_settings_validate_propagates_storage_error() {
+        let mut s = RecordingSettings::default();
+        s.storage.auto_delete_days = 0;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn test_recording_settings_validate_propagates_event_filter_error() {
+        let mut s = RecordingSettings::default();
+        s.event_filter.contest_window_secs = 0;
+        assert!(s.validate().is_err());
     }
 }

@@ -4,7 +4,21 @@ export interface User {
   id: string;
   email: string;
   tier: 'Free' | 'Pro';
-  // Add other fields matching Rust struct
+  expires_at: number;
+}
+
+export interface EntitlementInfo {
+  tier: 'FREE' | 'PRO';
+  status: 'active' | 'inactive' | 'expired' | 'cancelled' | 'none';
+  expires_at: string | null;
+  source: 'supabase';
+  checked_at: string;
+  payment_available: boolean;
+}
+
+export interface SessionSyncResponse {
+  user: User;
+  entitlement: EntitlementInfo;
 }
 
 export interface LicenseInfo {
@@ -16,11 +30,14 @@ export interface LicenseInfo {
 export interface SubscriptionDetails {
   is_active: boolean;
   tier: string;
+  status: string;
   expires_at: string | null;
   auto_renew: boolean;
   payment_method: string | null;
   payment_available: boolean;
   payment_message: string | null;
+  reason: string;
+  next_required_step: string;
 }
 
 export const authApi = {
@@ -42,11 +59,14 @@ export const authApi = {
   getUserLicense: () =>
     cmd<LicenseInfo>('get_user_license'),
 
+  getCurrentEntitlement: (forceRefresh = false) =>
+    cmd<EntitlementInfo>('get_current_entitlement', { force_refresh: forceRefresh }),
+
   refreshToken: () =>
     cmd<User>('refresh_token'),
 
-  setSession: (accessToken: string, refreshToken: string, userId: string, email: string) =>
-    cmd<void>('set_session', { accessToken, refreshToken, userId, email }),
+  setSession: (accessToken: string, refreshToken: string, userId: string, email: string, expiresAt?: number | null) =>
+    cmd<SessionSyncResponse>('set_session', { access_token: accessToken, refresh_token: refreshToken, user_id: userId, email, expires_at: expiresAt ?? null }),
 
   // Subscription/Payment APIs
   getSubscriptionDetails: () =>
@@ -58,4 +78,3 @@ export const authApi = {
   cancelSubscription: () =>
     cmd<void>('cancel_subscription'),
 };
-

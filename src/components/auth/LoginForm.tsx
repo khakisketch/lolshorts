@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface LoginFormProps {
   onSwitchToSignup?: () => void;
@@ -38,14 +37,14 @@ export function LoginForm({ onSwitchToSignup, onSuccess }: LoginFormProps) {
   };
 
   return (
-    <Card className="w-full max-w-md border-0 shadow-none">
-      <CardHeader>
-        <CardTitle>{t("auth.loginTitle")}</CardTitle>
-        <CardDescription>
+    <div className="gaming-panel p-6 w-full max-w-md border-0 shadow-none">
+      <div className="mb-4">
+        <h3 className="text-lg font-semibold">{t("auth.loginTitle")}</h3>
+        <p className="text-sm text-muted-foreground">
           {t("auth.loginDescription")}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+        </p>
+      </div>
+      <div>
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
             <div className="bg-destructive/15 text-destructive px-4 py-3 rounded-md text-sm">
@@ -143,7 +142,7 @@ export function LoginForm({ onSwitchToSignup, onSuccess }: LoginFormProps) {
             </div>
           )}
         </form>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

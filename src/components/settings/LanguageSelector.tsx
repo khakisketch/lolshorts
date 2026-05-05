@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { languages } from '@/i18n';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -11,6 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Globe, Loader2 } from 'lucide-react';
+import { logger } from '@/lib/logger';
 
 // LoL Region to flag mapping
 const regionFlags: Record<string, string> = {
@@ -51,7 +51,7 @@ export function LanguageSelector() {
       // Persist selection
       localStorage.setItem('selectedLanguage', languageCode);
     } catch (error) {
-      console.error('Failed to change language:', error);
+      logger.error('Failed to change language:', error);
       // Could show a toast notification here
     } finally {
       setIsChanging(false);
@@ -66,17 +66,17 @@ export function LanguageSelector() {
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Globe className="w-6 h-6" />
+    <div className="gaming-panel p-6">
+      <div className="mb-4">
+        <h3 className="text-lg font-semibold flex items-center gap-2">
+          <Globe className="w-6 h-6" aria-hidden="true" />
           {t('settings.general.language')}
-        </CardTitle>
-        <CardDescription>
-          Choose your preferred language / 언어 선택
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          {t('settings.general.languageSelectDescription')}
+        </p>
+      </div>
+      <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="language-select">
             {t('settings.general.selectLanguage')}
@@ -92,7 +92,7 @@ export function LanguageSelector() {
                   {isChanging ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-muted-foreground">Loading...</span>
+                      <span className="text-muted-foreground">{t('common.loading')}</span>
                     </>
                   ) : (
                     <>
@@ -130,16 +130,9 @@ export function LanguageSelector() {
           </Select>
         </div>
 
-        <div className="text-sm text-muted-foreground bg-muted p-3 rounded-md">
-          <p className="font-medium mb-1">🌍 {t('settings.general.language')} - Auto-Detection</p>
-          <p>
-            The app automatically detects your system language on first launch.
-            You can change it anytime here.
-          </p>
-          <p className="mt-1">
-            앱이 처음 실행 시 자동으로 시스템 언어를 감지합니다.
-            언제든지 여기서 변경할 수 있습니다.
-          </p>
+        <div className="text-sm text-muted-foreground bg-muted p-3 rounded-md" role="note" aria-label={t('settings.general.autoDetectionNote')}>
+          <p className="font-medium mb-1">🌍 {t('settings.general.language')} - {t('settings.general.autoDetection')}</p>
+          <p>{t('settings.general.autoDetectionDescription')}</p>
         </div>
 
         <div className="text-xs text-muted-foreground flex items-center gap-2">
@@ -147,7 +140,7 @@ export function LanguageSelector() {
           <span>•</span>
           <span>LoL: {getRegionFlags(currentLanguage.regions)}</span>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

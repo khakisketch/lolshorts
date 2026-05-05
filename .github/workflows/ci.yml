@@ -85,6 +85,9 @@ jobs:
       - name: Run linter
         run: npm run lint
 
+      - name: Run frontend tests with coverage
+        run: npx jest --coverage --coverageThreshold='{"global":{"lines":50}}'
+
       - name: Build frontend
         run: npm run build
 

@@ -6,6 +6,7 @@
  */
 
 import { BackendModule, ReadCallback } from 'i18next';
+import { logger } from '@/lib/logger';
 
 interface LazyBackendOptions {
   loadPath: string;
@@ -28,7 +29,7 @@ async function loadTranslation(language: string): Promise<Record<string, unknown
 
     return module.default || module;
   } catch (error) {
-    console.error(`Failed to load translation for language: ${language}`, error);
+    logger.error(`Failed to load translation for language: ${language}`, error);
     throw new Error(`Translation file not found: ${language}`);
   }
 }

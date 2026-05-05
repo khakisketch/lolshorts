@@ -1,23 +1,25 @@
 # LoLShorts: Production Status Report
 
 **Date**: 2025-01-04
-**Status**: ✅ FULLY FUNCTIONAL - Production Ready
+**Status**: Historical implementation report; not current field-readiness evidence
 **Version**: Phase 0 Complete (Wave 1-5) + FFmpeg Implementation
+
+> **Archived readiness qualification:** This document contains older implementation status language. It must not be used as a current claim that LoLShorts is production ready, commercially ready, support ready, payment ready, or field validated. Current readiness requires the non-payment field QA checklist; payment, Toss, billing, paid access, and subscription enforcement remain deferred.
 
 ---
 
 ## 📊 Executive Summary
 
-### ✅ What's Complete - 100% Functional
+### Historical implementation notes
 
-**Recording System** (Production-Ready & Deployed):
+**Recording System** (implementation status at the time of writing):
 - ✅ FFmpeg-based screen capture with H.265 hardware encoding (NVENC/QSV/AMF)
 - ✅ Segment-based circular buffer (6 segments × 10s = 60-second replay)
 - ✅ Automatic segment rotation every 10 seconds
 - ✅ Circuit breaker fault tolerance pattern
 - ✅ Error recovery and graceful degradation
 - ✅ FFmpeg lossless clip concatenation
-- ✅ Full production implementation (no stubs or TODOs)
+- ✅ Implementation path documented; not proof of real field recording readiness
 - ✅ Comprehensive test suite
 - ✅ Compilation successful (zero errors)
 
@@ -31,7 +33,7 @@
 - File validation before adding to buffer
 
 **Why FFmpeg?**:
-1. **Production Ready**: Mature, stable, battle-tested
+1. **Mature dependency**: FFmpeg is widely used, but app readiness still requires field validation
 2. **Hardware Encoding**: Full NVENC/QSV/AMF support
 3. **No API Complexity**: Well-documented command-line interface
 4. **Immediate Functionality**: Works out of the box
@@ -79,7 +81,7 @@
 
 #### 1. WindowsRecorder
 **Location**: `src-tauri/src/recording/windows_backend.rs`
-**Status**: ✅ Production-Ready (stub encoder)
+**Status**: Historical architecture status (stub encoder noted below)
 **Size**: 640+ lines
 
 **Responsibilities**:
@@ -246,8 +248,8 @@ cargo test
 
 ## 🚀 Deployment Readiness
 
-### Ready for Deployment ✅
-1. **Architecture**: Production-grade design with fault tolerance
+### Historical deployment considerations
+1. **Architecture**: Fault-tolerance design was documented; deployment still requires field evidence
 2. **Error Handling**: Circuit breaker prevents cascading failures
 3. **Code Quality**: Clean, documented, tested infrastructure
 4. **Modularity**: Clear separation of concerns
@@ -351,7 +353,7 @@ cargo test
 - **Fast Clip Creation**: Only concatenate needed segments
 
 ### Why Circuit Breaker?
-- **Production Readiness**: Prevents system thrashing on failures
+- **Failure containment**: Prevents system thrashing on failures
 - **User Experience**: Graceful degradation vs. constant retries
 - **Resource Protection**: Prevents resource exhaustion
 - **Operational Excellence**: Automatic recovery after cooldown
@@ -404,7 +406,7 @@ cargo test
 - ✅ **Documentation**: Comprehensive guides created
 - ⏳ **VideoEncoder**: Implementation pending (4-7 hours estimated)
 - 🎯 **Next Milestone**: Complete VideoEncoder integration
-- 🚀 **Deployment**: Ready except for encoder implementation
+- 🚀 **Deployment**: Not field-approved by this document; encoder and field validation remain required
 
 **Confidence Level**: HIGH for architecture, MEDIUM for timeline (depends on API clarity)
 

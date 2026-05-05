@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { Settings } from './Settings';
+import type { RecordingSettings } from '../types';
 
 // Mock i18n
 jest.mock('react-i18next', () => ({
@@ -31,10 +32,13 @@ jest.mock('@/api/settings', () => ({
 // Mock auth API
 jest.mock('@/api/auth', () => ({
   authApi: {
-    getUserLicense: jest.fn().mockResolvedValue({
+    getCurrentEntitlement: jest.fn().mockResolvedValue({
       tier: 'FREE',
+      status: 'active',
       expires_at: null,
-      is_active: true,
+      source: 'supabase',
+      checked_at: '2026-01-01T00:00:00Z',
+      payment_available: false,
     }),
   },
 }));
@@ -80,10 +84,34 @@ jest.mock('@/components/settings/LanguageSelector', () => ({
   LanguageSelector: () => <div>Language Selector</div>,
 }));
 jest.mock('@/components/settings/GeneralSettings', () => ({
-  GeneralSettings: () => <div>General Settings</div>,
+  GeneralSettings: ({ settings }: {
+    settings: {
+      show_replay_popup: boolean;
+      crash_reporting_enabled: boolean;
+      overlay_enabled: boolean;
+      storage: {
+        auto_delete_enabled: boolean;
+        auto_delete_days: number;
+        max_storage_gb: number;
+        delete_exported_clips: boolean;
+      };
+    };
+  }) => (
+    <div>
+      <div>General Settings</div>
+      <div data-testid="general-settings-fixture-shape">
+        {JSON.stringify({
+          show_replay_popup: settings.show_replay_popup,
+          crash_reporting_enabled: settings.crash_reporting_enabled,
+          overlay_enabled: settings.overlay_enabled,
+          storage: settings.storage,
+        })}
+      </div>
+    </div>
+  ),
 }));
 
-const defaultSettings = {
+const defaultSettings: RecordingSettings = {
   video: {
     resolution: 'r1920x1080',
     frame_rate: 'fps60',
@@ -101,14 +129,60 @@ const defaultSettings = {
     sample_rate: 'hz48000',
     bitrate: 'kbps192',
   },
-  event_filter: {},
-  game_mode: {},
-  clip_timing: {},
-  hotkeys: {},
+  event_filter: {
+    record_kills: true,
+    record_multikills: true,
+    record_first_blood: true,
+    record_deaths: false,
+    record_shutdown: true,
+    record_assists: false,
+    record_dragon: true,
+    record_baron: true,
+    record_elder: true,
+    record_herald: true,
+    record_turret: true,
+    record_inhibitor: true,
+    record_nexus: true,
+    record_ace: true,
+    record_game_end: true,
+    record_steal: true,
+    min_priority: 2,
+  },
+  game_mode: {
+    record_ranked_solo: true,
+    record_ranked_flex: true,
+    record_normal: true,
+    record_quick_play: true,
+    record_aram: true,
+    record_arena: true,
+    record_special: true,
+    record_custom: false,
+    record_practice: false,
+  },
+  clip_timing: {
+    default_pre_duration: 15,
+    default_post_duration: 5,
+    event_timings: {},
+    merge_consecutive_events: true,
+    merge_time_threshold: 10,
+  },
+  hotkeys: {
+    toggle_recording: 'F8',
+    manual_save_clip: 'F9',
+    delete_last_clip: 'F10',
+  },
+  storage: {
+    auto_delete_enabled: false,
+    auto_delete_days: 30,
+    max_storage_gb: 50,
+    delete_exported_clips: false,
+  },
   auto_start_with_league: true,
   minimize_to_tray: true,
   show_notifications: true,
   show_replay_popup: true,
+  crash_reporting_enabled: false,
+  overlay_enabled: true,
 };
 
 describe('Settings', () => {
@@ -182,6 +256,18 @@ describe('Settings', () => {
       await waitFor(() => {
         expect(mockGetRecordingSettings).toHaveBeenCalled();
       });
+    });
+
+    it('should pass the complete general recording fixture shape', async () => {
+      render(<Settings />);
+
+      const fixtureShape = await screen.findByTestId('general-settings-fixture-shape');
+
+      expect(fixtureShape).toHaveTextContent('"show_replay_popup":true');
+      expect(fixtureShape).toHaveTextContent('"crash_reporting_enabled":false');
+      expect(fixtureShape).toHaveTextContent('"overlay_enabled":true');
+      expect(fixtureShape).toHaveTextContent('"max_storage_gb":50');
+      expect(fixtureShape).toHaveTextContent('"delete_exported_clips":false');
     });
 
     it('should show loading state while settings are loading', () => {

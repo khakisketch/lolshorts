@@ -1,4 +1,5 @@
 use crate::utils::ffmpeg::get_ffmpeg_path;
+use crate::utils::process::command_output_with_timeout;
 /// Audio capture utilities for Windows using DirectShow
 ///
 /// This module provides:
@@ -9,6 +10,9 @@ use crate::utils::ffmpeg::get_ffmpeg_path;
 use anyhow::{Context as AnyhowContext, Result};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::time::Duration;
+
+const AUDIO_DEVICE_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Audio device information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,96 +179,6 @@ impl AudioConfig {
     }
 }
 
-/// Global audio configuration state
-static CURRENT_AUDIO_CONFIG: std::sync::OnceLock<
-    std::sync::RwLock<Option<crate::settings::models::AudioSettings>>,
-> = std::sync::OnceLock::new();
-
-fn get_audio_config_state(
-) -> &'static std::sync::RwLock<Option<crate::settings::models::AudioSettings>> {
-    CURRENT_AUDIO_CONFIG.get_or_init(|| std::sync::RwLock::new(None))
-}
-
-/// Apply audio configuration to the recording system
-/// This function validates the configuration and stores it for use during recording
-pub fn apply_audio_config(config: &crate::settings::models::AudioSettings) -> Result<()> {
-    // Validate audio configuration
-    if config.record_microphone && config.microphone_device.is_none() {
-        return Err(anyhow::anyhow!(
-            "Microphone recording enabled but no device selected. Please select a microphone device in settings."
-        ));
-    }
-
-    if config.record_system_audio && config.system_audio_device.is_none() {
-        return Err(anyhow::anyhow!(
-            "System audio recording enabled but no device selected. Please select a system audio device (e.g., 'Stereo Mix' or 'What U Hear') in settings."
-        ));
-    }
-
-    // Validate volume ranges (0-200%)
-    if config.microphone_volume > 200 {
-        return Err(anyhow::anyhow!(
-            "Microphone volume must be between 0 and 200. Got: {}",
-            config.microphone_volume
-        ));
-    }
-
-    if config.system_audio_volume > 200 {
-        return Err(anyhow::anyhow!(
-            "System audio volume must be between 0 and 200. Got: {}",
-            config.system_audio_volume
-        ));
-    }
-
-    // Store the validated configuration in global state
-    let state = get_audio_config_state();
-    let mut guard = state
-        .write()
-        .map_err(|e| anyhow::anyhow!("Failed to acquire audio config lock: {}", e))?;
-    *guard = Some(config.clone());
-
-    tracing::info!(
-        "Audio configuration applied successfully: microphone={} (device: {:?}, volume: {}%), system_audio={} (device: {:?}, volume: {}%)",
-        config.record_microphone,
-        config.microphone_device,
-        config.microphone_volume,
-        config.record_system_audio,
-        config.system_audio_device,
-        config.system_audio_volume
-    );
-
-    Ok(())
-}
-
-/// Get the currently applied audio configuration
-#[allow(dead_code)]
-pub fn get_current_audio_config() -> Option<crate::settings::models::AudioSettings> {
-    let state = get_audio_config_state();
-    state.read().ok().and_then(|guard| guard.clone())
-}
-
-/// Build FFmpeg audio arguments from the current audio configuration
-#[allow(dead_code)]
-pub fn build_audio_args_from_config() -> Result<(Vec<String>, Vec<String>, Vec<String>, Vec<String>)>
-{
-    let config = get_current_audio_config().ok_or_else(|| {
-        anyhow::anyhow!("No audio configuration applied. Call apply_audio_config first.")
-    })?;
-
-    let audio_config = AudioConfig {
-        record_microphone: config.record_microphone,
-        microphone_device: config.microphone_device,
-        microphone_volume: config.microphone_volume,
-        record_system_audio: config.record_system_audio,
-        system_audio_device: config.system_audio_device,
-        system_audio_volume: config.system_audio_volume,
-        sample_rate: 48000,
-        bitrate: 192,
-    };
-
-    Ok(audio_config.build_ffmpeg_args())
-}
-
 /// Cached audio device manager for memory efficiency
 pub struct AudioDeviceManager {
     devices: Vec<AudioDevice>,
@@ -272,6 +186,12 @@ pub struct AudioDeviceManager {
     pub last_refresh: std::time::Instant,
     /// Cache time-to-live (for cache management)
     pub cache_ttl: std::time::Duration,
+}
+
+impl Default for AudioDeviceManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AudioDeviceManager {
@@ -372,160 +292,6 @@ pub fn get_audio_devices_clone() -> Result<Vec<AudioDevice>> {
     Ok(manager_guard.devices.clone())
 }
 
-/// List audio devices from Windows Registry
-#[allow(dead_code)]
-fn list_audio_devices_from_registry() -> Result<Vec<AudioDevice>> {
-    let mut devices = Vec::new();
-
-    // Query Windows Registry for audio devices
-    // HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture
-    let registry_keys = vec![
-        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture",
-        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render",
-    ];
-
-    for registry_key in registry_keys {
-        if let Ok(output) = Command::new("reg")
-            .args(["query", registry_key, "/s", "/v", "/f", "DeviceDesc"])
-            .output()
-        {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                devices.extend(parse_registry_audio_output(
-                    &stdout,
-                    registry_key.contains("Capture"),
-                ));
-            }
-        }
-    }
-
-    Ok(devices)
-}
-
-/// Parse Windows Registry output for audio devices
-#[allow(dead_code)]
-fn parse_registry_audio_output(output: &str, is_capture: bool) -> Vec<AudioDevice> {
-    let mut devices = Vec::new();
-    let mut current_device: Option<String> = None;
-
-    for line in output.lines() {
-        if line.trim().starts_with("HKEY_") {
-            // New registry key - reset current device
-            current_device = None;
-        } else if line.trim().contains("DeviceDesc") && line.contains("REG_SZ") {
-            // Extract device description from Registry value
-            if let Some(start) = line.find("REG_SZ") {
-                let device_desc = line[start + 7..].trim().trim_matches('"');
-                if !device_desc.is_empty() {
-                    current_device = Some(device_desc.to_string());
-                }
-            }
-        } else if line.trim().is_empty() && current_device.is_some() {
-            // Empty line after device description - add device to list
-            let device_name = current_device.as_ref().unwrap().clone();
-            if !devices.iter().any(|d: &AudioDevice| d.name == device_name) {
-                let device_type = if is_capture {
-                    AudioDeviceType::Microphone
-                } else {
-                    AudioDeviceType::SystemAudio
-                };
-
-                devices.push(AudioDevice {
-                    name: device_name,
-                    device_type,
-                });
-            }
-        }
-    }
-
-    devices
-}
-
-/// List audio devices using Windows Command Prompt
-#[allow(dead_code)]
-fn list_audio_devices_from_cmd() -> Result<Vec<AudioDevice>> {
-    let mut devices = Vec::new();
-
-    // Use dsound (DirectSound) command line tools if available
-    if let Ok(output) = Command::new("cmd").args(["/c", "where dsound"]).output() {
-        if output.status.success() {
-            // dsound is available, try to use it
-            if let Ok(sound_devices) = Command::new("powershell")
-                .args([
-                    "-Command",
-                    "Get-WmiObject -Class Win32_SoundDevice | Select-Object Name, DeviceID | ConvertTo-Json -Compress"
-                ])
-                .output()
-            {
-                if sound_devices.status.success() {
-                    let stdout = String::from_utf8_lossy(&sound_devices.stdout);
-                    if let Ok(wmi_devices) = serde_json::from_str::<Vec<serde_json::Value>>(&stdout) {
-                        for device in wmi_devices {
-                            if let Some(name) = device.get("Name").and_then(|v| v.as_str()) {
-                                let device_type = if name.to_lowercase().contains("capture")
-                                    || name.to_lowercase().contains("microphone")
-                                    || name.to_lowercase().contains("input")
-                                    || name.to_lowercase().contains("mic") {
-                                    AudioDeviceType::Microphone
-                                } else {
-                                    AudioDeviceType::SystemAudio
-                                };
-
-                                if !devices.iter().any(|d: &AudioDevice| d.name == name) {
-                                    devices.push(AudioDevice {
-                                        name: name.to_string(),
-                                        device_type,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(devices)
-}
-
-/// Alternative audio device enumeration using common Windows tools
-#[allow(dead_code)]
-fn list_audio_devices_alternative() -> Result<Vec<AudioDevice>> {
-    let mut devices = Vec::new();
-
-    // Use PowerShell to check for common audio device names
-    if let Ok(_output) = Command::new("powershell")
-        .args([
-            "-Command",
-            "Get-Process | Where-Object { $_.ProcessName -like '*audio*' -or $_.ProcessName -like '*sound*' } | Select-Object ProcessName | ConvertTo-Json -Compress"
-        ])
-        .output()
-    {
-        // This method is a fallback that looks for running audio processes
-        // We'll create some default Windows audio device names
-        let default_devices = vec![
-            ("스피커", AudioDeviceType::SystemAudio),
-            ("마이크", AudioDeviceType::Microphone),
-            ("Microphone", AudioDeviceType::Microphone),
-            ("Speakers", AudioDeviceType::SystemAudio),
-            ("Headphones", AudioDeviceType::SystemAudio),
-            ("Line In", AudioDeviceType::Microphone),
-        ];
-
-        for (name, device_type) in default_devices {
-            devices.push(AudioDevice {
-                name: name.to_string(),
-                device_type,
-            });
-        }
-
-        tracing::warn!("Using default audio device names due to enumeration failure");
-        return Ok(devices);
-    }
-
-    Ok(devices)
-}
-
 /// Fallback method using FFmpeg DirectShow (original implementation)
 #[allow(dead_code)]
 pub fn list_audio_devices_ffmpeg() -> Result<Vec<AudioDevice>> {
@@ -534,10 +300,15 @@ pub fn list_audio_devices_ffmpeg() -> Result<Vec<AudioDevice>> {
     let ffmpeg_path =
         get_ffmpeg_path().context("Failed to find FFmpeg for audio device listing")?;
 
-    let output = Command::new(ffmpeg_path)
-        .args(["-list_devices", "true", "-f", "dshow", "-i", "dummy"])
-        .output()
-        .context("Failed to execute ffmpeg for device listing")?;
+    let mut command = Command::new(ffmpeg_path);
+    command.args(["-list_devices", "true", "-f", "dshow", "-i", "dummy"]);
+
+    let output = command_output_with_timeout(
+        command,
+        AUDIO_DEVICE_PROBE_TIMEOUT,
+        "FFmpeg audio device listing",
+    )
+    .context("Failed to execute ffmpeg for device listing")?;
 
     // FFmpeg outputs device list to stderr
     let stderr = String::from_utf8_lossy(&output.stderr);

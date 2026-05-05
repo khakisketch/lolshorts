@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use tokio::process::{Command as TokioCommand};
+use tokio::process::Command as TokioCommand;
 
 use crate::recording::audio::AudioConfig;
 
@@ -52,10 +52,7 @@ impl Default for MacFFmpegConfig {
             },
             audio_encoder: "aac".to_string(),
             container_format: "mp4".to_string(),
-            mov_flags: vec![
-                "+faststart".to_string(),
-                "use_metadata_tags".to_string(),
-            ],
+            mov_flags: vec!["+faststart".to_string(), "use_metadata_tags".to_string()],
             additional_args: vec![
                 "-threads".to_string(),
                 "0".to_string(),
@@ -158,7 +155,10 @@ impl MacFFmpegCommandBuilder {
         // Input configuration
         cmd.args(["-f", &self.config.input_format]);
         cmd.args(["-framerate", &self.video_params.fps.to_string()]);
-        cmd.args(["-video_size", &format!("{}x{}", self.video_params.width, self.video_params.height)]);
+        cmd.args([
+            "-video_size",
+            &format!("{}x{}", self.video_params.width, self.video_params.height),
+        ]);
         cmd.args(["-pixel_format", &self.config.video_encoder.pixel_format]);
 
         // Input sources
@@ -192,9 +192,24 @@ impl MacFFmpegCommandBuilder {
             cmd.args(["-level:v", level]);
         }
 
-        cmd.args(["-b:v", &format!("{}M", self.video_params.bitrate / 1_000_000)]);
-        cmd.args(["-maxrate", &format!("{}M", (self.video_params.bitrate as f64 * 1.5) / 1_000_000.0)]);
-        cmd.args(["-bufsize", &format!("{}M", (self.video_params.bitrate as f64 * 2.0) / 1_000_000.0)]);
+        cmd.args([
+            "-b:v",
+            &format!("{}M", self.video_params.bitrate / 1_000_000),
+        ]);
+        cmd.args([
+            "-maxrate",
+            &format!(
+                "{}M",
+                (self.video_params.bitrate as f64 * 1.5) / 1_000_000.0
+            ),
+        ]);
+        cmd.args([
+            "-bufsize",
+            &format!(
+                "{}M",
+                (self.video_params.bitrate as f64 * 2.0) / 1_000_000.0
+            ),
+        ]);
 
         // GOP and B-frames
         cmd.args(["-g", &self.video_params.gop_size.to_string()]);
@@ -294,25 +309,41 @@ fn parse_macos_encoders(output: &str) -> Result<Vec<MacFFmpegEncoder>> {
 
 /// Check if encoder is macOS-specific
 fn is_macos_encoder(encoder_name: &str, description: &str) -> bool {
-    encoder_name.contains("videotoolbox") ||
-    encoder_name.contains("audiotoolbox") ||
-    description.to_lowercase().contains("videotoolbox") ||
-    description.to_lowercase().contains("apple")
+    encoder_name.contains("videotoolbox")
+        || encoder_name.contains("audiotoolbox")
+        || description.to_lowercase().contains("videotoolbox")
+        || description.to_lowercase().contains("apple")
 }
 
 /// Create encoder info from name and description
 fn create_encoder_info(encoder_name: &str, description: &str) -> MacFFmpegEncoder {
     let is_h264 = encoder_name.contains("h264") || description.contains("H.264");
-    let is_hevc = encoder_name.contains("hevc") || description.contains("H.265") || description.contains("HEVC");
+    let is_hevc = encoder_name.contains("hevc")
+        || description.contains("H.265")
+        || description.contains("HEVC");
     let is_hardware = encoder_name.contains("videotoolbox");
 
     MacFFmpegEncoder {
         name: description.to_string(),
         encoder: encoder_name.to_string(),
-        pixel_format: if is_hardware { "nv12".to_string() } else { "yuv420p".to_string() },
+        pixel_format: if is_hardware {
+            "nv12".to_string()
+        } else {
+            "yuv420p".to_string()
+        },
         preset: Some("medium".to_string()),
-        tune: if is_h264 { Some("zerolatency".to_string()) } else { None },
-        profile: Some(if is_h264 { "high".to_string() } else if is_hevc { "main".to_string() } else { "main".to_string() }),
+        tune: if is_h264 {
+            Some("zerolatency".to_string())
+        } else {
+            None
+        },
+        profile: Some(if is_h264 {
+            "high".to_string()
+        } else if is_hevc {
+            "main".to_string()
+        } else {
+            "main".to_string()
+        }),
         level: Some("4.0".to_string()),
         is_hardware,
         supports_b_frames: !encoder_name.contains("baseline"),
@@ -381,19 +412,16 @@ mod tests {
     #[test]
     fn test_ffmpeg_command_builder() {
         let config = MacFFmpegConfig::default();
-        let builder = MacFFmpegCommandBuilder::new(
-            config,
-            PathBuf::from("/tmp/output.mp4")
-        )
-        .add_video_input(1)
-        .with_video_params(VideoParameters {
-            width: 1920,
-            height: 1080,
-            fps: 60.0,
-            bitrate: 10_000_000,
-            gop_size: 30,
-            max_b_frames: 2,
-        });
+        let builder = MacFFmpegCommandBuilder::new(config, PathBuf::from("/tmp/output.mp4"))
+            .add_video_input(1)
+            .with_video_params(VideoParameters {
+                width: 1920,
+                height: 1080,
+                fps: 60.0,
+                bitrate: 10_000_000,
+                gop_size: 30,
+                max_b_frames: 2,
+            });
 
         let cmd = builder.build();
         assert!(cmd.is_ok());
@@ -414,9 +442,16 @@ mod tests {
         };
 
         let realtime_config = optimize_ffmpeg_params(&encoder, FFmpegUseCase::RealTimeRecording);
-        assert_eq!(realtime_config.video_encoder.preset, Some("veryfast".to_string()));
+        assert_eq!(
+            realtime_config.video_encoder.preset,
+            Some("veryfast".to_string())
+        );
 
-        let high_quality_config = optimize_ffmpeg_params(&encoder, FFmpegUseCase::HighQualityEncoding);
-        assert_eq!(high_quality_config.video_encoder.preset, Some("slow".to_string()));
+        let high_quality_config =
+            optimize_ffmpeg_params(&encoder, FFmpegUseCase::HighQualityEncoding);
+        assert_eq!(
+            high_quality_config.video_encoder.preset,
+            Some("slow".to_string())
+        );
     }
 }

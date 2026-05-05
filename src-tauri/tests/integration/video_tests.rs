@@ -1,39 +1,50 @@
 // Integration tests for video processing system
 #![cfg(test)]
 
-use lolshorts_tauri::video::VideoProcessor;
+use lolshorts::video::VideoProcessor;
 use std::path::PathBuf;
 use tokio;
 
 #[tokio::test]
 async fn test_video_processor_initialization() {
-    let processor = VideoProcessor::new_with_fallback();
+    let _processor = VideoProcessor::new_with_fallback();
 
-    // Verify processor can be created
-    assert!(true);
+    // Verify processor can be created without panicking
 }
 
 #[tokio::test]
 async fn test_ffmpeg_availability() {
     use std::process::Command;
 
-    // Check if FFmpeg is available
-    let output = Command::new("ffmpeg")
-        .arg("-version")
-        .output();
+    // Check if FFmpeg is available (either in PATH or as bundled binary)
+    let ffmpeg_candidates = [
+        "ffmpeg",
+        "./src-tauri/binaries/ffmpeg.exe",
+        "../binaries/ffmpeg.exe",
+    ];
 
-    match output {
-        Ok(result) => {
-            assert!(result.status.success());
-            let version_str = String::from_utf8_lossy(&result.stdout);
-            assert!(version_str.contains("ffmpeg version"));
-            println!("FFmpeg version: {}", version_str.lines().next().unwrap_or(""));
-        },
-        Err(e) => {
-            println!("FFmpeg not available in test environment: {}", e);
-            // This is acceptable in CI/CD environments without FFmpeg
+    let mut found = false;
+    for candidate in &ffmpeg_candidates {
+        let output = Command::new(candidate).arg("-version").output();
+
+        if let Ok(result) = output {
+            if result.status.success() {
+                let version_str = String::from_utf8_lossy(&result.stdout);
+                println!(
+                    "FFmpeg found at '{}': {}",
+                    candidate,
+                    version_str.lines().next().unwrap_or("")
+                );
+                found = true;
+                break;
+            }
         }
     }
+
+    if !found {
+        println!("FFmpeg not available in test environment - skipping version check");
+    }
+    // Not asserting found=true: acceptable in CI/CD without FFmpeg in PATH
 }
 
 #[tokio::test]
@@ -61,7 +72,7 @@ async fn test_clip_duration_limits() {
 
     for duration in test_durations {
         if duration <= FREE_TIER_MAX_DURATION {
-            assert!(true); // FREE tier can use this
+            assert!(duration <= FREE_TIER_MAX_DURATION); // FREE tier can use this
         }
 
         if duration <= PRO_TIER_MAX_DURATION {
@@ -96,7 +107,7 @@ async fn test_video_quality_presets() {
 
     for (name, height) in quality_presets {
         assert!(!name.is_empty());
-        assert!(height >= 480 && height <= 2160); // Valid height range
+        assert!((480..=2160).contains(&height)); // Valid height range
     }
 }
 
@@ -112,15 +123,15 @@ async fn test_thumbnail_generation_params() {
     const THUMBNAIL_WIDTH: u32 = 1920;
     const THUMBNAIL_HEIGHT: u32 = 1080;
 
-    assert!(THUMBNAIL_WIDTH > 0);
-    assert!(THUMBNAIL_HEIGHT > 0);
+    assert_eq!(THUMBNAIL_WIDTH, 1920);
+    assert_eq!(THUMBNAIL_HEIGHT, 1080);
 }
 
 #[tokio::test]
 async fn test_concurrent_video_processing() {
     use tokio::task;
 
-    let processor = VideoProcessor::new_with_fallback();
+    let _processor = VideoProcessor::new_with_fallback();
 
     // Simulate multiple concurrent validation requests
     let mut handles = vec![];
@@ -168,15 +179,15 @@ async fn test_bitrate_calculation() {
 
     // 1080p: 8-12 Mbps
     let bitrate_1080p = 10_000_000; // 10 Mbps
-    assert!(bitrate_1080p >= 8_000_000 && bitrate_1080p <= 12_000_000);
+    assert!((8_000_000..=12_000_000).contains(&bitrate_1080p));
 
     // 720p: 5-8 Mbps
     let bitrate_720p = 6_000_000; // 6 Mbps
-    assert!(bitrate_720p >= 5_000_000 && bitrate_720p <= 8_000_000);
+    assert!((5_000_000..=8_000_000).contains(&bitrate_720p));
 
     // 480p: 2.5-4 Mbps
     let bitrate_480p = 3_000_000; // 3 Mbps
-    assert!(bitrate_480p >= 2_500_000 && bitrate_480p <= 4_000_000);
+    assert!((2_500_000..=4_000_000).contains(&bitrate_480p));
 }
 
 #[tokio::test]

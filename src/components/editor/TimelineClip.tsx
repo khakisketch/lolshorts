@@ -1,4 +1,5 @@
 import { memo, useState, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { TimelineClip as TimelineClipType } from '@/stores/editorStore';
@@ -17,13 +18,14 @@ const PIXELS_PER_SECOND = 50;
 const MIN_CLIP_WIDTH = 100;
 
 export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineClipProps) {
+  const { t } = useTranslation();
   // Performance Optimization: Use granular selectors to prevent unnecessary re-renders
   const removeFromTimeline = useEditorStore(state => state.removeFromTimeline);
   const setSelectedClipId = useEditorStore(state => state.setSelectedClipId);
   const setClipTrimStart = useEditorStore(state => state.setClipTrimStart);
   const setClipTrimEnd = useEditorStore(state => state.setClipTrimEnd);
   const getClipEffectiveDuration = useEditorStore(state => state.getClipEffectiveDuration);
-  const isSelected = useEditorStore(state => state.selectedClipId === clip.clip_id);
+  const isSelected = useEditorStore(state => state.selectedClipId === clip.file_path);
 
   // Trim handle drag state
   const [isDraggingTrimStart, setIsDraggingTrimStart] = useState(false);
@@ -37,7 +39,7 @@ export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineC
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: clip.clip_id });
+  } = useSortable({ id: clip.file_path });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -62,7 +64,7 @@ export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineC
       const deltaX = moveEvent.clientX - startX;
       const deltaSeconds = deltaX / (PIXELS_PER_SECOND * zoom);
       const newTrimStart = Math.max(0, originalTrimStart + deltaSeconds);
-      setClipTrimStart(clip.clip_id, newTrimStart);
+      setClipTrimStart(clip.file_path, newTrimStart);
     };
 
     const handleMouseUp = () => {
@@ -73,7 +75,7 @@ export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineC
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [clip.clip_id, clip.trimStart, zoom, setClipTrimStart]);
+  }, [clip.file_path, clip.trimStart, zoom, setClipTrimStart]);
 
   const handleTrimEndDrag = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -87,7 +89,7 @@ export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineC
       const deltaX = moveEvent.clientX - startX;
       const deltaSeconds = deltaX / (PIXELS_PER_SECOND * zoom);
       const newTrimEnd = Math.min(clip.duration, originalTrimEnd + deltaSeconds);
-      setClipTrimEnd(clip.clip_id, newTrimEnd);
+      setClipTrimEnd(clip.file_path, newTrimEnd);
     };
 
     const handleMouseUp = () => {
@@ -98,14 +100,14 @@ export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineC
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [clip.clip_id, clip.trimEnd, clip.duration, zoom, setClipTrimEnd]);
+  }, [clip.file_path, clip.trimEnd, clip.duration, zoom, setClipTrimEnd]);
 
   const handleRemove = () => {
-    removeFromTimeline(clip.clip_id);
+    removeFromTimeline(clip.file_path);
   };
 
   const handleClick = () => {
-    setSelectedClipId(clip.clip_id);
+    setSelectedClipId(clip.file_path);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
@@ -143,7 +145,7 @@ export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineC
       onKeyDown={handleKeyDown}
       role="button"
       tabIndex={0}
-      aria-label={`Timeline clip at ${formatDuration(clip.start_time)}, trimmed from ${formatDuration(trimStart)} to ${formatDuration(trimEnd)}`}
+      aria-label={`Timeline clip at ${formatDuration(clip.event_time)}, trimmed from ${formatDuration(trimStart)} to ${formatDuration(trimEnd)}`}
       aria-pressed={isSelected}
     >
       {/* Left Trim Handle */}
@@ -155,8 +157,18 @@ export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineC
           ${isDraggingTrimStart ? 'bg-primary/50' : ''}
           ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
         `}
-        onMouseDown={handleTrimStartDrag}
+        role="slider"
+        tabIndex={0}
         aria-label="Drag to trim start"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round((trimStart / (clip.duration)) * 100)}
+        onMouseDown={handleTrimStartDrag}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault();
+          }
+        }}
       >
         <div className="w-1 h-8 bg-primary rounded-full" />
       </div>
@@ -170,8 +182,18 @@ export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineC
           ${isDraggingTrimEnd ? 'bg-primary/50' : ''}
           ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
         `}
-        onMouseDown={handleTrimEndDrag}
+        role="slider"
+        tabIndex={0}
         aria-label="Drag to trim end"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round((trimEnd / (clip.duration)) * 100)}
+        onMouseDown={handleTrimEndDrag}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault();
+          }
+        }}
       >
         <div className="w-1 h-8 bg-primary rounded-full" />
       </div>
@@ -208,7 +230,7 @@ export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineC
           />
         ) : (
           <div className="w-full h-full bg-muted flex items-center justify-center">
-            <span className="text-xs text-muted-foreground">No thumbnail</span>
+            <span className="text-xs text-muted-foreground">{t('editor.timeline.noThumbnail')}</span>
           </div>
         )}
 
@@ -232,10 +254,10 @@ export const TimelineClip = memo(function TimelineClip({ clip, zoom }: TimelineC
 }, (prevProps, nextProps) => {
   // Custom comparison function for React.memo
   return (
-    prevProps.clip.clip_id === nextProps.clip.clip_id &&
+    prevProps.clip.file_path === nextProps.clip.file_path &&
     prevProps.clip.duration === nextProps.clip.duration &&
     prevProps.clip.order === nextProps.clip.order &&
-    prevProps.clip.start_time === nextProps.clip.start_time &&
+    prevProps.clip.event_time === nextProps.clip.event_time &&
     prevProps.clip.trimStart === nextProps.clip.trimStart &&
     prevProps.clip.trimEnd === nextProps.clip.trimEnd &&
     prevProps.zoom === nextProps.zoom

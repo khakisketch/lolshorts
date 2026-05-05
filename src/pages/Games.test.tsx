@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import '@testing-library/jest-dom';
 import { Games } from './Games';
 
 // Mock i18n
@@ -37,13 +38,6 @@ jest.mock('@/components/ui/confirm-dialog', () => ({
   useConfirmDialog: () => ({
     confirm: jest.fn().mockResolvedValue(true),
     ConfirmDialog: () => null,
-  }),
-}));
-
-// Mock feature access
-jest.mock('@/components/auth/ProtectedFeature', () => ({
-  useFeatureAccess: () => ({
-    isPro: false,
   }),
 }));
 
@@ -146,24 +140,17 @@ describe('Games', () => {
     });
 
     it('should display game cards when games exist', async () => {
-      mockListGames.mockResolvedValue([
-        { game_id: 'game1' },
-        { game_id: 'game2' },
-      ]);
+      mockListGames.mockResolvedValue(['game1', 'game2']);
 
       mockGetGameMetadata.mockImplementation((gameId: string) =>
         Promise.resolve({
           game_id: gameId,
           champion: 'Yasuo',
           game_mode: 'Ranked',
-          summoner_name: 'TestPlayer',
+          start_time: '2024-01-01T12:00:00Z',
+          end_time: '2024-01-01T12:30:00Z',
           result: 'Win',
-          kills: 10,
-          deaths: 3,
-          assists: 7,
-          game_start_time: '2024-01-01T12:00:00Z',
-          game_duration: 1800,
-          created_at: '2024-01-01T12:30:00Z',
+          kda: { kills: 10, deaths: 3, assists: 7 },
         })
       );
 
@@ -175,25 +162,47 @@ describe('Games', () => {
     });
 
     it('should display KDA for games', async () => {
-      mockListGames.mockResolvedValue([{ game_id: 'game1' }]);
+      mockListGames.mockResolvedValue(['game1']);
       mockGetGameMetadata.mockResolvedValue({
         game_id: 'game1',
         champion: 'Lux',
         game_mode: 'ARAM',
-        summoner_name: 'Player',
+        start_time: '2024-01-01T12:00:00Z',
+        end_time: '2024-01-01T12:20:00Z',
         result: 'Win',
-        kills: 15,
-        deaths: 2,
-        assists: 20,
-        game_start_time: '2024-01-01T12:00:00Z',
-        game_duration: 1200,
-        created_at: '2024-01-01T12:20:00Z',
+        kda: { kills: 15, deaths: 2, assists: 20 },
       });
 
       render(<Games />);
 
       await waitFor(() => {
         expect(screen.getByText('15 / 2 / 20')).toBeInTheDocument();
+      });
+    });
+
+    it('should allow free users to open Auto-Edit for a recorded game', async () => {
+      mockListGames.mockResolvedValue(['game1']);
+      mockGetGameMetadata.mockResolvedValue({
+        game_id: 'game1',
+        champion: 'Lux',
+        game_mode: 'ARAM',
+        start_time: '2024-01-01T12:00:00Z',
+        end_time: '2024-01-01T12:20:00Z',
+        result: 'Win',
+        kda: { kills: 15, deaths: 2, assists: 20 },
+      });
+
+      render(<Games />);
+
+      const autoEditButton = await screen.findByRole('button', { name: 'games.game.autoEdit' });
+
+      expect(autoEditButton).toBeEnabled();
+
+      fireEvent.click(autoEditButton);
+
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/auto-edit',
+        search: { gameId: 'game1' },
       });
     });
   });

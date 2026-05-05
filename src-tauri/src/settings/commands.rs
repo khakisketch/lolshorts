@@ -1,4 +1,4 @@
-use super::models::RecordingSettings;
+use super::models::{EncoderPreference, RecordingSettings};
 use super::platform_config::{PlatformConfig, RecommendedSettings};
 use crate::AppState;
 use tauri::State;
@@ -24,19 +24,71 @@ pub async fn save_recording_settings(
         .validate_integrity()
         .map_err(|e| format!("Settings validation failed: {}", e))?;
 
-    // Check if audio settings actually changed to avoid repeated warnings
-    let current_settings = state.recording_settings.read().await;
-    let audio_changed = current_settings.audio != settings.audio;
-    drop(current_settings);
-
     // Save to disk first
     settings.save().map_err(|e| e.to_string())?;
 
-    // Apply audio configuration changes only if they actually changed
-    if audio_changed {
-        if let Err(e) = crate::recording::audio::apply_audio_config(&settings.audio) {
-            tracing::warn!("Failed to apply audio configuration: {}", e);
-        }
+    // Build RecordingConfig from new settings and apply to RecordingManager
+    let encoder_pref = match settings.video.encoder {
+        EncoderPreference::Auto => "auto",
+        EncoderPreference::Nvenc => "nvenc",
+        EncoderPreference::Qsv => "qsv",
+        EncoderPreference::Amf => "amf",
+        EncoderPreference::Software => "software",
+    };
+
+    let recordings_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("lolshorts")
+        .join("recordings");
+
+    let audio_config = Some(settings.audio.to_audio_config());
+    let video = crate::recording::VideoSettingsConfig {
+        resolution: settings.video.get_resolution(),
+        fps: settings.video.get_fps(),
+        bitrate: settings.video.get_bitrate(),
+        use_h265: settings.video.is_h265(),
+        encoder_preference: encoder_pref.to_string(),
+    };
+    let encoder = if video.use_h265 {
+        crate::recording::VideoEncoder::H265
+    } else {
+        crate::recording::VideoEncoder::H264
+    };
+    let hw_accel = match video.encoder_preference.as_str() {
+        "nvenc" => crate::recording::HwAccel::Nvenc,
+        "qsv" => crate::recording::HwAccel::Qsv,
+        "amf" => crate::recording::HwAccel::Amf,
+        "software" => crate::recording::HwAccel::Software,
+        _ => crate::recording::HwAccel::Auto,
+    };
+
+    let new_config = crate::recording::RecordingConfig {
+        fps: video.fps,
+        bitrate: video.bitrate,
+        resolution: video.resolution,
+        encoder,
+        hw_accel,
+        output_dir: recordings_dir,
+        audio_config,
+        monitor_index: if settings.video.monitor_index > 0 {
+            Some(settings.video.monitor_index)
+        } else {
+            None
+        },
+        ..Default::default()
+    };
+
+    if let Err(e) = state
+        .recording_manager
+        .write()
+        .await
+        .update_config(new_config)
+        .await
+    {
+        tracing::warn!(
+            "설정을 녹화 매니저에 즉시 적용하지 못함 (녹화 중일 수 있음): {}",
+            e
+        );
     }
 
     // Update shared in-memory settings
@@ -53,11 +105,6 @@ pub async fn reset_settings_to_default(
 ) -> Result<RecordingSettings, String> {
     // Reset to defaults and save
     let defaults = RecordingSettings::reset_to_default().map_err(|e| e.to_string())?;
-
-    // Apply default audio configuration
-    if let Err(e) = crate::recording::audio::apply_audio_config(&defaults.audio) {
-        tracing::warn!("Failed to apply default audio configuration: {}", e);
-    }
 
     // Update shared in-memory settings
     let mut current_settings = state.recording_settings.write().await;
@@ -126,21 +173,25 @@ pub async fn validate_settings_for_platform(settings: RecordingSettings) -> Resu
         .await
         .map_err(|e| format!("Failed to detect platform: {}", e))?;
 
-    platform_config.validate_settings(&settings)
+    platform_config
+        .validate_settings(&settings)
         .map(|_| true)
         .map_err(|e| format!("Settings validation failed: {}", e))
 }
 
 /// Optimize settings for current platform and hardware
 #[tauri::command]
-pub async fn optimize_settings_for_platform(mut settings: RecordingSettings) -> Result<RecordingSettings, String> {
+pub async fn optimize_settings_for_platform(
+    mut settings: RecordingSettings,
+) -> Result<RecordingSettings, String> {
     let platform_config = PlatformConfig::detect()
         .await
         .map_err(|e| format!("Failed to detect platform: {}", e))?;
 
     platform_config.optimize_settings(&mut settings);
 
-    platform_config.validate_settings(&settings)
+    platform_config
+        .validate_settings(&settings)
         .map_err(|e| format!("Optimized settings failed validation: {}", e))?;
 
     Ok(settings)
@@ -171,9 +222,13 @@ pub async fn load_settings_optimized() -> Result<RecordingSettings, String> {
 
 /// Export settings to backup file
 #[tauri::command]
-pub async fn export_settings_backup(settings: RecordingSettings, file_path: String) -> Result<(), String> {
+pub async fn export_settings_backup(
+    settings: RecordingSettings,
+    file_path: String,
+) -> Result<(), String> {
     let path = std::path::PathBuf::from(file_path);
-    settings.export_settings(&path)
+    settings
+        .export_settings(&path)
         .map_err(|e| format!("Failed to export settings: {}", e))
 }
 

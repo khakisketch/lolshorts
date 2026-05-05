@@ -1,0 +1,11 @@
+Read the file src/pages/Dashboard.tsx in this project. This is a LoLShorts app - a League of Legends auto-recording and highlight editing desktop app built with Tauri + React + TypeScript + shadcn/ui.
+
+Redesign the Dashboard UI with a GAMING/ESPORTS aesthetic and create a standalone HTML mockup file. Design direction:
+- Dark theme with neon accents (cyan/magenta/purple gradients)
+- Angular, gaming-inspired UI elements with glow effects
+- Champion portrait area, kill/death stats prominently displayed
+- Recording status shown with flashy animations (pulse, glow)
+- Twitch/Discord-style sidebar navigation
+- Use Korean text for all UI labels
+
+Write the complete standalone HTML file with all CSS and JS inline to docs/ui-mockups/concept-a-gaming.html. It must open directly in a browser.

@@ -11,7 +11,12 @@
     "results": "Results",
     "youtube": "YouTube",
     "settings": "Settings",
-    "pro": "PRO"
+    "pro": "PRO",
+    "sidebarLabel": "Application sidebar",
+    "mainNavigation": "Main navigation",
+    "proRequired": "PRO required",
+    "replays": "Replays",
+    "userProfile": "User profile"
   },
   "auth": {
     "login": "Login",
@@ -102,6 +107,17 @@
         "duration": "Duration: {{duration}}"
       }
     },
+    "readiness": {
+      "title": "Recording Readiness",
+      "checking": "Checking recording readiness...",
+      "blockersTitle": "Action required",
+      "status": {
+        "ready": "Ready",
+        "blocked": "Blocked",
+        "degraded": "Needs setup",
+        "checking": "Checking"
+      }
+    },
     "stats": {
       "title": "Quick Stats",
       "subtitle": "Your recording statistics",
@@ -164,7 +180,8 @@
       "clips": "{{count}} Clips",
       "kdaFormat": "{{kills}}/{{deaths}}/{{assists}}",
       "viewClips": "View Clips",
-      "delete": "Delete Game"
+      "delete": "Delete Game",
+      "autoEdit": "Auto-Edit"
     }
   },
   "editor": {
@@ -185,7 +202,8 @@
     "clipsAvailable": "{{count}} clips available",
     "proRequired": "PRO subscription required",
     "upgradeToPro": "Upgrade to PRO",
-    "noClips": "No clips available",
+    "noClips": "No Clips Found",
+    "noClipsDescription": "No clips were recorded for this game session. Try recording a new game to capture highlights.",
     "selectClips": "Select clips from your games to start editing",
     "timeline": {
       "title": "Timeline",
@@ -194,7 +212,15 @@
       "addClipsPrompt": "Add clips from the library to build your timeline",
       "dragToReorder": "Drag clips to reorder them",
       "clips": "clips",
-      "clear": "Clear"
+      "clear": "Clear",
+      "noThumbnail": "No thumbnail",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "resetZoom": "Reset zoom"
+    },
+    "error": {
+      "loadGamesFailed": "Failed to load games",
+      "loadClipsFailed": "Failed to load clips"
     },
     "mobileTabs": {
       "clips": "Clips",
@@ -243,7 +269,13 @@
       "cancelExport": "Cancel Export",
       "close": "Close",
       "processingClips": "Processing clips...",
-      "mergingClips": "Merging clips..."
+      "mergingClips": "Merging clips...",
+      "percentComplete": "{{percent}}% complete",
+      "noClipSourcePath": "No clip source path available"
+    },
+    "preview": {
+      "noCaptions": "No captions available",
+      "selectClipHint": "Select a clip from the library to preview"
     },
     "composition": {
       "title": "Composition Settings",
@@ -278,6 +310,58 @@
       "noClipsAvailable": "No Clips Available",
       "noClipsDescription": "Select a game from the Games page to load clips for editing.",
       "clipsCount": "{{count}} clips available"
+    },
+    "audioMixer": {
+      "title": "Audio Mixer",
+      "selectMusic": "Select Background Music",
+      "audioFiles": "Audio Files",
+      "backgroundMusic": "Background Music",
+      "addMusicDesc": "Add background music to your Short",
+      "uploadMusic": "Upload Music",
+      "loopMusic": "Loop music",
+      "noLoopWarning": "Music will play once. Video may be longer than the music.",
+      "gameAudio": "Game Audio",
+      "silent": "Silent",
+      "full": "Full",
+      "mixTip": "Tip: Keep game audio at 70% and music at 30% for best balance. The final mix will include fade-in and fade-out effects.",
+      "quickPresets": "Quick Presets",
+      "presetGameOnly": "Game Only",
+      "presetBalanced": "Balanced",
+      "presetMusicFocus": "Music Focus",
+      "presetMusicOnly": "Music Only",
+      "mixPreview": "Mix Preview",
+      "game": "Game",
+      "music": "Music"
+    },
+    "canvas": {
+      "emptyHint": "Add text or images to get started",
+      "positionHint": "Click to position selected elements",
+      "dimensions": "1080 × 1920 (9:16 YouTube Shorts)",
+      "background": "Background",
+      "elements": "Elements",
+      "backgroundType": "Background Type",
+      "bgSolid": "Solid Color",
+      "bgGradient": "Gradient",
+      "bgImage": "Image",
+      "color": "Color",
+      "color1": "Color 1",
+      "color2": "Color 2",
+      "imagePath": "Image Path",
+      "imagePathPlaceholder": "/path/to/image.jpg",
+      "imageHint": "Image will be blurred and scaled to fit",
+      "addText": "Add Text Element",
+      "addImage": "Add Image Element",
+      "elementsCount": "Elements ({{count}})",
+      "noElements": "No elements added yet",
+      "elementProperties": "Element Properties",
+      "textContent": "Text Content",
+      "fontSize": "Font Size",
+      "outlineColor": "Outline Color (optional)",
+      "width": "Width (px)",
+      "height": "Height (px)",
+      "xPosition": "X Position (%)",
+      "yPosition": "Y Position (%)",
+      "enterImagePath": "Enter image path:"
     }
   },
   "autoEdit": {
@@ -334,6 +418,7 @@
       "applyingCanvas": "Applying Canvas Overlay",
       "mixingAudio": "Mixing Audio"
     },
+    "watermarkNotice": "Free tier videos include a watermark.",
     "templates": {
       "title": "Templates",
       "epicPentakill": "Epic Pentakill",
@@ -367,7 +452,6 @@
     "loadingQuota": "Loading quota...",
     "unlimitedEdits": "Unlimited Edits",
     "remaining": "remaining",
-    "upgradeToPro": "Upgrade to PRO",
     "upgradeToProTitle": "Upgrade to PRO",
     "upgradeToProDescription": "Get unlimited auto-edits and access to all premium features",
     "currentPlan": "Current Plan",
@@ -474,7 +558,12 @@
       "connectRequired": "You need to connect your YouTube account before you can upload videos.",
       "uploadProgress": "Upload Progress",
       "uploadSuccessful": "Video uploaded successfully! Processing may take a few minutes.",
-      "uploadFailed": "Upload failed"
+      "uploadFailed": "Upload failed",
+      "public": "Public",
+      "unlisted": "Unlisted",
+      "private": "Private",
+      "category": "Category",
+      "gaming": "Gaming"
     },
     "history": {
       "title": "Upload History",
@@ -491,13 +580,26 @@
       "noDescription": "No description",
       "viewOnYouTube": "View on YouTube",
       "connectAccountFirst": "Please connect your YouTube account first",
-      "connectRequired": "You need to connect your YouTube account to view upload history."
+      "connectRequired": "You need to connect your YouTube account to view upload history.",
+      "uploadHistory": "Upload History"
     },
     "quota": {
       "title": "Daily Quota",
       "used": "Used: {{used}} / {{total}}",
       "remaining": "{{count}} uploads remaining",
       "resetTime": "Resets in {{time}}"
+    },
+    "schedule": {
+      "scheduleButton": "Schedule",
+      "confirmSchedule": "Confirm Schedule",
+      "publishAt": "Publish At",
+      "publishAtHint": "Leave empty to queue without a publish time. YouTube requires at least 15 minutes in the future.",
+      "scheduleSuccessful": "Upload scheduled successfully!",
+      "scheduleFailed": "Failed to schedule upload",
+      "queueTitle": "Upload Queue",
+      "scheduledFor": "Scheduled for",
+      "queued": "Queued",
+      "cancelScheduled": "Cancel scheduled upload"
     }
   },
   "statusDashboard": {
@@ -528,10 +630,18 @@
     "save30sReplay": "Save 30s Replay:",
     "healthy": "Healthy",
     "warning": "Warning",
-    "critical": "Critical"
+    "critical": "Critical",
+    "errorHints": {
+      "checkThese": "Check these:",
+      "gameRunning": "Is League of Legends running?",
+      "ffmpegPresent": "Is FFmpeg present in the binaries folder?",
+      "audioDevice": "Is an audio device available?",
+      "diskSpace": "Is there sufficient disk space?"
+    }
   },
   "settings": {
     "title": "Settings",
+    "saved": "Settings saved",
     "license": {
       "title": "License & Subscription",
       "description": "Your current plan and subscription details",
@@ -563,7 +673,8 @@
       },
       "pricing": "PRO Pricing:",
       "pricingDetails": "₩9,900/month or ₩99,000/year (Save 17%)",
-      "loadError": "Failed to load license information"
+      "loadError": "Failed to load license information",
+      "never": "Never"
     },
     "recordingConfig": {
       "title": "Recording Configuration",
@@ -690,7 +801,11 @@
           "description": "Record game sounds, music, and other system audio",
           "enableSystemAudio": "Enable System Audio Recording",
           "systemAudioDevice": "System Audio Device",
-          "systemAudioVolume": "System Audio Volume"
+          "systemAudioVolume": "System Audio Volume",
+          "defaultDevice": "Default Device",
+          "selectDevice": "Select device",
+          "muted": "Muted",
+          "boost": "200% (Boost)"
         },
         "audioQuality": {
           "title": "Audio Quality",
@@ -716,7 +831,12 @@
           "systemAudioEnabled": "System Audio: Enabled ({{volume}}% volume)",
           "systemAudioDevice": "Device: {{device}}",
           "quality": "Quality: {{sampleRate}} @ {{bitrate}}",
-          "default": "Default"
+          "default": "Default",
+          "microphone": "Microphone",
+          "systemAudio": "System Audio",
+          "enabled": "Enabled",
+          "volume": "volume",
+          "device": "Device"
         }
       },
       "clipTiming": {
@@ -725,7 +845,9 @@
           "description": "Default timing applied to all events (unless customized)",
           "beforeEvent": "Before Event (Pre-Roll)",
           "afterEvent": "After Event (Post-Roll)",
-          "totalLength": "Total default clip length: {{total}}s ({{pre}}s before + {{post}}s after)"
+          "totalLength": "Total default clip length: {{total}}s ({{pre}}s before + {{post}}s after)",
+          "before": "Before",
+          "after": "After"
         },
         "eventSpecific": {
           "title": "Event-Specific Timing",
@@ -743,7 +865,9 @@
           "regularKills": {
             "title": "Regular Kills",
             "description": "Single champion kills"
-          }
+          },
+          "beforeEvent": "Before Event",
+          "afterEvent": "After Event"
         },
         "eventMerging": {
           "title": "Event Merging",
@@ -751,7 +875,9 @@
           "mergeConsecutive": "Merge Consecutive Events",
           "mergeDescription": "Combine events that happen close together into one clip",
           "mergeTimeWindow": "Merge Time Window",
-          "mergeWindowDescription": "Events within {{seconds}} seconds will be combined into a single clip"
+          "mergeWindowDescription": "Events within {{seconds}} seconds will be combined into a single clip",
+          "mergeConsecutiveDesc": "Combine events that happen close together into one clip",
+          "mergeExplanation": "Events within {{seconds}} seconds will be combined into a single clip"
         }
       },
       "hotkeys": {
@@ -797,7 +923,8 @@
             "fps60": "60 FPS",
             "fps120": "120 FPS",
             "fps144": "144 FPS"
-          }
+          },
+          "recommended": "Recommended"
         },
         "bitratePreset": {
           "title": "Bitrate Preset",
@@ -817,7 +944,8 @@
             "h264": "H.264 (Best Compatibility)",
             "h265": "H.265 (Best Efficiency)",
             "av1": "AV1 (Experimental)"
-          }
+          },
+          "recommended": "Recommended"
         },
         "encoderPreference": {
           "title": "Encoder Preference",
@@ -828,7 +956,8 @@
             "qsv": "QSV (Intel GPU)",
             "amf": "AMF (AMD GPU)",
             "software": "Software (CPU)"
-          }
+          },
+          "recommended": "Recommended"
         },
         "currentConfiguration": {
           "title": "Current Configuration",
@@ -858,7 +987,11 @@
         "system": "System"
       },
       "startWithWindows": "Start with Windows",
-      "minimizeToTray": "Minimize to tray"
+      "minimizeToTray": "Minimize to tray",
+      "languageSelectDescription": "Choose your preferred language",
+      "autoDetection": "Auto-Detection",
+      "autoDetectionNote": "Auto-detection information",
+      "autoDetectionDescription": "The app automatically detects your system language on first launch. You can change it anytime here."
     },
     "recording": {
       "title": "Recording",
@@ -904,7 +1037,8 @@
       },
       "upgradeToPro": "Upgrade to PRO",
       "manageBilling": "Manage Billing",
-      "cancelSubscription": "Cancel Subscription"
+      "cancelSubscription": "Cancel Subscription",
+      "cancelSuccess": "Your subscription has been successfully cancelled. You will retain PRO access until the end of your billing period."
     },
     "about": {
       "title": "About",
@@ -914,6 +1048,12 @@
       "website": "Website",
       "support": "Support",
       "discord": "Discord Community"
+    },
+    "error": {
+      "loadFailed": "Failed to load settings",
+      "saveFailed": "Failed to save settings",
+      "resetFailed": "Failed to reset settings",
+      "licenseFailed": "Failed to load license info"
     }
   },
   "common": {
@@ -953,7 +1093,13 @@
     "deselectAll": "Deselect All",
     "clear": "Clear",
     "continue": "Continue",
-    "redirectToPayment": "You'll be redirected to Toss Payments to complete your purchase securely"
+    "redirectToPayment": "You'll be redirected to Toss Payments to complete your purchase securely",
+    "menu": "Menu",
+    "closeMobileMenu": "Close mobile menu",
+    "windowControls": "Window controls",
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "closeWindow": "Close window"
   },
   "toast": {
     "settingsSaved": "Settings saved",
@@ -973,7 +1119,11 @@
     "clearTimelineTitle": "Clear Timeline",
     "clearTimelineDescription": "Are you sure you want to clear all clips from the timeline? This action cannot be undone.",
     "cancelExportTitle": "Cancel Export",
-    "cancelExportDescription": "An export is in progress. Are you sure you want to cancel?"
+    "cancelExportDescription": "An export is in progress. Are you sure you want to cancel?",
+    "cancelExport": "An export is in progress. Are you sure you want to cancel?",
+    "clearTimeline": "Are you sure you want to clear the timeline? This action cannot be undone.",
+    "resetSettingsTitle": "Reset to Defaults",
+    "resetSettingsDescription": "This will reset all recording settings to their default values. This action cannot be undone."
   },
   "errors": {
     "generic": "An error occurred",
@@ -1008,7 +1158,43 @@
     "noClipsSelected": "Please select at least one clip",
     "youtubeAuthFailed": "YouTube authentication failed. Please try again.",
     "youtubeUploadFailed": "Failed to upload to YouTube. Please try again.",
-    "youtubeQuotaExceeded": "YouTube daily upload limit reached. Try again tomorrow."
+    "youtubeQuotaExceeded": "YouTube daily upload limit reached. Try again tomorrow.",
+    "gameNotDetected": "Game not detected",
+    "gameNotDetectedHint": "Make sure League of Legends is running and wait for the client to fully load.",
+    "audioDeviceNotFound": "Audio device not found",
+    "audioDeviceNotFoundHint": "Check your recording devices in Windows Settings > Sound. You may need Stereo Mix or a virtual audio driver.",
+    "ffmpegNotFoundHint": "Completely uninstall the app and download the latest version from the official site to reinstall.",
+    "youtubeQuotaExceededHint": "YouTube API quota resets daily at midnight Pacific Time. Try again tomorrow or after 24 hours.",
+    "youtubeAuthExpired": "YouTube authentication expired",
+    "youtubeAuthExpiredHint": "You need to reconnect your YouTube account.",
+    "youtubeNetworkError": "Network error during YouTube upload",
+    "youtubeNetworkErrorHint": "Check your internet connection and try again.",
+    "audioNoDevicesAvailable": "No audio devices available. Recording will continue without audio.",
+    "noAudioDeviceWarning": "No audio device found. Check your audio device settings.",
+    "fileSelectionFailed": "Failed to select file. Please try again.",
+    "selectAtLeastOneGame": "Please select at least one game",
+    "todoFeature": "TODO: {{action}}",
+    "diskFull": "Disk is full. Please free up space and try again.",
+    "authExpired": "Your session has expired. Please log in again.",
+    "processTimeout": "The operation timed out. Please try again.",
+    "rateLimited": "Too many requests. Please wait and try again.",
+    "outOfMemory": "Not enough memory. Close other apps and try again.",
+    "corruptedFile": "The file is corrupted and cannot be processed.",
+    "deviceDisconnected": "The device was disconnected. Please reconnect and try again.",
+    "serviceUnavailable": "Service is temporarily unavailable. Please try again later.",
+    "unknown": "An unexpected error occurred."
+  },
+  "errorBoundary": {
+    "title": "Unexpected Error",
+    "description": "An error occurred in the application",
+    "retry": "Retry",
+    "retryCount": "({{count}} left)",
+    "reload": "Reload Page",
+    "contactSupport": "If the problem persists, please contact support",
+    "videoError": "Video Playback Error",
+    "videoErrorDesc": "A problem occurred while playing the video",
+    "formError": "Form Error",
+    "formErrorDesc": "A problem occurred while processing the form"
   },
   "clips": {
     "title": "Clip Library",
@@ -1052,7 +1238,8 @@
     "hardware Encoder": "Use GPU for encoding (faster, less CPU usage)",
     "proFeature": "This feature requires PRO subscription",
     "lcuStatus": "Connection status to League of Legends client",
-    "dailyQuota": "YouTube allows ~6 video uploads per day"
+    "dailyQuota": "YouTube allows ~6 video uploads per day",
+    "hardwareEncoder": "Use GPU for encoding (faster, less CPU usage)"
   },
   "notifications": {
     "gameStarted": "Game started - Recording enabled",
@@ -1139,11 +1326,17 @@
     "proFeature": "PRO Feature",
     "upgradeDescription": "Upgrade to PRO to access {{feature}}",
     "upgradeToPro": "Upgrade to PRO",
+    "exclusiveDescription": "This feature is available exclusively for PRO subscribers:",
     "features": {
       "unlimitedClips": "Unlimited clip recording",
       "advancedEditor": "Advanced video editor",
       "youtubeUpload": "Direct YouTube upload",
-      "prioritySupport": "Priority support"
+      "prioritySupport": "Priority support",
+      "manualClipExtraction": "Manual clip extraction",
+      "youtubeShortsComposition": "YouTube Shorts composition (9:16)",
+      "customThumbnail": "Custom thumbnail generation",
+      "advancedVideoEditing": "Advanced video editing",
+      "noWatermarks": "No watermarks on exports"
     }
   },
   "onboarding": {
@@ -1198,5 +1391,184 @@
     },
     "processing": "Processing...",
     "selectPlan": "Select Plan"
+  },
+  "paymentSuccess": {
+    "processing": {
+      "title": "Processing Payment",
+      "description": "Please wait while we confirm your subscription",
+      "doNotClose": "Do not close this window"
+    },
+    "error": {
+      "title": "Payment Confirmation Failed",
+      "description": "We couldn't verify your payment",
+      "contactSupport": "If you were charged, please contact support with your order information. We'll resolve this as soon as possible.",
+      "goToSettings": "Go to Settings",
+      "tryAgain": "Try Again"
+    },
+    "success": {
+      "title": "Payment Successful!",
+      "welcome": "Welcome to LoLShorts PRO",
+      "activated": "Subscription Activated",
+      "activatedDesc": "Your PRO subscription is now active. Enjoy unlimited clips, advanced editing features, and priority support!",
+      "orderId": "Order ID:",
+      "amountPaid": "Amount Paid:",
+      "goToSettings": "Go to Settings",
+      "confirmationEmail": "A confirmation email has been sent to your registered email address"
+    }
+  },
+  "paymentFail": {
+    "errors": {
+      "cancelled": {
+        "title": "Payment Cancelled",
+        "description": "You cancelled the payment process. No charges were made to your account."
+      },
+      "aborted": {
+        "title": "Payment Aborted",
+        "description": "The payment process was interrupted. Please try again."
+      },
+      "cardDeclined": {
+        "title": "Card Declined",
+        "description": "Your card was declined by the card company. Please try a different payment method."
+      },
+      "default": {
+        "title": "Payment Failed",
+        "description": "An error occurred during payment processing."
+      }
+    },
+    "errorCode": "Error Code:",
+    "whatCanYouDo": "What can you do?",
+    "suggestions": {
+      "checkPayment": "Check your payment method and try again",
+      "tryDifferent": "Try a different payment method",
+      "contactIssuer": "Contact your card issuer if the problem persists",
+      "contactSupport": "Contact our support team if you need assistance"
+    },
+    "goHome": "Go Home",
+    "tryAgain": "Try Again",
+    "noCharges": "No charges were made to your account"
+  },
+  "replayTarget": {
+    "title": "Replay Recording Setup",
+    "description": "Who should we record? Select a player to auto-capture their highlights.",
+    "loading": "Loading players...",
+    "targetSet": "Target Set",
+    "targetSetDesc": "Recording highlights for: {{name}}. Double-click their champion to lock camera!",
+    "error": "Failed to set recording target."
+  },
+  "quota": {
+    "title": "API Quota",
+    "description": "Daily YouTube API usage",
+    "highUsage": "High Usage",
+    "mediumUsage": "Medium Usage",
+    "lowUsage": "Low Usage",
+    "usage": "Quota Usage",
+    "units": "{{used}} / {{limit}} units",
+    "percentUsed": "{{percent}}% used",
+    "remaining": "Remaining",
+    "unitsLabel": "units",
+    "uploadsLeft": "Uploads Left",
+    "unitsPerUpload": "~1,600 units/upload",
+    "highUsageWarning": "You're approaching your daily quota limit. Consider waiting until reset to avoid hitting the limit.",
+    "resetDate": "Quota resets:",
+    "atMidnightPT": "at midnight PT"
+  },
+  "generalSettings": {
+    "autoStart": {
+      "label": "Auto-start with League",
+      "description": "Automatically start LoLShorts when League of Legends launches"
+    },
+    "minimizeToTray": {
+      "label": "Minimize to Tray",
+      "description": "Keep running in background when window is closed"
+    },
+    "notifications": {
+      "label": "Show Notifications",
+      "description": "Show desktop notifications for events and recording status"
+    },
+    "replayPopup": {
+      "label": "Show Replay Detection Popup",
+      "description": "Ask who to record when a replay is detected"
+    },
+    "crashReporting": {
+      "label": "Send Crash Reports",
+      "description": "Help improve LoLShorts by automatically sending anonymous crash reports. No personal data is collected."
+    },
+    "overlay": {
+      "label": "In-Game Overlay",
+      "description": "Show recording indicator and event feed during gameplay"
+    },
+    "storage": {
+      "title": "Storage Management",
+      "autoDelete": {
+        "label": "Auto-delete Old Clips",
+        "description": "Automatically delete saved clips based on age or storage limit"
+      },
+      "autoDeleteDays": {
+        "label": "Delete After (days)",
+        "description": "Clips older than this many days will be deleted"
+      },
+      "maxStorageGb": {
+        "label": "Max Storage (GB)",
+        "description": "Delete oldest clips first when total usage exceeds this limit"
+      },
+      "deleteExported": {
+        "label": "Delete Exported Clips",
+        "description": "Also delete clips that have already been uploaded or exported"
+      }
+    }
+  },
+  "subscription": {
+    "noActive": "No Active Subscription",
+    "freePlan": "You are currently on the FREE plan",
+    "upgradePrompt": "Upgrade to PRO to access premium features and manage your subscription.",
+    "management": "Subscription Management",
+    "managementDesc": "Manage your PRO subscription and billing details",
+    "loadingDetails": "Loading subscription details...",
+    "status": "Status",
+    "active": "ACTIVE",
+    "inactive": "INACTIVE",
+    "plan": "Plan",
+    "monthly": "Monthly",
+    "yearly": "Yearly",
+    "accessUntil": "Access Until",
+    "cancelledNotice": "Your subscription has been cancelled. You will retain PRO access until {{date}}.",
+    "cancelledNoticeNoDate": "Your subscription has been cancelled. You will retain PRO access until expiry.",
+    "autoRenewInfo1": "Auto-renews on next billing date",
+    "autoRenewInfo2": "Cancel anytime - keep access until end of billing period",
+    "loadFailed": "Failed to load subscription details. Please try again.",
+    "cancelSubscription": "Cancel Subscription",
+    "cancelConfirmTitle": "Cancel Subscription?",
+    "cancelConfirmDesc": "Are you sure you want to cancel your PRO subscription?",
+    "cancelNotice": "You will retain PRO access until the end of your billing period. After that, your account will be downgraded to FREE.",
+    "loseAccess": "You will lose access to:",
+    "loseUnlimitedClips": "Unlimited clips per game",
+    "loseAdvancedEditor": "Advanced video editor features",
+    "lose1080p60": "1080p60 export",
+    "losePrioritySupport": "Priority support",
+    "loseNoWatermarks": "No watermarks",
+    "keepSubscription": "Keep Subscription",
+    "confirmCancel": "Yes, Cancel Subscription",
+    "cancelling": "Cancelling..."
+  },
+  "video": {
+    "playerLabel": "Video player",
+    "videoLabel": "Video",
+    "loading": "Loading...",
+    "seekLabel": "Seek",
+    "skipBackward": "Skip backward",
+    "skipForward": "Skip forward",
+    "play": "Play",
+    "pause": "Pause",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "volumeLabel": "Volume",
+    "resetSpeed": "Reset speed",
+    "enterFullscreen": "Enter fullscreen",
+    "exitFullscreen": "Exit fullscreen",
+    "errors": {
+      "playbackFailed": "Playback failed",
+      "loadFailed": "Failed to load video",
+      "loadFailedDesc": "The video file could not be loaded. It may be corrupted or in an unsupported format."
+    }
   }
 }

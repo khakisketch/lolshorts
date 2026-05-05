@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="ko" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LoLShorts - 대시보드 (Modern Concept)</title>
+    <!-- Tailwind CSS (via CDN for mockup) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        background: '#09090b',
+                        surface: '#121214',
+                        card: '#18181b',
+                        border: 'rgba(255, 255, 255, 0.08)',
+                        muted: '#a1a1aa',
+                        accent: '#2563eb',
+                        success: '#10b981',
+                        warning: '#f59e0b',
+                        danger: '#ef4444'
+                    },
+                    fontFamily: {
+                        sans: ['Pretendard', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'Roboto', 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', 'sans-serif'],
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Pretendard Font -->
+    <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.8/dist/web/static/pretendard.css" />
+    <style>
+        body {
+            background-color: theme('colors.background');
+            color: white;
+            font-family: theme('fontFamily.sans');
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Glassmorphism / Subtle card style */
+        .glass-card {
+            background: linear-gradient(145deg, rgba(24, 24, 27, 0.8) 0%, rgba(24, 24, 27, 0.4) 100%);
+            backdrop-filter: blur(12px);
+            border: 1px solid theme('colors.border');
+            border-radius: 16px;
+            box-shadow: 0 4px 24px -1px rgba(0, 0, 0, 0.2);
+            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        }
+        
+        .glass-card:hover {
+            border-color: rgba(255, 255, 255, 0.15);
+            transform: translateY(-2px);
+        }
+
+        .sidebar-item {
+            transition: all 0.2s ease;
+        }
+        .sidebar-item:hover, .sidebar-item.active {
+            background: rgba(255, 255, 255, 0.05);
+            color: white;
+        }
+        .sidebar-item.active {
+            border-left: 2px solid white;
+        }
+
+        /* Chart animations */
+        @keyframes growUp {
+            from { height: 0; opacity: 0; }
+            to { opacity: 1; }
+        }
+        .chart-bar {
+            animation: growUp 1s ease-out forwards;
+            transform-origin: bottom;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden flex">
+
+    <!-- Left Sidebar -->
+    <aside class="w-64 border-r border-white/10 flex flex-col justify-between bg-black/20 backdrop-blur-xl z-10 relative">
+        <!-- Top Section -->
+        <div>
+            <!-- Logo -->
+            <div class="h-16 flex items-center px-6 border-b border-white/5">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                    <span class="font-bold tracking-tight text-lg bg-clip-text text-transparent bg-gradient-to-r from-white to-white/70">LoLShorts</span>
+                </div>
+            </div>
+
+            <!-- Navigation -->
+            <nav class="p-3 space-y-1 mt-4">
+                <a href="#" class="sidebar-item active flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-white">
+                    <svg class="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
+                    대시보드
+                </a>
+                <a href="#" class="sidebar-item flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-muted">
+                    <svg class="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                    라이브러리
+                </a>
+                <a href="#" class="sidebar-item flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-muted">
+                    <svg class="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    하이라이트 편집
+                </a>
+                <a href="#" class="sidebar-item flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-muted">
+                    <svg class="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                    설정
+                </a>
+            </nav>
+        </div>
+
+        <!-- Bottom User/Status Section -->
+        <div class="p-4 border-t border-white/5">
+            <div class="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 cursor-pointer transition-colors">
+                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-gray-700 to-gray-600 flex items-center justify-center text-xs font-bold">
+                    W
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-white truncate">Wocks</p>
+                    <p class="text-xs text-muted truncate">KR Server</p>
+                </div>
+                <svg class="w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"></path></svg>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col relative overflow-hidden">
+        <!-- Subtle background glow -->
+        <div class="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-3xl h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none -z-10"></div>
+        <div class="absolute bottom-0 right-0 w-96 h-96 bg-purple-500/5 rounded-full blur-3xl pointer-events-none -z-10"></div>
+
+        <!-- Header -->
+        <header class="h-16 flex items-center justify-between px-8 border-b border-white/5 shrink-0 backdrop-blur-md bg-black/10">
+            <div>
+                <h1 class="text-xl font-semibold tracking-tight">대시보드</h1>
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="text-sm text-muted flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full bg-success/80 animate-pulse"></div>
+                    백그라운드 서비스 동작 중
+                </div>
+                <button class="p-2 rounded-full hover:bg-white/10 text-muted transition-colors relative">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+                    <span class="absolute top-1.5 right-1.5 w-2 h-2 bg-indigo-500 rounded-full border border-background"></span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Scrollable Dashboard Content -->
+        <div class="flex-1 overflow-y-auto p-8">
+            <div class="max-w-6xl mx-auto space-y-6">
+                
+                <!-- Top Row: Status Indicators (Grid) -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    
+                    <!-- LCU Status -->
+                    <div class="glass-card p-5 relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 w-32 h-32 bg-success/5 rounded-bl-full -mr-8 -mt-8 transition-transform group-hover:scale-110"></div>
+                        <div class="flex justify-between items-start mb-4">
+                            <div>
+                                <p class="text-sm font-medium text-muted flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg>
+                                    클라이언트 연결
+                                </p>
+                            </div>
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-success/10 text-success border border-success/20">
+                                <span class="w-1.5 h-1.5 rounded-full bg-success animate-pulse-slow"></span>
+                                연결됨
+                            </span>
+                        </div>
+                        <h3 class="text-2xl font-semibold mb-1">정상 작동 중</h3>
+                        <p class="text-xs text-muted">게임이 시작되면 자동으로 감지합니다.</p>
+                    </div>
+
+                    <!-- Game Status -->
+                    <div class="glass-card p-5 relative overflow-hidden group border-orange-500/20 shadow-[0_0_15px_rgba(249,115,22,0.05)]">
+                        <div class="absolute top-0 right-0 w-32 h-32 bg-orange-500/5 rounded-bl-full -mr-8 -mt-8 transition-transform group-hover:scale-110"></div>
+                        <div class="flex justify-between items-start mb-4">
+                            <div>
+                                <p class="text-sm font-medium text-muted flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                    게임 상태
+                                </p>
+                            </div>
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                                <span class="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse"></span>
+                                게임 중
+                            </span>
+                        </div>
+                        <div class="flex items-end justify-between">
+                            <div>
+                                <h3 class="text-2xl font-semibold mb-1">소환사의 협곡</h3>
+                                <p class="text-xs text-orange-400/80">녹화가 진행 중입니다...</p>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-xl font-mono text-white/90">14:23</div>
+                                <div class="text-xs text-muted">진행 시간</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Storage/Stats -->
+                    <div class="glass-card p-5 relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-bl-full -mr-8 -mt-8 transition-transform group-hover:scale-110"></div>
+                        <div class="flex justify-between items-start mb-4">
+                            <div>
+                                <p class="text-sm font-medium text-muted flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
+                                    저장 공간
+                                </p>
+                            </div>
+                            <span class="text-xs font-medium text-muted">24 GB 여유</span>
+                        </div>
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-2xl font-semibold">12.4 <span class="text-sm font-normal text-muted">GB 사용됨</span></h3>
+                            <div class="text-right">
+                                <span class="text-xs font-medium text-indigo-400">142 클립</span>
+                            </div>
+                        </div>
+                        <!-- Progress Bar -->
+                        <div class="w-full h-2 bg-white/5 rounded-full overflow-hidden">
+                            <div class="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full w-[34%] relative">
+                                <div class="absolute inset-0 bg-white/20 w-full animate-[shimmer_2s_infinite] -skew-x-12"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Middle Row: Charts & Activity -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    
+                    <!-- Chart Section (Spans 2 columns) -->
+                    <div class="glass-card p-6 lg:col-span-2 flex flex-col">
+                        <div class="flex justify-between items-center mb-6">
+                            <div>
+                                <h3 class="font-semibold text-lg">녹화 통계</h3>
+                                <p class="text-sm text-muted">최근 7일간의 하이라이트 생성 수</p>
+                            </div>
+                            <select class="bg-white/5 border border-white/10 text-sm rounded-md px-3 py-1.5 outline-none focus:border-indigo-500/50 transition-colors">
+                                <option>최근 7일</option>
+                                <option>최근 30일</option>
+                            </select>
+                        </div>
+                        
+                        <!-- Minimalist Bar Chart CSS Only -->
+                        <div class="flex-1 flex items-end justify-between gap-2 pt-4 min-h-[160px]">
+                            <!-- Day 1 -->
+                            <div class="flex flex-col items-center gap-2 flex-1 group">
+                                <div class="w-full relative flex justify-center items-end h-[120px]">
+                                    <div class="w-full max-w-[32px] bg-white/10 group-hover:bg-white/20 rounded-t-sm transition-colors chart-bar" style="height: 30%;"></div>
+                                </div>
+                                <span class="text-xs text-muted font-medium">월</span>
+                            </div>
+                            <!-- Day 2 -->
+                            <div class="flex flex-col items-center gap-2 flex-1 group">
+                                <div class="w-full relative flex justify-center items-end h-[120px]">
+                                    <div class="w-full max-w-[32px] bg-white/10 group-hover:bg-white/20 rounded-t-sm transition-colors chart-bar" style="height: 45%;"></div>
+                                </div>
+                                <span class="text-xs text-muted font-medium">화</span>
+                            </div>
+                            <!-- Day 3 -->
+                            <div class="flex flex-col items-center gap-2 flex-1 group">
+                                <div class="w-full relative flex justify-center items-end h-[120px]">
+                                    <div class="w-full max-w-[32px] bg-white/10 group-hover:bg-white/20 rounded-t-sm transition-colors chart-bar" style="height: 20%;"></div>
+                                </div>
+                                <span class="text-xs text-muted font-medium">수</span>
+                            </div>
+                            <!-- Day 4 -->
+                            <div class="flex flex-col items-center gap-2 flex-1 group">
+                                <div class="w-full relative flex justify-center items-end h-[120px]">
+                                    <div class="w-full max-w-[32px] bg-indigo-500/80 group-hover:bg-indigo-400 rounded-t-sm transition-colors chart-bar relative" style="height: 85%;">
+                                        <div class="absolute -top-8 left-1/2 -translate-x-1/2 bg-white text-black text-[10px] font-bold px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">24 클립</div>
+                                    </div>
+                                </div>
+                                <span class="text-xs text-white font-medium">목</span>
+                            </div>
+                            <!-- Day 5 -->
+                            <div class="flex flex-col items-center gap-2 flex-1 group">
+                                <div class="w-full relative flex justify-center items-end h-[120px]">
+                                    <div class="w-full max-w-[32px] bg-white/10 group-hover:bg-white/20 rounded-t-sm transition-colors chart-bar" style="height: 60%;"></div>
+                                </div>
+                                <span class="text-xs text-muted font-medium">금</span>
+                            </div>
+                            <!-- Day 6 -->
+                            <div class="flex flex-col items-center gap-2 flex-1 group">
+                                <div class="w-full relative flex justify-center items-end h-[120px]">
+                                    <div class="w-full max-w-[32px] bg-white/10 group-hover:bg-white/20 rounded-t-sm transition-colors chart-bar" style="height: 75%;"></div>
+                                </div>
+                                <span class="text-xs text-muted font-medium">토</span>
+                            </div>
+                            <!-- Day 7 -->
+                            <div class="flex flex-col items-center gap-2 flex-1 group">
+                                <div class="w-full relative flex justify-center items-end h-[120px]">
+                                    <div class="w-full max-w-[32px] bg-white/10 group-hover:bg-white/20 rounded-t-sm transition-colors chart-bar" style="height: 50%;"></div>
+                                </div>
+                                <span class="text-xs text-muted font-medium">일</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Activity Section -->
+                    <div class="glass-card p-6 flex flex-col">
+                        <div class="flex justify-between items-center mb-6">
+                            <h3 class="font-semibold text-lg">최근 녹화된 게임</h3>
+                            <button class="text-xs text-indigo-400 hover:text-indigo-300 font-medium transition-colors">모두 보기</button>
+                        </div>
+                        
+                        <div class="space-y-4 flex-1">
+                            <!-- Item 1 -->
+                            <div class="flex items-center gap-4 group cursor-pointer">
+                                <div class="w-10 h-10 rounded bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden shrink-0">
+                                    <img src="https://ddragon.leagueoflegends.com/cdn/14.5.1/img/champion/Jinx.png" alt="Jinx" class="w-full h-full object-cover opacity-90 group-hover:scale-110 transition-transform duration-300">
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-medium text-white truncate group-hover:text-indigo-400 transition-colors">소환사의 협곡 (승리)</p>
+                                    <p class="text-xs text-muted truncate mt-0.5">14/2/8 • 32분 전</p>
+                                </div>
+                                <div class="text-right shrink-0">
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                                        5 클립
+                                    </span>
+                                </div>
+                            </div>
+                            
+                            <!-- Item 2 -->
+                            <div class="flex items-center gap-4 group cursor-pointer">
+                                <div class="w-10 h-10 rounded bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden shrink-0">
+                                    <img src="https://ddragon.leagueoflegends.com/cdn/14.5.1/img/champion/Yasuo.png" alt="Yasuo" class="w-full h-full object-cover opacity-90 group-hover:scale-110 transition-transform duration-300 grayscale-[0.3]">
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-medium text-white truncate group-hover:text-indigo-400 transition-colors">소환사의 협곡 (패배)</p>
+                                    <p class="text-xs text-muted truncate mt-0.5">2/10/4 • 2시간 전</p>
+                                </div>
+                                <div class="text-right shrink-0">
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-white/5 text-muted border border-white/10">
+                                        1 클립
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- Item 3 -->
+                            <div class="flex items-center gap-4 group cursor-pointer">
+                                <div class="w-10 h-10 rounded bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden shrink-0">
+                                    <img src="https://ddragon.leagueoflegends.com/cdn/14.5.1/img/champion/Ahri.png" alt="Ahri" class="w-full h-full object-cover opacity-90 group-hover:scale-110 transition-transform duration-300">
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-medium text-white truncate group-hover:text-indigo-400 transition-colors">무작위 총력전 (승리)</p>
+                                    <p class="text-xs text-muted truncate mt-0.5">8/4/15 • 5시간 전</p>
+                                </div>
+                                <div class="text-right shrink-0">
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                                        3 클립
+                                    </span>
+                                </div>
+                            </div>
+                            
+                            <!-- Item 4 (TFT) -->
+                            <div class="flex items-center gap-4 group cursor-pointer">
+                                <div class="w-10 h-10 rounded bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden shrink-0 bg-purple-900/30">
+                                    <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-medium text-white truncate group-hover:text-purple-400 transition-colors">팀파이트 택틱스 (2등)</p>
+                                    <p class="text-xs text-muted truncate mt-0.5">어제</p>
+                                </div>
+                                <div class="text-right shrink-0">
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                                        전체 녹화
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Row: Setup/Tips Banner -->
+                <div class="glass-card p-0 overflow-hidden flex border-white/10 bg-gradient-to-r from-white/[0.02] to-transparent">
+                    <div class="p-6 md:p-8 flex-1">
+                        <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-white/10 text-white mb-4 border border-white/5">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            시작 가이드
+                        </div>
+                        <h3 class="text-xl font-semibold mb-2">백그라운드에서 조용하게 작동합니다</h3>
+                        <p class="text-sm text-muted max-w-lg mb-6 leading-relaxed">
+                            롤 클라이언트가 켜져 있으면 게임 시작을 자동으로 감지합니다. 평소처럼 게임을 즐기시면, 킬이나 중요한 순간들을 LoLShorts가 알아서 녹화하고 정리해 둡니다.
+                        </p>
+                        
+                        <div class="flex gap-4 text-sm">
+                            <div class="flex items-center gap-2 text-white/80">
+                                <div class="w-5 h-5 rounded-full bg-success/20 text-success flex items-center justify-center">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                                </div>
+                                <span>롤 클라이언트 실행</span>
+                            </div>
+                            <div class="w-4 h-px bg-white/10 self-center"></div>
+                            <div class="flex items-center gap-2 text-white/80">
+                                <div class="w-5 h-5 rounded-full bg-success/20 text-success flex items-center justify-center">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                                </div>
+                                <span>게임 시작</span>
+                            </div>
+                            <div class="w-4 h-px bg-white/10 self-center"></div>
+                            <div class="flex items-center gap-2 text-white/50">
+                                <div class="w-5 h-5 rounded-full border border-white/20 flex items-center justify-center text-[10px]">
+                                    3
+                                </div>
+                                <span>자동 녹화</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="w-64 hidden lg:block bg-[url('https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800&auto=format&fit=crop')] bg-cover bg-center relative opacity-40">
+                        <div class="absolute inset-0 bg-gradient-to-r from-[#121214] to-transparent"></div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+</body>
+</html>

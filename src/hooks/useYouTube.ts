@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { youtubeApi, UploadHistoryEntry } from '@/api/youtube';
 import { getErrorMessage } from '@/lib/utils';
-import { AuthStatus, QuotaInfo, UploadProgress, YouTubeVideo } from '@/types/youtube';
+import { AuthStatus, QuotaInfo, UploadProgress, YouTubeVideo, ScheduledUpload } from '@/types/youtube';
+import { listenToEvent } from '@/api/client';
 
 export interface UploadMetadata {
   title: string;
@@ -18,7 +19,9 @@ export function useYouTube() {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [queueError, setQueueError] = useState<string | null>(null);
   const [uploadHistory, setUploadHistory] = useState<UploadHistoryEntry[]>([]);
+  const [uploadQueue, setUploadQueue] = useState<ScheduledUpload[]>([]);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
   const pollingInterval = useRef<NodeJS.Timeout | null>(null);
@@ -32,31 +35,69 @@ export function useYouTube() {
     }
   }, []);
 
-  useEffect(() => {
-    checkAuthStatus();
-    loadHistory();
-  }, [checkAuthStatus]);
-
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     try {
       const history = await youtubeApi.getUploadHistory();
       setUploadHistory(history);
     } catch {
       // History load failure is non-critical - will show empty list
     }
-  };
+  }, []);
 
-  const getQuotaInfo = useCallback(async (): Promise<QuotaInfo | null> => {
+  const loadQueue = useCallback(async () => {
     try {
-      const quota = await youtubeApi.getQuotaInfo();
-      return quota;
-    } catch {
-      // Quota info failure is non-critical - returns null
-      return null;
+      setQueueError(null);
+      const queue = await youtubeApi.getUploadQueue();
+      setUploadQueue(queue);
+    } catch (err) {
+      setQueueError(getErrorMessage(err));
     }
   }, []);
 
+  const getQuotaInfo = useCallback(async (): Promise<QuotaInfo> => {
+    setError(null);
+    try {
+      const quota = await youtubeApi.getQuotaInfo();
+      return quota;
+    } catch (err) {
+      setError(getErrorMessage(err));
+      throw err;
+    }
+  }, []);
+
+  useEffect(() => {
+    checkAuthStatus();
+    loadHistory();
+    loadQueue();
+  }, [checkAuthStatus, loadHistory, loadQueue]);
+
+  useEffect(() => {
+    let unlistenCompleted: (() => void) | null = null;
+    let unlistenFailed: (() => void) | null = null;
+
+    const setupListeners = async () => {
+      unlistenCompleted = await listenToEvent<unknown>('scheduled-upload-completed', async () => {
+        await loadQueue();
+        await loadHistory();
+        await getQuotaInfo();
+      });
+      unlistenFailed = await listenToEvent<unknown>('scheduled-upload-failed', async () => {
+        await loadQueue();
+        await loadHistory();
+        await getQuotaInfo();
+      });
+    };
+
+    setupListeners();
+
+    return () => {
+      if (unlistenCompleted) unlistenCompleted();
+      if (unlistenFailed) unlistenFailed();
+    };
+  }, [loadQueue, loadHistory, getQuotaInfo]);
+
   const startAuthWithServer = useCallback(async () => {
+
     setIsLoading(true);
     setError(null);
     try {
@@ -83,7 +124,7 @@ export function useYouTube() {
     } finally {
       setIsLoading(false);
     }
-  }, [checkAuthStatus]);
+  }, [checkAuthStatus, loadHistory]);
 
   const logout = useCallback(async () => {
     setIsLoading(true);
@@ -97,6 +138,7 @@ export function useYouTube() {
       setUploadHistory([]);
     } catch (err) {
       setError(getErrorMessage(err));
+      throw err;
     } finally {
       setIsLoading(false);
     }
@@ -129,12 +171,12 @@ export function useYouTube() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [loadHistory]);
 
   const getUploadHistory = useCallback(async () => {
     await loadHistory();
     return uploadHistory;
-  }, [uploadHistory]);
+  }, [loadHistory, uploadHistory]);
 
   const pollUploadProgress = useCallback(async () => {
     try {
@@ -167,7 +209,7 @@ export function useYouTube() {
     } catch {
       // History addition failure is non-critical
     }
-  }, []);
+  }, [loadHistory]);
 
   useEffect(() => {
     return () => stopProgressPolling();
@@ -178,7 +220,9 @@ export function useYouTube() {
     isAuthenticated: authStatus.authenticated,
     isLoading,
     error,
+    queueError,
     uploadHistory,
+    uploadQueue,
     uploadProgress,
     startAuth: startAuthWithServer,
     startAuthWithServer,
@@ -189,6 +233,7 @@ export function useYouTube() {
     addToHistory,
     getQuotaInfo,
     getUploadHistory,
+    loadQueue,
     startProgressPolling,
     stopProgressPolling
   };

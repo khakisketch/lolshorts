@@ -1,7 +1,7 @@
 [package]
 name = "lolshorts"
 version = "1.2.0"
-description = "League of Legends Auto-Recording and Editing Desktop App with YouTube Integration - Production Ready"
+description = "League of Legends auto-recording and editing desktop app with YouTube integration"
 authors = ["LoLShorts Team"]
 license = "MIT"
 repository = "https://github.com/lolshorts/lolshorts"
@@ -17,10 +17,15 @@ tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
 # Tauri Core
-tauri = { version = "2.0", features = [] }
+tauri = { version = "2.0", features = ["tray-icon"] }
 tauri-plugin-shell = "2.0"
+tauri-plugin-notification = "2.0"
+tauri-plugin-updater = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Async Runtime
 tokio = { version = "1.41", features = ["full"] }
@@ -35,6 +40,9 @@ oauth2 = "4.4"
 # Error Handling
 thiserror = "2.0"
 anyhow = "1.0"
+
+# Crash Reporting
+sentry = "0.34"
 
 # Async support
 async-trait = "0.1"
@@ -60,7 +68,7 @@ fastrand = "2.0"
 # Video Recording Strategy:
 # - Windows: FFmpeg CLI with gdigrab (screen capture) + H.265 hardware encoding (NVENC/QSV/AMF)
 # - Segment-based circular buffer (6 x 10s = 60s replay window)
-# - Process-based approach for stability, simplicity, and production readiness
+# - Process-based approach for stability, simplicity, and field-testable reliability
 # - FFmpeg binary bundled with application installer
 # - No alternative encoders needed for production (rav1e removed)
 # MP4 crate for native video processing
@@ -77,6 +85,11 @@ tokio-util = "0.7.17"
 # Cross-platform video dependencies (optional for basic compilation)
 ffmpeg-next = { version = "7.0", features = ["static"], optional = true }
 base64 = "0.22.1"
+urlencoding = "2.1"
+
+# WASAPI loopback audio capture
+cpal = "0.15"
+hound = "3.5"
 
 # Windows-specific
 [target.'cfg(windows)'.dependencies]

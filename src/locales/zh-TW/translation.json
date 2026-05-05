@@ -138,7 +138,8 @@
     "timeline": {
       "title": "時間軸",
       "addClip": "新增片段",
-      "removeClip": "移除片段"
+      "removeClip": "移除片段",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "修剪",
@@ -152,7 +153,8 @@
       "title": "匯出",
       "quality": "品質",
       "format": "格式",
-      "exportVideo": "匯出影片"
+      "exportVideo": "匯出影片",
+      "noClipSourcePath": "No clip source path available"
     },
     "selectGameTitle": "Select a Game to Edit",
     "selectGameDescription": "Choose a game from your recorded sessions to start editing",
@@ -234,6 +236,18 @@
       "upload": "Upload",
       "history": "History",
       "account": "Account"
+    },
+    "schedule": {
+      "scheduleButton": "排程",
+      "confirmSchedule": "確認排程",
+      "publishAt": "發布時間",
+      "publishAtHint": "YouTube 要求至少提前 15 分鐘。留空以加入佇列但不設定發布時間。",
+      "scheduleSuccessful": "上傳已成功排程！",
+      "scheduleFailed": "排程上傳失敗",
+      "queueTitle": "上傳佇列",
+      "scheduledFor": "排程於",
+      "queued": "排隊中",
+      "cancelScheduled": "取消排程上傳"
     }
   },
   "settings": {

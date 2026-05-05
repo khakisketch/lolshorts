@@ -138,7 +138,8 @@
     "timeline": {
       "title": "Timeline",
       "addClip": "Magdagdag ng Clip",
-      "removeClip": "Tanggalin ang Clip"
+      "removeClip": "Tanggalin ang Clip",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "Trim",
@@ -152,7 +153,8 @@
       "title": "Export",
       "quality": "Kalidad",
       "format": "Format",
-      "exportVideo": "I-export ang Video"
+      "exportVideo": "I-export ang Video",
+      "noClipSourcePath": "No clip source path available"
     },
     "selectGameTitle": "Select a Game to Edit",
     "selectGameDescription": "Choose a game from your recorded sessions to start editing",
@@ -234,6 +236,18 @@
       "upload": "Upload",
       "history": "History",
       "account": "Account"
+    },
+    "schedule": {
+      "scheduleButton": "I-schedule",
+      "confirmSchedule": "Kumpirmahin ang schedule",
+      "publishAt": "I-publish sa",
+      "publishAtHint": "Iwanang blangko para ilagay sa pila nang walang oras ng paglalathala. Nangangailangan ang YouTube ng hindi bababa sa 15 minuto sa hinaharap.",
+      "scheduleSuccessful": "Matagumpay na na-schedule ang pag-upload!",
+      "scheduleFailed": "Nabigo ang pag-schedule ng pag-upload",
+      "queueTitle": "Upload Queue",
+      "scheduledFor": "Naka-schedule para sa",
+      "queued": "Sa pila",
+      "cancelScheduled": "Kanselahin ang naka-schedule na pag-upload"
     }
   },
   "settings": {

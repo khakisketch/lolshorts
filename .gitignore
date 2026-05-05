@@ -1,6 +1,5 @@
 # Rust
 /target
-Cargo.lock
 *.rs.bk
 *.pdb
 
@@ -38,7 +37,8 @@ coverage/
 .nyc_output/
 test-results/
 playwright-report/
-__mocks__/
+.playwright-mcp/
+output/
 
 # Legacy Archive
 LEGACY-ARCHIVE/
@@ -48,6 +48,8 @@ LEGACY-ARCHIVE.tar.gz
 AppData/
 storage/test/
 *.db
+*.db-shm
+*.db-wal
 
 # Logs
 *.log
@@ -66,6 +68,9 @@ claudedocs/
 # Temporary build artifacts
 *.tmp.*
 clippy_output.txt
+cargo_errors.txt
+test_output.txt
+src-tauri/test_ffmpeg.*
 
 # FFmpeg binaries (too large for GitHub - downloaded at build time)
 src-tauri/binaries/ffmpeg-master-latest-win64-gpl/

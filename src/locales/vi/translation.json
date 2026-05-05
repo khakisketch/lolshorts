@@ -138,7 +138,8 @@
     "timeline": {
       "title": "Dòng thời gian",
       "addClip": "Thêm clip",
-      "removeClip": "Xóa clip"
+      "removeClip": "Xóa clip",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "Cắt",
@@ -152,7 +153,8 @@
       "title": "Xuất",
       "quality": "Chất lượng",
       "format": "Định dạng",
-      "exportVideo": "Xuất video"
+      "exportVideo": "Xuất video",
+      "noClipSourcePath": "No clip source path available"
     },
     "selectGameTitle": "Select a Game to Edit",
     "selectGameDescription": "Choose a game from your recorded sessions to start editing",
@@ -234,6 +236,18 @@
       "upload": "Upload",
       "history": "History",
       "account": "Account"
+    },
+    "schedule": {
+      "scheduleButton": "Lên lịch",
+      "confirmSchedule": "Xác nhận lịch",
+      "publishAt": "Đăng vào",
+      "publishAtHint": "Để trống để xếp hàng không có giờ đăng. YouTube yêu cầu ít nhất 15 phút trong tương lai.",
+      "scheduleSuccessful": "Đã lên lịch tải lên thành công!",
+      "scheduleFailed": "Không thể lên lịch tải lên",
+      "queueTitle": "Hàng đợi tải lên",
+      "scheduledFor": "Đã lên lịch cho",
+      "queued": "Đang xếp hàng",
+      "cancelScheduled": "Hủy tải lên đã lên lịch"
     }
   },
   "settings": {

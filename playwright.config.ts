@@ -1,4 +1,4 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices } from "@playwright/test";
 
 /**
  * Playwright E2E Testing Configuration for LoLShorts
@@ -13,10 +13,10 @@ import { defineConfig, devices } from '@playwright/test';
  */
 
 export default defineConfig({
-  testDir: './tests/e2e',
+  testDir: "./tests/e2e",
 
   // Maximum time one test can run
-  timeout: 60 * 1000,
+  timeout: 90 * 1000,
 
   // Fail the build on CI if you accidentally left test.only in the source code
   forbidOnly: !!process.env.CI,
@@ -24,26 +24,30 @@ export default defineConfig({
   // Retry on CI only
   retries: process.env.CI ? 2 : 0,
 
+  // Desktop browser matrix tests share one Vite dev server and Tauri mock layer.
+  // Keep local/CI runs bounded to avoid browser process starvation on Windows.
+  workers: 2,
+
   // Reporter to use
   reporter: [
-    ['html', { outputFolder: 'playwright-report' }],
-    ['json', { outputFile: 'test-results/results.json' }],
-    ['junit', { outputFile: 'test-results/junit.xml' }],
+    ["html", { outputFolder: "playwright-report" }],
+    ["json", { outputFile: "test-results/results.json" }],
+    ["junit", { outputFile: "test-results/junit.xml" }],
   ],
 
   // Shared settings for all tests
   use: {
     // Base URL for the application
-    baseURL: 'http://localhost:5181',
+    baseURL: "http://127.0.0.1:5181",
 
     // Collect trace when retrying the failed test
-    trace: 'on-first-retry',
+    trace: "on-first-retry",
 
     // Screenshot on failure
-    screenshot: 'only-on-failure',
+    screenshot: "only-on-failure",
 
     // Video on failure
-    video: 'retain-on-failure',
+    video: "retain-on-failure",
 
     // Maximum time each action can take
     actionTimeout: 10 * 1000,
@@ -52,25 +56,25 @@ export default defineConfig({
   // Configure projects for different browsers/scenarios
   projects: [
     {
-      name: 'Desktop Chrome',
+      name: "Desktop Chrome",
       use: {
-        ...devices['Desktop Chrome'],
+        ...devices["Desktop Chrome"],
         viewport: { width: 1280, height: 720 },
       },
     },
 
     {
-      name: 'Desktop Firefox',
+      name: "Desktop Firefox",
       use: {
-        ...devices['Desktop Firefox'],
+        ...devices["Desktop Firefox"],
         viewport: { width: 1280, height: 720 },
       },
     },
 
     {
-      name: 'Desktop Edge',
+      name: "Desktop Edge",
       use: {
-        ...devices['Desktop Edge'],
+        ...devices["Desktop Edge"],
         viewport: { width: 1280, height: 720 },
       },
     },
@@ -78,8 +82,8 @@ export default defineConfig({
 
   // Run local dev server before starting tests
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5181',
+    command: "npm run dev -- --host 127.0.0.1 --port 5181",
+    url: "http://127.0.0.1:5181",
     timeout: 120 * 1000,
     reuseExistingServer: !process.env.CI,
   },

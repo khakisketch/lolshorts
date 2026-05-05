@@ -3,8 +3,13 @@ pub mod commands;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use thiserror::Error;
-use sysinfo::{System, ProcessesToUpdate}; // Ensure sysinfo is used
+#[cfg(target_os = "windows")]
+use std::time::Duration;
+use sysinfo::{ProcessesToUpdate, System};
+use thiserror::Error; // Ensure sysinfo is used
+
+#[cfg(target_os = "windows")]
+const LCU_PROCESS_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Error)]
 pub enum LcuError {
@@ -111,6 +116,12 @@ pub struct LcuClient {
     lockfile_data: Option<LockfileData>,
 }
 
+impl Default for LcuClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LcuClient {
     pub fn new() -> Self {
         Self {
@@ -134,7 +145,10 @@ impl LcuClient {
                     if let Some(parent_dir) = exe_path.parent() {
                         let lockfile_path = parent_dir.join("lockfile");
                         if lockfile_path.exists() {
-                            tracing::info!("Found lockfile via sysinfo: {}", lockfile_path.display());
+                            tracing::info!(
+                                "Found lockfile via sysinfo: {}",
+                                lockfile_path.display()
+                            );
                             return Ok(lockfile_path);
                         }
                     }
@@ -145,16 +159,27 @@ impl LcuClient {
         // Method 2: Windows WMIC Command (Fallback if sysinfo fails due to permissions)
         #[cfg(target_os = "windows")]
         {
-            use std::process::Command;
             use std::os::windows::process::CommandExt;
-            
+            use std::process::Command;
+
             tracing::info!("sysinfo failed, trying WMIC...");
-            
+
             // Execute: wmic process where "name='LeagueClientUx.exe'" get ExecutablePath
-            let output = Command::new("wmic")
-                .args(&["process", "where", "name='LeagueClientUx.exe'", "get", "ExecutablePath"])
-                .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .output();
+            let mut command = Command::new("wmic");
+            command
+                .args([
+                    "process",
+                    "where",
+                    "name='LeagueClientUx.exe'",
+                    "get",
+                    "ExecutablePath",
+                ])
+                .creation_flags(0x08000000); // CREATE_NO_WINDOW
+            let output = crate::utils::process::command_output_with_timeout(
+                command,
+                LCU_PROCESS_PROBE_TIMEOUT,
+                "LCU WMIC process probe",
+            );
 
             if let Ok(output) = output {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -163,7 +188,7 @@ impl LcuClient {
                     if trimmed.is_empty() || trimmed.to_lowercase().contains("executablepath") {
                         continue;
                     }
-                    
+
                     let path = PathBuf::from(trimmed);
                     if let Some(parent) = path.parent() {
                         let lockfile_path = parent.join("lockfile");
@@ -178,15 +203,21 @@ impl LcuClient {
 
         // Method 3: Expanded Standard Paths (Brute Force)
         let mut possible_paths = Vec::new();
-        
+
         // Common Drives
         let drives = vec!["C:", "D:", "E:", "F:", "G:"];
-        
+
         for drive in drives {
             // Standard Riot Games folder
-            possible_paths.push(PathBuf::from(format!("{}\\{}", drive, "Riot Games\\League of Legends\\lockfile")));
+            possible_paths.push(PathBuf::from(format!(
+                "{}\\{}",
+                drive, "Riot Games\\League of Legends\\lockfile"
+            )));
             // Program Files
-            possible_paths.push(PathBuf::from(format!("{}\\{}", drive, "Program Files\\Riot Games\\League of Legends\\lockfile")));
+            possible_paths.push(PathBuf::from(format!(
+                "{}\\{}",
+                drive, "Program Files\\Riot Games\\League of Legends\\lockfile"
+            )));
         }
 
         // LocalAppData
@@ -214,10 +245,10 @@ impl LcuClient {
     /// Read and parse the lockfile with retries
     pub fn read_lockfile() -> Result<LockfileData> {
         let lockfile_path = Self::get_lockfile_path()?;
-        
+
         let mut attempts = 0;
         let max_attempts = 5;
-        
+
         loop {
             match fs::read_to_string(&lockfile_path) {
                 Ok(content) => return LockfileData::parse(&content),
@@ -246,10 +277,9 @@ impl LcuClient {
         self.lockfile_data = Some(lockfile);
         self.http_client = Some(http_client);
 
-        tracing::info!(
-            "Connected to LCU on port {}",
-            self.lockfile_data.as_ref().unwrap().port
-        );
+        if let Some(lockfile) = &self.lockfile_data {
+            tracing::info!("Connected to LCU on port {}", lockfile.port);
+        }
 
         Ok(())
     }
@@ -315,10 +345,10 @@ impl LcuClient {
             .text()
             .await
             .map_err(|e| LcuError::Api(e.to_string()))?;
-            
+
         // The response is a JSON string like "InProgress", need to trim quotes
         let phase_clean = phase_str.trim().trim_matches('"');
-        
+
         let phase = match phase_clean {
             "InProgress" => GameFlowPhase::InProgress,
             "Reconnect" => GameFlowPhase::Reconnect,
@@ -337,34 +367,40 @@ impl LcuClient {
         // If we need game_data, we should call /lol-gameflow/v1/session separately if phase is InProgress
         // But for get_game_session struct, we need it.
         // Let's optimize: if InProgress, verify with session call.
-        
+
         let mut game_data = None;
-        
+
         if matches!(phase, GameFlowPhase::InProgress | GameFlowPhase::Reconnect) {
-             let session_url = format!("{}/lol-gameflow/v1/session", base_url);
-             if let Ok(resp) = client.get(&session_url).basic_auth("riot", Some(&lockfile.password)).send().await {
-                 if resp.status().is_success() {
-                     if let Ok(full_session) = resp.json::<serde_json::Value>().await {
-                         // Parse game data manually or use struct
-                         if let Some(data) = full_session.get("gameData") {
-                             let id = data.get("gameId").and_then(|v| v.as_i64()).unwrap_or(0);
-                             let mode = data.get("gameMode").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string();
-                             let time = data.get("gameTime").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                             game_data = Some(GameData {
-                                 game_id: id,
-                                 game_mode: mode,
-                                 game_time: time
-                             });
-                         }
-                     }
-                 }
-             }
+            let session_url = format!("{}/lol-gameflow/v1/session", base_url);
+            if let Ok(resp) = client
+                .get(&session_url)
+                .basic_auth("riot", Some(&lockfile.password))
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    if let Ok(full_session) = resp.json::<serde_json::Value>().await {
+                        // Parse game data manually or use struct
+                        if let Some(data) = full_session.get("gameData") {
+                            let id = data.get("gameId").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let mode = data
+                                .get("gameMode")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown")
+                                .to_string();
+                            let time = data.get("gameTime").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            game_data = Some(GameData {
+                                game_id: id,
+                                game_mode: mode,
+                                game_time: time,
+                            });
+                        }
+                    }
+                }
+            }
         }
 
-        Ok(GameSession {
-            phase,
-            game_data,
-        })
+        Ok(GameSession { phase, game_data })
     }
 
     /// Check if a game is in progress
@@ -394,7 +430,11 @@ impl LcuClient {
             is_connected,
             cache_valid: is_connected, // Consider valid if connected
             cache_age_ms: if is_connected { 0 } else { u64::MAX },
-            last_lockfile_check_age_ms: if self.lockfile_data.is_some() { 0 } else { u64::MAX },
+            last_lockfile_check_age_ms: if self.lockfile_data.is_some() {
+                0
+            } else {
+                u64::MAX
+            },
             has_active_endpoint,
         }
     }
@@ -426,7 +466,11 @@ impl LcuClient {
     // ========================================================================
 
     /// Get current summoner's match history
-    pub async fn list_match_history(&self, begin_index: u32, end_index: u32) -> Result<Vec<MatchInfo>> {
+    pub async fn list_match_history(
+        &self,
+        begin_index: u32,
+        end_index: u32,
+    ) -> Result<Vec<MatchInfo>> {
         let client = self
             .http_client
             .as_ref()
@@ -450,12 +494,17 @@ impl LcuClient {
             return Err(LcuError::Api("Failed to get current summoner".to_string()));
         }
 
-        let summoner: serde_json::Value = summoner_resp.json().await.map_err(|e| LcuError::Api(e.to_string()))?;
-        let puuid = summoner["puuid"].as_str().ok_or(LcuError::Api("Invalid summoner data".to_string()))?;
+        let summoner: serde_json::Value = summoner_resp
+            .json()
+            .await
+            .map_err(|e| LcuError::Api(e.to_string()))?;
+        let puuid = summoner["puuid"]
+            .as_str()
+            .ok_or(LcuError::Api("Invalid summoner data".to_string()))?;
 
         // Get match history
         let history_url = format!(
-            "{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}", 
+            "{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
             base_url, puuid, begin_index, end_index
         );
 
@@ -470,8 +519,13 @@ impl LcuClient {
             return Err(LcuError::Api("Failed to fetch match history".to_string()));
         }
 
-        let history_data: serde_json::Value = history_resp.json().await.map_err(|e| LcuError::Api(e.to_string()))?;
-        let games = history_data["games"]["games"].as_array().ok_or(LcuError::Api("Invalid match history format".to_string()))?;
+        let history_data: serde_json::Value = history_resp
+            .json()
+            .await
+            .map_err(|e| LcuError::Api(e.to_string()))?;
+        let games = history_data["games"]["games"]
+            .as_array()
+            .ok_or(LcuError::Api("Invalid match history format".to_string()))?;
 
         let mut matches = Vec::new();
         for game in games {
@@ -482,10 +536,18 @@ impl LcuClient {
                 game_duration: game["gameDuration"].as_i64().unwrap_or(0),
                 champion_id: game["participants"][0]["championId"].as_i64().unwrap_or(0) as u32, // Simplified: assumes player is 0 (usually relative to query)
                 // Actual logic needs to find participant with matching PUUID
-                win: game["participants"][0]["stats"]["win"].as_bool().unwrap_or(false),
-                kills: game["participants"][0]["stats"]["kills"].as_u64().unwrap_or(0) as u32,
-                deaths: game["participants"][0]["stats"]["deaths"].as_u64().unwrap_or(0) as u32,
-                assists: game["participants"][0]["stats"]["assists"].as_u64().unwrap_or(0) as u32,
+                win: game["participants"][0]["stats"]["win"]
+                    .as_bool()
+                    .unwrap_or(false),
+                kills: game["participants"][0]["stats"]["kills"]
+                    .as_u64()
+                    .unwrap_or(0) as u32,
+                deaths: game["participants"][0]["stats"]["deaths"]
+                    .as_u64()
+                    .unwrap_or(0) as u32,
+                assists: game["participants"][0]["stats"]["assists"]
+                    .as_u64()
+                    .unwrap_or(0) as u32,
             });
         }
 
@@ -514,7 +576,10 @@ impl LcuClient {
             .map_err(|e| LcuError::Api(e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(LcuError::Api(format!("Failed to start replay download: {}", resp.status())));
+            return Err(LcuError::Api(format!(
+                "Failed to start replay download: {}",
+                resp.status()
+            )));
         }
 
         Ok(())
@@ -532,7 +597,10 @@ impl LcuClient {
             .ok_or(LcuError::Connection("Not connected".to_string()))?;
 
         let base_url = self.get_base_url()?;
-        let url = format!("{}/lol-replays/v1/rofls/{}/download/status", base_url, game_id);
+        let url = format!(
+            "{}/lol-replays/v1/rofls/{}/download/status",
+            base_url, game_id
+        );
 
         let resp = client
             .get(&url)
@@ -550,9 +618,12 @@ impl LcuClient {
             return Err(LcuError::Api("Failed to check replay status".to_string()));
         }
 
-        // Returns raw string like "downloading" or "complete"? 
+        // Returns raw string like "downloading" or "complete"?
         // API returns simple JSON usually. Let's treat as string for now.
-        let status = resp.text().await.map_err(|e| LcuError::Api(e.to_string()))?;
+        let status = resp
+            .text()
+            .await
+            .map_err(|e| LcuError::Api(e.to_string()))?;
         Ok(status.trim_matches('"').to_string())
     }
 
@@ -609,9 +680,16 @@ impl LcuClient {
             return Err(LcuError::Api("Failed to get game session".to_string()));
         }
 
-        let session: serde_json::Value = resp.json().await.map_err(|e| LcuError::Api(e.to_string()))?;
-        let team_one = session["gameData"]["teamOne"].as_array().ok_or(LcuError::Api("Invalid team data".to_string()))?;
-        let team_two = session["gameData"]["teamTwo"].as_array().ok_or(LcuError::Api("Invalid team data".to_string()))?;
+        let session: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| LcuError::Api(e.to_string()))?;
+        let team_one = session["gameData"]["teamOne"]
+            .as_array()
+            .ok_or(LcuError::Api("Invalid team data".to_string()))?;
+        let team_two = session["gameData"]["teamTwo"]
+            .as_array()
+            .ok_or(LcuError::Api("Invalid team data".to_string()))?;
 
         let mut players = Vec::new();
 

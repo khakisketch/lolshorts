@@ -88,7 +88,10 @@ impl CallbackServer {
         // Bind to address
         let addr = (Ipv4Addr::new(127, 0, 0, 1), self.port);
 
-        debug!("Callback server listening on http://localhost:{}", self.port);
+        debug!(
+            "Callback server listening on http://localhost:{}",
+            self.port
+        );
 
         // Start server with graceful shutdown signal
         let server = warp::serve(callback_route);
@@ -101,13 +104,10 @@ impl CallbackServer {
         let server_handle = tokio::spawn(server_task);
 
         // Wait for callback with timeout (2 minutes)
-        let callback = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            rx,
-        )
-        .await
-        .context("OAuth callback timeout (2 minutes)")?
-        .context("Failed to receive OAuth callback")?;
+        let callback = tokio::time::timeout(std::time::Duration::from_secs(120), rx)
+            .await
+            .context("OAuth callback timeout (2 minutes)")?
+            .context("Failed to receive OAuth callback")?;
 
         info!("OAuth callback received successfully");
 

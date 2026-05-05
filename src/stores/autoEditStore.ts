@@ -11,6 +11,7 @@ import {
   DurationOption,
   AutoEditStep,
   VideoError,
+  AutoEditMetadata,
 } from '@/types/autoEdit';
 
 interface AutoEditStore {
@@ -50,10 +51,12 @@ interface AutoEditStore {
   progress: AutoEditProgress | null;
   result: AutoEditResult | null;
   error: VideoError | null;
+  metadata: AutoEditMetadata;
   setJobId: (id: string | null) => void;
   setProgress: (progress: AutoEditProgress | null) => void;
   setResult: (result: AutoEditResult | null) => void;
   setError: (error: VideoError | null) => void;
+  setMetadata: (metadata: Partial<AutoEditMetadata>) => void;
 
   // Actions
   buildConfig: () => AutoEditConfig;
@@ -81,6 +84,12 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
 
   backgroundMusic: null,
   audioLevels: DEFAULT_AUDIO_LEVELS,
+
+  metadata: {
+    title: '',
+    caption: '',
+    tags: [],
+  },
 
   jobId: null,
   progress: null,
@@ -139,6 +148,10 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
 
   setError: (error) => set({ error }),
 
+  setMetadata: (metadata) => set({
+    metadata: { ...get().metadata, ...metadata },
+  }),
+
   // Build final config for backend
   buildConfig: (): AutoEditConfig => {
     const {
@@ -175,6 +188,11 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
     isEditingCanvas: false,
     backgroundMusic: null,
     audioLevels: DEFAULT_AUDIO_LEVELS,
+    metadata: {
+      title: '',
+      caption: '',
+      tags: [],
+    },
     jobId: null,
     progress: null,
     result: null,

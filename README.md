@@ -22,6 +22,10 @@
 
 이제 LoL 클라이언트를 켜지 않아도 전적을 검색하고, 리플레이를 실행하여 **'페이커'의 시점**으로 명장면을 추출할 수 있습니다.
 
+> **Readiness notice:** README의 기능 설명은 제품 방향과 현재 구현 범위를 설명합니다. 실제 LoL/리플레이 동작, YouTube 계정 업로드, GPU/오디오 캡처, Windows 설치/업데이트, 지원 워크플로, 결제/Toss/PRO 정책은 공개 준비 상태로 주장하기 전에 [Field QA 체크리스트](docs/FIELD_QA_COMMERCIAL_READINESS.md)와 [Service Readiness Policy](docs/SERVICE_READINESS_POLICY.md)의 현장 검증 증거가 필요합니다.
+
+> **Auth/Billing authority:** LoLShorts는 로컬 앱 데이터 저장소로 SQLite를 사용하지만, 인증/결제/PRO 권한의 source of truth는 로컬 DB가 아닙니다. Supabase Auth와 Supabase `user_licenses`/`subscriptions`/`payments`가 권한의 authoritative source이며, 현재 Toss/live checkout은 deferred 상태입니다.
+
 ---
 
 ## ✨ 주요 기능 (v1.2.0)
@@ -40,7 +44,7 @@
 
 ### ⚡ 4. 강력한 성능
 *   **하드웨어 가속**: NVIDIA(NVENC), AMD(AMF), Intel(QSV) 가속을 지원하여 프레임 드랍 없이 녹화합니다.
-*   **로컬 처리**: 모든 영상 분석과 편집은 사용자 PC에서 이루어지며, 데이터는 외부로 전송되지 않습니다.
+*   **로컬 처리 중심**: 영상 분석과 편집은 사용자 PC에서 처리되도록 설계되어 있습니다. 단, YouTube 업로드, 계정 흐름, 외부 API 연동, 사용자가 제출하는 지원/진단 자료는 선택한 데이터가 기기 밖으로 전송될 수 있습니다.
 
 ---
 
@@ -51,9 +55,9 @@
 - **League of Legends**: 설치 및 최신 업데이트 필요
 
 ### 설치 방법
-1. [Releases 페이지](https://github.com/KhakiSkech/lolshorts/releases/latest)에서 최신 인스톨러를 다운로드합니다.
+1. [Releases 페이지](https://github.com/KhakiSkech/lolshorts/releases/latest)에서 제공되는 설치 파일을 다운로드합니다. 설치 파일 유형과 서명 상태는 릴리스별로 확인해야 합니다.
    - **MSI Installer (추천)**: `LoLShorts_1.2.0_x64_en-US.msi`
-2. 파일을 실행하여 설치합니다. (FFmpeg가 자동으로 포함되어 있어 별도 설정이 필요 없습니다.)
+2. 파일을 실행하여 설치합니다. 배포 빌드는 FFmpeg 구성 요소를 포함하도록 설정되어 있지만, 공개 준비 상태는 별도 Windows 설치 검증으로 확인해야 합니다.
 3. 바탕화면의 **LoLShorts** 아이콘을 실행합니다.
 
 ---
@@ -76,11 +80,11 @@
 
 ## 🚀 배포 및 자동 업데이트 (Distribution)
 
-LoLShorts는 **GitHub Actions**와 **Tauri Updater**를 통해 자동 배포 및 업데이트 시스템을 갖추고 있습니다.
+LoLShorts는 **GitHub Actions**와 **Tauri Updater** 기반의 배포/업데이트 설정 경로를 제공합니다. 다만 빌드 또는 설정 문서는 공개용 서명 인스톨러, 자동 업데이트, 업그레이드, 롤백, 제거가 검증되었다는 증거가 아니며, 실제 Windows 현장 검증이 필요합니다.
 
 ### 업데이트 원리
-- 앱 실행 시 서버의 최신 버전을 확인합니다.
-- 새 버전이 있으면 사용자에게 알림을 띄우고, 승인 시 백그라운드에서 업데이트를 설치합니다.
+- 설정된 업데이트 채널이 있을 때 앱은 최신 버전 확인 흐름을 사용할 수 있습니다.
+- 새 버전 알림, 다운로드, 설치, 재시작, 롤백 동작은 서명된 배포 채널에서 별도 검증해야 합니다.
 
 ### 개발자 배포 가이드
 새 버전을 배포하려면 다음 단계를 따르세요:
@@ -93,7 +97,7 @@ LoLShorts는 **GitHub Actions**와 **Tauri Updater**를 통해 자동 배포 및
    git tag v1.2.1
    git push origin v1.2.1
    ```
-3. **자동 빌드**: GitHub Actions가 자동으로 빌드, 서명, 릴리스 생성을 수행합니다.
+3. **자동 빌드 설정**: GitHub Actions로 빌드, 서명, 릴리스 생성을 구성할 수 있습니다. 생성된 산출물은 공개 배포 전에 Field QA의 설치/업데이트 검증을 통과해야 합니다.
 
 ---
 
@@ -106,9 +110,39 @@ LoLShorts는 **GitHub Actions**와 **Tauri Updater**를 통해 자동 배포 및
 
 ---
 
+## 📚 문서
+
+### 사용자 문서
+
+- **[사용자 가이드 (한국어)](docs/USER_GUIDE.md)** - 앱 설치, 사용, 업로드 방법
+- **[자동편집 가이드](docs/AUTO_EDIT_GUIDE.md)** - 자동 영상 생성 기능 상세 설명
+- **[Canvas 튜토리얼](docs/CANVAS_TUTORIAL.md)** - 오버레이 및 브랜딩 가이드
+- **[오디오 믹싱](docs/AUDIO_MIXING.md)** - 배경음악 추가 및 음성 믹싱
+
+### 개발자 문서
+
+- **[개발 가이드](docs/DEVELOPMENT.md)** - 개발 환경 설정 및 빌드 방법
+- **[아키텍처](docs/ARCHITECTURE.md)** - 시스템 설계 및 모듈 구조
+- **[빌드 가이드](BUILD_GUIDE.md)** - 프로덕션 빌드 및 배포
+- **[트러블슈팅](docs/TROUBLESHOOTING.md)** - 런타임 문제 해결
+- **[Production Hardening Plan](docs/PRODUCTION_HARDENING_PLAN.md)** - production 제품화까지 남은 개발/검증 작업
+- **[Field QA 체크리스트](docs/FIELD_QA_COMMERCIAL_READINESS.md)** - 결제 키 활성화 전 현장 검증 항목
+- **[Service Readiness Policy](docs/SERVICE_READINESS_POLICY.md)** - 설치, 업데이트, 지원, 개인정보, FREE/PRO 정책의 검증 기준
+
+---
+
 ## 📄 라이선스
 
 이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
+
+---
+
+## 🙏 지원
+
+문제가 있거나 피드백을 원하시면:
+
+- **GitHub Issues**: [버그 리포트 및 기능 요청](https://github.com/KhakiSkech/lolshorts/issues)
+- **문서**: 위의 "문서" 섹션에서 가이드 참고
 
 <br>
 

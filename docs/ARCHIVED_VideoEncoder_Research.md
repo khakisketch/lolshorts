@@ -4,6 +4,8 @@
 **Date Archived**: 2025-01-04
 **Reason**: Implemented FFmpeg-based solution instead
 
+> **Readiness qualifier:** This archived research uses dependency/research language from an older recording decision. Any "Production Ready" or "100% functional and production-ready" wording below refers to the FFmpeg dependency/approach decision, not LoLShorts app Field QA readiness. Real LoL capture, audio, GPU, and Windows behavior still require E5 Field QA evidence before public readiness claims.
+
 ---
 
 ## Why This Was Archived
@@ -14,7 +16,7 @@ This document was created during Phase 0 to guide implementation of windows-capt
 3. Had private methods blocking implementation
 4. Would have required 4-7 hours of API investigation
 
-**Decision Made**: Implement production-ready FFmpeg-based recording system instead.
+**Decision Made**: Implement FFmpeg-based recording system instead. "Production-ready" here is historical dependency/research wording and not an app Field QA readiness claim.
 
 ## What Was Actually Implemented
 
@@ -28,15 +30,15 @@ See `src-tauri/src/recording/windows_backend.rs` for the complete implementation
 
 ## Benefits of FFmpeg Approach
 
-1. ✅ **Production Ready**: Mature, stable, battle-tested
-2. ✅ **Hardware Encoding**: Full NVENC/QSV/AMF support
+1. ✅ **Production Ready dependency/approach**: Mature, stable, battle-tested dependency choice; LoLShorts app readiness remains Field-QA-gated.
+2. ✅ **Hardware Encoding**: FFmpeg supports NVENC/QSV/AMF; full app GPU behavior still requires hardware-specific Field QA.
 3. ✅ **No API Complexity**: Well-documented CLI interface
 4. ✅ **Immediate Functionality**: Works out of the box
 5. ✅ **Reliable**: Used by millions of applications worldwide
 
 ## Implementation Status
 
-✅ **COMPLETE** - System is 100% functional and production-ready
+✅ **COMPLETE** - Historical research conclusion only. "100% functional and production-ready" refers to the selected dependency/approach in this archived note, not current LoLShorts app Field QA readiness.
 
 See:
 - `docs/PRODUCTION_STATUS.md` - Current system status

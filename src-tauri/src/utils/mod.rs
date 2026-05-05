@@ -1,5 +1,13 @@
+pub mod audit;
 pub mod cleanup;
 pub mod commands;
+pub mod data_export;
+pub mod env_validation;
 pub mod ffmpeg;
+pub mod ffmpeg_pool;
+pub mod health;
 pub mod metrics;
+pub mod process;
+pub mod rate_limit;
 pub mod security;
+pub mod system_check;

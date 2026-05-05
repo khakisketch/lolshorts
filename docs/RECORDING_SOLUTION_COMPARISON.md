@@ -201,9 +201,9 @@ let encoder = VideoEncoder::new(/* 4 unknown parameters */)?;
 
 ### Why FFmpeg is the Best Choice
 
-1. **Production Ready**: Used by YouTube, Netflix, Twitch, OBS Studio
+1. **Production Ready dependency, not app Field QA**: FFmpeg is used by YouTube, Netflix, Twitch, OBS Studio, but LoLShorts recording readiness still requires real field evidence.
 2. **Zero Risk**: Mature, stable, no breaking changes
-3. **Hardware Encoding**: Full NVENC/QSV/AMF support
+3. **Hardware Encoding**: FFmpeg exposes NVENC/QSV/AMF support. Full GPU behavior in LoLShorts still requires hardware-specific Field QA.
 4. **Easy Deployment**: Single binary, no compilation issues
 5. **Excellent Documentation**: 20 years of Stack Overflow answers
 6. **Error Handling**: Mature, predictable error behavior
@@ -377,8 +377,8 @@ taskkill /F /IM ffmpeg.exe
 
 ### Technical Debt
 
-- **None**: FFmpeg approach is production-ready
-- **No Refactoring Needed**: Current implementation is optimal
+- **None identified in this design comparison**: FFmpeg approach was selected as the preferred implementation path, but production-ready recording still requires Field QA.
+- **No Refactoring Needed for the selected approach**: Current implementation is considered suitable by this comparison, not proven optimal across real hardware.
 
 ---
 
@@ -388,8 +388,8 @@ taskkill /F /IM ffmpeg.exe
 
 1. **Pragmatic Decision**: Chose FFmpeg over alpha API
 2. **Fast Implementation**: Zero compilation issues
-3. **Production Ready**: Mature, stable solution
-4. **Hardware Encoding**: Full GPU support out-of-the-box
+3. **Production-ready design direction**: Mature, stable solution selected for implementation. Field readiness still needs real capture evidence.
+4. **Hardware Encoding**: GPU support is available through FFmpeg paths, but full GPU behavior needs hardware-specific Field QA.
 
 ### What to Avoid ❌
 
@@ -403,7 +403,6 @@ taskkill /F /IM ffmpeg.exe
 
 ---
 
-**Status**: FFmpeg-based recording is **PRODUCTION READY** ✅
+**Status**: FFmpeg-based recording is the selected implementation path. **PRODUCTION READY** is a historical/design claim only until Field QA validates real LoL capture, audio, and GPU behavior.
 **Next Steps**: Integration testing with League of Legends
-**Confidence**: **HIGH** - Battle-tested solution
-
+**Confidence**: **HIGH for the design choice** - Battle-tested dependency, with app-specific readiness still gated by Field QA.

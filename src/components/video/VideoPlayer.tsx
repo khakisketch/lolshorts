@@ -20,6 +20,8 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils';
 
 interface VideoPlayerProps {
   src: string;
@@ -69,10 +71,10 @@ export function VideoPlayer({
         setIsPlaying(true);
       }
     } catch (error) {
-      console.error('Failed to toggle playback:', error);
+      logger.error('Failed to toggle playback:', error);
       toast({
         title: t('video.errors.playbackFailed'),
-        description: String(error),
+        description: getErrorMessage(error),
         variant: 'destructive',
       });
     }
@@ -209,6 +211,14 @@ export function VideoPlayer({
           e.preventDefault();
           toggleMute();
           break;
+        case 'ArrowUp':
+          e.preventDefault();
+          handleVolumeChange([Math.min(1, volume + 0.05)]);
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          handleVolumeChange([Math.max(0, volume - 0.05)]);
+          break;
         case 'f':
           e.preventDefault();
           toggleFullscreen();
@@ -243,7 +253,7 @@ export function VideoPlayer({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, skip, toggleMute, toggleFullscreen, resetPlaybackRate, onClose]);
+  }, [togglePlay, skip, toggleMute, toggleFullscreen, resetPlaybackRate, onClose, volume, handleVolumeChange]);
 
   return (
     <div

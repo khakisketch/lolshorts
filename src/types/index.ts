@@ -83,6 +83,14 @@ export interface HotkeySettings {
   delete_last_clip: string;
 }
 
+// Storage Settings
+export interface StorageSettings {
+  auto_delete_enabled: boolean;
+  auto_delete_days: number;
+  max_storage_gb: number;
+  delete_exported_clips: boolean;
+}
+
 // Main Recording Settings Type
 export interface RecordingSettings {
   video: VideoSettings;
@@ -91,11 +99,80 @@ export interface RecordingSettings {
   game_mode: GameModeSettings;
   clip_timing: ClipTimingSettings;
   hotkeys: HotkeySettings;
+  storage: StorageSettings;
   auto_start_with_league: boolean;
   minimize_to_tray: boolean;
   show_notifications: boolean;
   show_replay_popup: boolean;
+  crash_reporting_enabled: boolean;
+  overlay_enabled: boolean;
+}
+
+// Recording Readiness Types
+export interface ReadinessComponent {
+  status: 'ok' | 'warning' | 'error';
+  message: string;
+}
+
+export interface ReadinessBlocker {
+  id: string;
+  component?: string;
+  message: string;
+  action?: string;
+  severity: 'critical' | 'warning';
+}
+
+export interface RecordingReadiness {
+  ready: boolean;
+  blockers: ReadinessBlocker[];
+  component_statuses: {
+    ffmpeg: ReadinessComponent;
+    audio: ReadinessComponent;
+    disk: ReadinessComponent;
+    lcu: ReadinessComponent;
+    gpu: ReadinessComponent;
+  };
 }
 
 // UI component helper type (used in RecordingControls.tsx for simplified settings)
 export type VideoQuality = "low" | "medium" | "high" | "ultra";
+
+// Recommended Settings (matches Rust RecommendedSettings in platform_config/types.rs)
+export interface VideoRecommendations {
+  recommended_encoder: EncoderPreference;
+  recommended_codec: string;
+  recommended_bitrate_kbps: number;
+  recommended_resolution: string;
+  recommended_frame_rate: string;
+  maximum_recording_hours: number;
+}
+
+export interface AudioRecommendations {
+  recommended_sample_rate: string;
+  recommended_bitrate: string;
+  max_channels: number;
+  enable_microphone_by_default: boolean;
+  enable_system_audio_by_default: boolean;
+}
+
+export interface PerformanceRecommendations {
+  enable_hardware_acceleration: boolean;
+  recommended_buffer_size_mb: number;
+  recommended_temp_cleanup_interval_minutes: number;
+  recommended_concurrent_clips: number;
+  enable_performance_monitoring: boolean;
+}
+
+export interface StorageRecommendations {
+  recommended_clips_directory: string;
+  minimum_free_space_gb: number;
+  recommended_cleanup_threshold_gb: number;
+  enable_auto_cleanup: boolean;
+}
+
+export interface RecommendedSettings {
+  video: VideoRecommendations;
+  audio: AudioRecommendations;
+  performance: PerformanceRecommendations;
+  storage: StorageRecommendations;
+}

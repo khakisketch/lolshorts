@@ -138,7 +138,8 @@
     "timeline": {
       "title": "Časová osa",
       "addClip": "Přidat klip",
-      "removeClip": "Odebrat klip"
+      "removeClip": "Odebrat klip",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "Oříznout",
@@ -152,7 +153,8 @@
       "title": "Export",
       "quality": "Kvalita",
       "format": "Formát",
-      "exportVideo": "Exportovat video"
+      "exportVideo": "Exportovat video",
+      "noClipSourcePath": "No clip source path available"
     },
     "selectGameTitle": "Select a Game to Edit",
     "selectGameDescription": "Choose a game from your recorded sessions to start editing",
@@ -234,6 +236,18 @@
       "upload": "Upload",
       "history": "History",
       "account": "Account"
+    },
+    "schedule": {
+      "scheduleButton": "Naplánovat",
+      "confirmSchedule": "Potvrdit plán",
+      "publishAt": "Zveřejnit v",
+      "publishAtHint": "Nechejte prázdné pro zařazení do fronty bez doby zveřejnění. YouTube vyžaduje alespoň 15 minut dopředu.",
+      "scheduleSuccessful": "Nahrávání úspěšně naplánováno!",
+      "scheduleFailed": "Naplánování nahrávání selhalo",
+      "queueTitle": "Fronta nahrávání",
+      "scheduledFor": "Naplánováno na",
+      "queued": "Ve frontě",
+      "cancelScheduled": "Zrušit naplánované nahrání"
     }
   },
   "settings": {

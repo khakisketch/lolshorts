@@ -1,6 +1,6 @@
 # LoLShorts Production Build Guide
 
-Complete guide for building production-ready installers for LoLShorts.
+Complete guide for building installer artifacts for LoLShorts. Building or signing an artifact is not the same as public installer or updater readiness. Public readiness still requires the field checks in `docs/FIELD_QA_COMMERCIAL_READINESS.md` and the service-readiness limits in `docs/SERVICE_READINESS_POLICY.md`.
 
 ## Prerequisites
 
@@ -90,6 +90,21 @@ DATABASE_URL=sqlite://lolshorts.db
 ```
 
 ### Step 4: Build Production Release
+
+Before building installer artifacts for a candidate, run the local verification gates:
+
+```bash
+npm run verify:frontend
+npm run audit:runtime
+npm run audit:moderate
+
+cd src-tauri
+cargo check
+cargo test
+cd ..
+```
+
+Passing these commands only proves local automated behavior. It does not authorize public readiness, payment keys, paid access, or live Toss integration.
 
 **Development Build (Testing)**
 ```bash
@@ -219,6 +234,8 @@ signtool sign /f certificate.pfx /p password /t http://timestamp.digicert.com `
 ```
 
 ## Testing Installers
+
+The checklist below is a build validation aid. Do not use it by itself to claim signed installer, updater, clean install, upgrade, rollback, or uninstall readiness. Those claims require real Windows field evidence recorded in `docs/FIELD_QA_COMMERCIAL_READINESS.md`.
 
 ### Test Checklist
 

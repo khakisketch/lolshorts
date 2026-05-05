@@ -5,6 +5,27 @@
  * 사용자 친화적인 번역 키로 변환합니다.
  */
 
+// 백엔드 에러 코드 → i18n 키 매핑
+const BACKEND_ERROR_MAP: Record<string, string> = {
+  'DISK_FULL': 'errors.diskFull',
+  'FFMPEG_NOT_FOUND': 'errors.ffmpegNotFound',
+  'NETWORK_ERROR': 'errors.networkError',
+  'AUTH_EXPIRED': 'errors.authExpired',
+  'PROCESS_TIMEOUT': 'errors.processTimeout',
+  'RATE_LIMITED': 'errors.rateLimited',
+  'OUT_OF_MEMORY': 'errors.outOfMemory',
+  'CORRUPTED_FILE': 'errors.corruptedFile',
+  'DEVICE_DISCONNECTED': 'errors.deviceDisconnected',
+  'SERVICE_UNAVAILABLE': 'errors.serviceUnavailable',
+};
+
+/**
+ * 백엔드 에러 코드를 i18n 키로 변환
+ */
+export function mapBackendError(code: string): string {
+  return BACKEND_ERROR_MAP[code] || 'errors.unknown';
+}
+
 // Supabase 에러 코드 → i18n 키 매핑
 const AUTH_ERROR_MAP: Record<string, string> = {
   // Supabase Auth 에러 코드

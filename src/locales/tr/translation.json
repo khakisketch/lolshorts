@@ -138,7 +138,8 @@
     "timeline": {
       "title": "Zaman Çizelgesi",
       "addClip": "Klip Ekle",
-      "removeClip": "Klip Kaldır"
+      "removeClip": "Klip Kaldır",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "Kırp",
@@ -152,7 +153,8 @@
       "title": "Dışa Aktar",
       "quality": "Kalite",
       "format": "Format",
-      "exportVideo": "Videoyu Dışa Aktar"
+      "exportVideo": "Videoyu Dışa Aktar",
+      "noClipSourcePath": "No clip source path available"
     },
     "selectGameTitle": "Select a Game to Edit",
     "selectGameDescription": "Choose a game from your recorded sessions to start editing",
@@ -234,6 +236,18 @@
       "upload": "Upload",
       "history": "History",
       "account": "Account"
+    },
+    "schedule": {
+      "scheduleButton": "Zamanla",
+      "confirmSchedule": "Zamanlamayı onayla",
+      "publishAt": "Yayınlama zamanı",
+      "publishAtHint": "Yayınlama zamanı olmadan sıraya eklemek için boş bırakın. YouTube en az 15 dakika ileri tarih gerektirir.",
+      "scheduleSuccessful": "Yükleme başarıyla zamanlandı!",
+      "scheduleFailed": "Yükleme zamanlanamadı",
+      "queueTitle": "Yükleme sırası",
+      "scheduledFor": "Zamanlanan",
+      "queued": "Sırada",
+      "cancelScheduled": "Zamanlanmış yüklemeyi iptal et"
     }
   },
   "settings": {

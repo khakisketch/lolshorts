@@ -1,100 +1,20 @@
 use crate::lcu::{LcuClient, LcuError};
-use crate::recording::live_client::{LiveClientMonitor, EventTrigger, GameEvent};
 use crate::recording::auto_clip_manager::AutoClipManager;
+use crate::recording::live_client::{
+    check_live_client_basic, EventTrigger, GameEvent, LiveClientMonitor,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn, debug};
-
-/// Basic game info from Live Client API
-#[derive(Debug, Clone)]
-struct LiveClientBasicInfo {
-    summoner_name: String,
-    champion_name: String,
-    game_time: f32,
-}
-
-/// Check Live Client API (port 2999) directly for game detection
-/// This is more reliable than LCU gameflow-phase for practice mode, custom games, etc.
-async fn check_live_client_api() -> Option<LiveClientBasicInfo> {
-    let client = match reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_millis(2000)) // Increased timeout for reliability
-        .build() {
-            Ok(c) => c,
-            Err(e) => {
-                debug!("Failed to build HTTP client: {}", e);
-                return None;
-            }
-        };
-
-    let response = match client
-        .get("https://127.0.0.1:2999/liveclientdata/allgamedata")
-        .send()
-        .await {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("Live Client API request failed: {}", e);
-                return None;
-            }
-        };
-
-    if !response.status().is_success() {
-        debug!("Live Client API returned status: {}", response.status());
-        return None;
-    }
-
-    let json: serde_json::Value = match response.json().await {
-        Ok(j) => j,
-        Err(e) => {
-            debug!("Failed to parse Live Client API response: {}", e);
-            return None;
-        }
-    };
-
-    // Extract basic info
-    let summoner_name = json["activePlayer"]["summonerName"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-
-    // If summoner name is empty, game is still loading
-    if summoner_name.is_empty() {
-        debug!("Live Client API: summoner name is empty (game loading?)");
-        return None;
-    }
-
-    // Champion name is in allPlayers array, not activePlayer
-    // Find the current player by matching summonerName
-    let champion_name = json["allPlayers"]
-        .as_array()
-        .and_then(|players| {
-            players.iter().find(|p| {
-                p["summonerName"].as_str() == Some(&summoner_name)
-            })
-        })
-        .and_then(|player| player["championName"].as_str())
-        .unwrap_or("Unknown")
-        .to_string();
-
-    let game_time = json["gameData"]["gameTime"]
-        .as_f64()
-        .unwrap_or(0.0) as f32;
-
-    info!("✅ Live Client API: {} playing {} (time: {:.0}s)", summoner_name, champion_name, game_time);
-
-    Some(LiveClientBasicInfo {
-        summoner_name,
-        champion_name,
-        game_time,
-    })
-}
+use tokio::task::JoinHandle;
+use tracing::{debug, error, info, warn};
 
 /// Game recording mode
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GameMode {
     Live,
+    TFT,
     Replay(Option<String>), // Option<String> = Target Summoner Name
 }
 
@@ -129,6 +49,8 @@ pub struct GameStateMonitor {
     game_mode: Arc<RwLock<GameMode>>,
     /// Unified game status for frontend consumption
     unified_status: Arc<RwLock<UnifiedGameStatus>>,
+    /// Handle for the live client monitoring task (spawned per game session)
+    live_monitor_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
 }
 
 impl GameStateMonitor {
@@ -140,6 +62,7 @@ impl GameStateMonitor {
             is_monitoring: Arc::new(RwLock::new(false)),
             last_game_state: Arc::new(RwLock::new(false)),
             game_mode: Arc::new(RwLock::new(GameMode::Live)),
+            live_monitor_handle: Arc::new(RwLock::new(None)),
             unified_status: Arc::new(RwLock::new(UnifiedGameStatus {
                 lcu_connected: false,
                 in_game: false,
@@ -172,8 +95,20 @@ impl GameStateMonitor {
         }
     }
 
+    /// Get the currently selected replay target, if replay mode is active.
+    pub async fn get_replay_target(&self) -> Option<String> {
+        match &*self.game_mode.read().await {
+            GameMode::Replay(target) => target.clone(),
+            _ => None,
+        }
+    }
+
     /// Start monitoring game state
-    pub async fn start_monitoring<F1, F2, Fut1, Fut2>(&self, on_game_start: F1, on_game_end: F2) -> Result<(), LcuError>
+    pub async fn start_monitoring<F1, F2, Fut1, Fut2>(
+        &self,
+        on_game_start: F1,
+        on_game_end: F2,
+    ) -> Result<(), LcuError>
     where
         F1: Fn() -> Fut1 + Send + Sync + 'static + Clone,
         F2: Fn() -> Fut2 + Send + Sync + 'static + Clone,
@@ -204,6 +139,7 @@ impl GameStateMonitor {
         let auto_clip_manager = Arc::clone(&self.auto_clip_manager);
         let game_mode_arc = Arc::clone(&self.game_mode);
         let unified_status_arc = Arc::clone(&self.unified_status);
+        let live_monitor_handle_arc = Arc::clone(&self.live_monitor_handle);
 
         // Start monitoring task
         tokio::spawn(async move {
@@ -211,7 +147,7 @@ impl GameStateMonitor {
             const MAX_RETRIES: u32 = 5;
             const BASE_RETRY_DELAY: Duration = Duration::from_secs(2);
             const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
-            const CHECK_INTERVAL: Duration = Duration::from_secs(3); // Check every 3 seconds
+            const CHECK_INTERVAL: Duration = Duration::from_secs(1); // Check every 1 second for faster detection
 
             // Helper function for exponential backoff
             fn calculate_retry_delay(retry_count: u32) -> Duration {
@@ -234,8 +170,14 @@ impl GameStateMonitor {
                 }
 
                 // Try to connect to LCU if not connected
-                let mut client = lcu_client.write().await;
-                if !client.is_connected() {
+                // FIX #5: Drop write lock before network calls to avoid holding it too long
+                let lcu_connected = {
+                    let client = lcu_client.read().await;
+                    client.is_connected()
+                };
+
+                if !lcu_connected {
+                    let mut client = lcu_client.write().await;
                     #[allow(unused_assignments)]
                     match client.connect().await {
                         Ok(()) => {
@@ -243,12 +185,19 @@ impl GameStateMonitor {
                             retry_count = 0; // Reset for next potential failure
                         }
                         Err(e) => {
+                            drop(client); // Drop write lock before sleeping
                             retry_count += 1;
-                            debug!("Failed to connect to League client (attempt {}): {}", retry_count, e);
+                            debug!(
+                                "Failed to connect to League client (attempt {}): {}",
+                                retry_count, e
+                            );
 
                             if retry_count >= MAX_RETRIES {
                                 let delay = calculate_retry_delay(retry_count);
-                                warn!("Max retries reached, waiting {:.1} seconds before retry", delay.as_secs_f64());
+                                warn!(
+                                    "Max retries reached, waiting {:.1} seconds before retry",
+                                    delay.as_secs_f64()
+                                );
                                 tokio::time::sleep(delay).await;
                                 retry_count = 0; // Reset after max retries
                             } else {
@@ -264,6 +213,7 @@ impl GameStateMonitor {
                 // Update LCU connection status
                 {
                     let mut status = unified_status_arc.write().await;
+                    let client = lcu_client.read().await;
                     status.lcu_connected = client.is_connected();
                 }
 
@@ -273,21 +223,28 @@ impl GameStateMonitor {
 
                 let (in_game, live_client_data) = {
                     // Try Live Client API (port 2999) - this is the most reliable method
-                    let live_api_check = check_live_client_api().await;
+                    let live_api_check = check_live_client_basic().await;
 
                     if let Some(data) = live_api_check {
-                        debug!("✅ Live Client API detected game: player={}", data.summoner_name);
+                        debug!(
+                            "✅ Live Client API detected game: player={}",
+                            data.summoner_name
+                        );
                         (true, Some(data))
                     } else {
-                        // Fall back to LCU gameflow-phase
+                        // Fall back to LCU gameflow-phase (use read lock for query)
+                        let client = lcu_client.read().await;
                         match client.get_game_session().await {
                             Ok(session) => {
                                 use crate::lcu::GameFlowPhase;
-                                let lcu_in_game = matches!(session.phase, GameFlowPhase::InProgress | GameFlowPhase::Reconnect);
+                                let lcu_in_game = matches!(
+                                    session.phase,
+                                    GameFlowPhase::InProgress | GameFlowPhase::Reconnect
+                                );
                                 debug!("LCU API returned: in_game = {}", lcu_in_game);
                                 (lcu_in_game, None)
                             }
-                            Err(_) => (false, None)
+                            Err(_) => (false, None),
                         }
                     }
                 };
@@ -321,19 +278,30 @@ impl GameStateMonitor {
 
                     match LiveClientMonitor::new() {
                         Ok(monitor) => {
-                            // Auto-detect if this is a replay or live game
-                            let detected_mode = match monitor.detect_replay_mode().await {
-                                Some(true) => {
-                                    info!("🎬 Replay mode detected automatically");
-                                    GameMode::Replay(None)
-                                }
-                                Some(false) => {
-                                    info!("🎮 Live game mode detected");
-                                    GameMode::Live
-                                }
-                                None => {
-                                    info!("⚠️ Could not detect game mode, defaulting to Live");
-                                    GameMode::Live
+                            // Check TFT first via Live Client API game_mode field
+                            let tft_check = check_live_client_basic().await;
+                            let is_tft = tft_check
+                                .as_ref()
+                                .is_some_and(|info| info.game_mode.contains("TFT"));
+
+                            let detected_mode = if is_tft {
+                                info!("🎯 TFT (팀파이트 택틱스) 모드 감지됨");
+                                GameMode::TFT
+                            } else {
+                                // Auto-detect if this is a replay or live game
+                                match monitor.detect_replay_mode().await {
+                                    Some(true) => {
+                                        info!("🎬 Replay mode detected automatically");
+                                        GameMode::Replay(None)
+                                    }
+                                    Some(false) => {
+                                        info!("🎮 Live game mode detected");
+                                        GameMode::Live
+                                    }
+                                    None => {
+                                        info!("⚠️ Could not detect game mode, defaulting to Live");
+                                        GameMode::Live
+                                    }
                                 }
                             };
 
@@ -350,59 +318,86 @@ impl GameStateMonitor {
                                 status.is_recording = true;
                             }
 
+                            // Set game mode on clip manager for filtering
+                            if let Some(ref data) = live_client_data {
+                                auto_clip_manager
+                                    .set_game_mode(data.game_mode.clone(), None)
+                                    .await;
+                            }
+
+                            // Start FFmpeg recording BEFORE event monitoring
+                            if let Err(e) = on_game_start().await {
+                                error!("Failed to start recording on game start: {}", e);
+                            }
+
+                            // FIX #1: Spawn monitoring in tokio::spawn so it doesn't block
+                            // the polling loop. Store the JoinHandle to abort on game end.
                             let mut monitor = monitor;
-                            if let Err(e) = monitor.start_monitoring(
-                                move |trigger: EventTrigger, event: GameEvent| {
-                                    let current_mode = game_mode_clone.clone();
+                            let monitor_handle: JoinHandle<()> = tokio::spawn(async move {
+                                if let Err(e) = monitor.start_monitoring(
+                                    move |trigger: EventTrigger, event: GameEvent| {
+                                        let current_mode = game_mode_clone.clone();
 
-                                    info!("🎯 Game event detected: {:?}", trigger);
+                                        info!("🎯 Game event detected: {:?}", trigger);
 
-                                    let auto_clip_manager = Arc::clone(&auto_clip_manager_clone);
-                                    let unified_status = Arc::clone(&unified_status_clone);
-                                    tokio::spawn(async move {
-                                        let mode = current_mode.read().await;
-                                        let should_record = match &*mode {
-                                            GameMode::Live => true,
-                                            GameMode::Replay(target) => {
-                                                if target.is_some() {
-                                                    true
-                                                } else {
-                                                    warn!("Replay event ignored: No target selected");
-                                                    false
+                                        let auto_clip_manager = Arc::clone(&auto_clip_manager_clone);
+                                        let unified_status = Arc::clone(&unified_status_clone);
+                                        tokio::spawn(async move {
+                                            let mode = current_mode.read().await;
+                                            let should_record = match &*mode {
+                                                GameMode::Live => true,
+                                                GameMode::TFT => false, // TFT: no event-based auto-clip
+                                                GameMode::Replay(target) => {
+                                                    if target.is_some() {
+                                                        true
+                                                    } else {
+                                                        warn!("Replay event ignored: No target selected");
+                                                        false
+                                                    }
+                                                }
+                                            };
+
+                                            if should_record {
+                                                info!("🎥 Recording event for target");
+                                                if let Err(e) = auto_clip_manager.handle_game_event(trigger, event).await {
+                                                    error!("Failed to handle game event: {}", e);
                                                 }
                                             }
-                                        };
 
-                                        if should_record {
-                                            info!("🎥 Recording event for target");
-                                            if let Err(e) = auto_clip_manager.handle_game_event(trigger, event).await {
-                                                error!("Failed to handle game event: {}", e);
-                                            }
-                                        }
-
-                                        // Keep unified status updated with recording state
-                                        let mut status = unified_status.write().await;
-                                        status.is_recording = true;
-                                    });
+                                            // Keep unified status updated with recording state
+                                            let mut status = unified_status.write().await;
+                                            status.is_recording = true;
+                                        });
+                                    }
+                                ).await {
+                                    warn!("Live Client monitoring ended: {}", e);
                                 }
-                            ).await {
-                                warn!("Failed to start Live Client monitoring: {}", e);
-                            } else {
-                                info!("✅ Live Client API connected successfully");
-                                *live_client_guard = Some(monitor);
+                            });
+
+                            // Store the handle so we can abort it on game end
+                            {
+                                let mut handle_guard = live_monitor_handle_arc.write().await;
+                                *handle_guard = Some(monitor_handle);
                             }
+                            info!("✅ Live Client API monitoring spawned successfully");
+                            *live_client_guard = None; // monitor moved into spawn
                         }
                         Err(e) => {
                             warn!("Failed to initialize Live Client Monitor: {}", e);
                         }
                     }
-
-                    if let Err(e) = on_game_start().await {
-                        error!("Failed to start recording on game start: {}", e);
-                    }
                 } else if !in_game && *last_state {
                     // Game ended - stop Live Client Monitor
                     info!("⏹️ Game ended. Stopping automatic recording...");
+
+                    // FIX #1: Abort the spawned monitoring task before game end cleanup
+                    {
+                        let mut handle_guard = live_monitor_handle_arc.write().await;
+                        if let Some(handle) = handle_guard.take() {
+                            handle.abort();
+                            info!("Live Client monitoring task aborted");
+                        }
+                    }
 
                     // Stop Live Client Monitor
                     let mut live_client_guard = live_client.write().await;
@@ -414,6 +409,9 @@ impl GameStateMonitor {
                         let mut mode = game_mode_arc.write().await;
                         *mode = GameMode::Live;
                     }
+
+                    // Reset game mode on clip manager
+                    auto_clip_manager.set_game_mode(String::new(), None).await;
 
                     // Reset unified status
                     {

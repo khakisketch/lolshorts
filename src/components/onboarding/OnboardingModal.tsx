@@ -18,6 +18,8 @@ import {
   ArrowRight,
   ArrowLeft,
   Check,
+  HardDrive,
+  Play,
 } from 'lucide-react';
 
 const ONBOARDING_KEY = 'lolshorts_onboarding_completed';
@@ -45,11 +47,25 @@ const steps: OnboardingStep[] = [
     tips: ['onboarding.connect.tip1', 'onboarding.connect.tip2'],
   },
   {
+    id: 'storage',
+    icon: <HardDrive className="w-16 h-16 text-orange-500" />,
+    titleKey: 'onboarding.storage.title',
+    descriptionKey: 'onboarding.storage.description',
+    tips: ['onboarding.storage.tip1', 'onboarding.storage.tip2'],
+  },
+  {
     id: 'record',
     icon: <Video className="w-16 h-16 text-red-500" />,
     titleKey: 'onboarding.record.title',
     descriptionKey: 'onboarding.record.description',
     tips: ['onboarding.record.tip1', 'onboarding.record.tip2'],
+  },
+  {
+    id: 'replay',
+    icon: <Play className="w-16 h-16 text-cyan-500" />,
+    titleKey: 'onboarding.replay.title',
+    descriptionKey: 'onboarding.replay.description',
+    tips: ['onboarding.replay.tip1', 'onboarding.replay.tip2'],
   },
   {
     id: 'edit',
@@ -66,6 +82,17 @@ const steps: OnboardingStep[] = [
     tips: ['onboarding.upload.tip1'],
   },
 ];
+
+const FALLBACKS: Record<string, string> = {
+  'onboarding.storage.title': 'Storage Setup',
+  'onboarding.storage.description': 'Ensure you have enough disk space for your recordings.',
+  'onboarding.storage.tip1': 'Check your available disk space in the Dashboard.',
+  'onboarding.storage.tip2': 'You can change the save location in Settings.',
+  'onboarding.replay.title': 'Replay Workflow',
+  'onboarding.replay.description': 'Download and watch replays to capture specific highlights.',
+  'onboarding.replay.tip1': 'Use the Replays tab to find your recent games.',
+  'onboarding.replay.tip2': 'Select a target player to record their perspective.',
+};
 
 export function OnboardingModal() {
   const { t } = useTranslation();
@@ -133,11 +160,11 @@ export function OnboardingModal() {
           </div>
 
           <DialogTitle className="text-2xl">
-            {t(step.titleKey)}
+            {t(step.titleKey, FALLBACKS[step.titleKey] ?? step.titleKey)}
           </DialogTitle>
 
           <DialogDescription className="text-base max-w-sm">
-            {t(step.descriptionKey)}
+            {t(step.descriptionKey, FALLBACKS[step.descriptionKey] ?? step.descriptionKey)}
           </DialogDescription>
 
           {step.tips && step.tips.length > 0 && (
@@ -148,7 +175,7 @@ export function OnboardingModal() {
                   className="flex items-start gap-2 text-sm text-left p-3 bg-muted/30 rounded-lg"
                 >
                   <Check className="w-4 h-4 text-green-500 mt-0.5 shrink-0" />
-                  <span>{t(tipKey)}</span>
+                  <span>{t(tipKey, FALLBACKS[tipKey] ?? tipKey)}</span>
                 </div>
               ))}
             </div>

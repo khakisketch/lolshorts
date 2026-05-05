@@ -166,7 +166,8 @@
     "timeline": {
       "title": "タイムライン",
       "addClip": "クリップを追加",
-      "removeClip": "クリップを削除"
+      "removeClip": "クリップを削除",
+      "noThumbnail": "No thumbnail"
     },
     "tools": {
       "trim": "トリミング",
@@ -180,7 +181,8 @@
       "title": "エクスポート",
       "quality": "品質",
       "format": "形式",
-      "exportVideo": "動画をエクスポート"
+      "exportVideo": "動画をエクスポート",
+      "noClipSourcePath": "No clip source path available"
     }
   },
   "autoEdit": {
@@ -249,6 +251,18 @@
       "used": "使用：{{used}} / {{total}}",
       "remaining": "残り{{count}}回のアップロード",
       "resetTime": "{{time}}後にリセット"
+    },
+    "schedule": {
+      "scheduleButton": "スケジュール",
+      "confirmSchedule": "スケジュールを確認",
+      "publishAt": "公開日時",
+      "publishAtHint": "公開時刻なしでキューに追加するには空白のままにします。YouTubeは最低15分先の時刻が必要です。",
+      "scheduleSuccessful": "アップロードが正常にスケジュールされました！",
+      "scheduleFailed": "アップロードのスケジュール失敗",
+      "queueTitle": "アップロードキュー",
+      "scheduledFor": "スケジュール日時",
+      "queued": "キュー中",
+      "cancelScheduled": "スケジュールされたアップロードをキャンセル"
     }
   },
   "settings": {

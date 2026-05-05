@@ -6,7 +6,6 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -21,23 +20,25 @@ import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Play, Trash2, Edit, Download, Search, Filter, Eye, Film, SearchX } from 'lucide-react';
 import { storageApi } from '@/api/storage';
-import { Clip, Game } from '@/types/storage';
+import { ClipMetadata } from '@/types/storage';
 import { videoApi } from '@/api/video';
 import { utilsApi } from '@/api/utils';
 import { toast } from '@/components/ui/use-toast';
 import { VideoModal } from './video/VideoModal';
+import { logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils';
 
 // Clip and Game interfaces removed (imported from api)
 
 export function ClipLibrary() {
   const { t } = useTranslation();
-  const [clips, setClips] = useState<Clip[]>([]);
-  const [games, setGames] = useState<Game[]>([]);
-  const [selectedGame, setSelectedGame] = useState<string | null>(null); // Change type to string | null
+  const [clips, setClips] = useState<ClipMetadata[]>([]);
+  const [games, setGames] = useState<string[]>([]);
+  const [selectedGame, setSelectedGame] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterPriority, setFilterPriority] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(false);
-  const [thumbnailGeneration, setThumbnailGeneration] = useState<Set<number>>(new Set());
+  const [thumbnailGeneration, setThumbnailGeneration] = useState<Set<string>>(new Set());
 
   // Video player state
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
@@ -51,13 +52,13 @@ export function ClipLibrary() {
       setGames(gameList);
 
       if (gameList.length > 0) {
-        setSelectedGame(gameList[0].game_id); // game_id is string
+        setSelectedGame(gameList[0]);
       }
     } catch (error) {
-      console.error('Failed to load games:', error);
+      logger.error('Failed to load games:', error);
       toast({
         title: t('clips.errors.loadGamesFailed'),
-        description: String(error),
+        description: getErrorMessage(error),
         variant: 'destructive',
       });
     } finally {
@@ -65,12 +66,12 @@ export function ClipLibrary() {
     }
   }, [t]);
 
-  const generateClipThumbnail = async (clip: Clip): Promise<string | null> => {
+  const generateClipThumbnail = async (clip: ClipMetadata): Promise<string | null> => {
     try {
       const thumbnailPath = await videoApi.generateClipThumbnail(clip.file_path);
       return thumbnailPath;
     } catch (error) {
-      console.error('Failed to generate thumbnail for clip', clip.id, ':', error);
+      logger.error('Failed to generate thumbnail for clip', clip.file_path, ':', error);
       return null;
     }
   };
@@ -87,13 +88,13 @@ export function ClipLibrary() {
 
       // Then generate thumbnails for clips that don't have them yet
       clipList.forEach(clip => {
-        setThumbnailGeneration(prev => new Set(prev).add(clip.id));
+        setThumbnailGeneration(prev => new Set(prev).add(clip.file_path));
 
         generateClipThumbnail(clip)
           .then(thumbnailPath => {
             if (thumbnailPath) {
               setClips(prev => prev.map(c =>
-                c.id === clip.id
+                c.file_path === clip.file_path
                   ? { ...c, thumbnail_path: thumbnailPath }
                   : c
               ));
@@ -102,16 +103,16 @@ export function ClipLibrary() {
           .finally(() => {
             setThumbnailGeneration(prev => {
               const newSet = new Set(prev);
-              newSet.delete(clip.id);
+              newSet.delete(clip.file_path);
               return newSet;
             });
           });
       });
     } catch (error) {
-      console.error('Failed to load clips:', error);
+      logger.error('Failed to load clips:', error);
       toast({
         title: t('clips.errors.loadClipsFailed'),
-        description: String(error),
+        description: getErrorMessage(error),
         variant: 'destructive',
       });
       setClips([]);
@@ -157,18 +158,17 @@ export function ClipLibrary() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isVideoModalOpen, selectedGame]);
 
-  const handleDeleteClip = async (clipId: number) => {
+  const handleDeleteClip = async (clipFilePath: string) => {
     try {
-      const clip = clips.find(c => c.id === clipId);
-      if (!clip) {
-        throw new Error('Clip not found');
+      if (!selectedGame) {
+        throw new Error('No game selected');
       }
 
       // Call actual backend to delete clip
-      await storageApi.deleteClip(clip.game_id.toString(), clip.file_path);
+      await storageApi.deleteClip(selectedGame, clipFilePath);
 
       // Remove from local state
-      setClips(clips.filter(c => c.id !== clipId));
+      setClips(clips.filter(c => c.file_path !== clipFilePath));
 
       toast({
         title: t('clips.deleteSuccess'),
@@ -177,19 +177,20 @@ export function ClipLibrary() {
     } catch (error) {
       toast({
         title: t('clips.errors.deleteFailed'),
-        description: String(error),
+        description: getErrorMessage(error),
         variant: 'destructive',
       });
     }
   };
 
-  const handlePlayClip = (clip: Clip) => {
+  const handlePlayClip = (clip: ClipMetadata) => {
     const videoSrc = clip.file_path.startsWith('file://')
       ? clip.file_path
       : `file://${clip.file_path}`;
 
     setCurrentVideoSrc(videoSrc);
-    setCurrentVideoTitle(`${clip.event_type} ${t('clips.at')} ${formatTime(clip.event_time)}`);
+    const eventLabel = typeof clip.event_type === 'string' ? clip.event_type : Object.keys(clip.event_type)[0];
+    setCurrentVideoTitle(`${eventLabel} ${t('clips.at')} ${formatTime(clip.event_time)}`);
     setIsVideoModalOpen(true);
   };
 
@@ -199,21 +200,21 @@ export function ClipLibrary() {
     setCurrentVideoTitle('');
   };
 
-  const handleEditClip = async (clip: Clip) => {
+  const handleEditClip = async (clip: ClipMetadata) => {
     try {
       // Show in folder for editing access
       await utilsApi.showInFolder(clip.file_path);
     } catch (error) {
-      console.error('Failed to show clip for editing:', error);
+      logger.error('Failed to show clip for editing:', error);
       toast({
         title: t('clips.errors.editFailed'),
-        description: String(error),
+        description: getErrorMessage(error),
         variant: 'destructive',
       });
     }
   };
 
-  const handleDownloadClip = async (clip: Clip) => {
+  const handleDownloadClip = async (clip: ClipMetadata) => {
     try {
       await utilsApi.showInFolder(clip.file_path);
       toast({
@@ -221,10 +222,10 @@ export function ClipLibrary() {
         description: t('clips.downloadOpenedDescription'),
       });
     } catch (error) {
-      console.error('Failed to open file location:', error);
+      logger.error('Failed to open file location:', error);
       toast({
         title: t('clips.errors.downloadFailed'),
-        description: String(error),
+        description: getErrorMessage(error),
         variant: 'destructive',
       });
     }
@@ -262,7 +263,8 @@ export function ClipLibrary() {
     }
 
     // Search filter
-    if (searchQuery && !clip.event_type.toLowerCase().includes(searchQuery.toLowerCase())) {
+    const eventLabel = typeof clip.event_type === 'string' ? clip.event_type : Object.keys(clip.event_type)[0];
+    if (searchQuery && !eventLabel.toLowerCase().includes(searchQuery.toLowerCase())) {
       return false;
     }
 
@@ -270,87 +272,83 @@ export function ClipLibrary() {
   });
 
   return (
-    <div className="space-y-4">
+    <div data-testid="clip-library" className="space-y-4">
       {/* Header with Game Selector */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle id="clips-title">{t('clips.title')}</CardTitle>
-              <CardDescription id="clips-description">
-                {t('clips.description')}
-              </CardDescription>
-            </div>
-            <Select
-              value={selectedGame || ''}
-              onValueChange={(value) => setSelectedGame(value)}
-              data-testid="game-selector"
-              aria-labelledby="clips-title"
-              aria-describedby="clips-description"
-            >
-              <SelectTrigger className="w-[250px]" aria-label={t('clips.selectGame')}>
-                <SelectValue placeholder={t('clips.selectGame')} />
+      <div className="gaming-panel p-6">
+        <div className="flex items-center justify-between">
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold" id="clips-title">{t('clips.title')}</h3>
+            <p className="text-sm text-muted-foreground" id="clips-description">
+              {t('clips.description')}
+            </p>
+          </div>
+          <Select
+            value={selectedGame || ''}
+            onValueChange={(value) => setSelectedGame(value)}
+            data-testid="game-selector"
+            aria-labelledby="clips-title"
+            aria-describedby="clips-description"
+          >
+            <SelectTrigger className="w-[250px]" aria-label={t('clips.selectGame')}>
+              <SelectValue placeholder={t('clips.selectGame')} />
+            </SelectTrigger>
+            <SelectContent>
+              {games.map((gameId) => (
+                <SelectItem key={gameId} value={gameId}>
+                  {gameId}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-black/40 rounded-lg border border-white/5 p-4">
+        <div className="flex gap-4">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder={t('clips.searchPlaceholder')}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+              data-testid="clip-search-input"
+              aria-label={t('clips.searchPlaceholder')}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Filter className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            <Select value={filterPriority} onValueChange={setFilterPriority} data-testid="priority-filter-select" aria-label={t('clips.filterPriority')}>
+              <SelectTrigger className="w-[150px]">
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {games.map((game) => (
-                  <SelectItem key={game.game_id} value={game.game_id.toString()}>
-                    {game.champion_name || t('clips.unknownChampion')} - {new Date(game.game_start_time).toLocaleDateString()}
-                  </SelectItem>
-                ))}
+                <SelectItem value="all">{t('clips.filter.allPriorities')}</SelectItem>
+                <SelectItem value="5">{t('clips.priority.legendary')} (5)</SelectItem>
+                <SelectItem value="4">{t('clips.priority.epic')} (4)</SelectItem>
+                <SelectItem value="3">{t('clips.priority.rare')} (3)</SelectItem>
+                <SelectItem value="2">{t('clips.priority.common')} (2)</SelectItem>
+                <SelectItem value="1">{t('clips.priority.basic')} (1)</SelectItem>
               </SelectContent>
             </Select>
           </div>
-        </CardHeader>
-      </Card>
-
-      {/* Filters */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder={t('clips.searchPlaceholder')}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-                data-testid="clip-search-input"
-                aria-label={t('clips.searchPlaceholder')}
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <Filter className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-              <Select value={filterPriority} onValueChange={setFilterPriority} data-testid="priority-filter-select" aria-label={t('clips.filterPriority')}>
-                <SelectTrigger className="w-[150px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">{t('clips.filter.allPriorities')}</SelectItem>
-                  <SelectItem value="5">{t('clips.priority.legendary')} (5)</SelectItem>
-                  <SelectItem value="4">{t('clips.priority.epic')} (4)</SelectItem>
-                  <SelectItem value="3">{t('clips.priority.rare')} (3)</SelectItem>
-                  <SelectItem value="2">{t('clips.priority.common')} (2)</SelectItem>
-                  <SelectItem value="1">{t('clips.priority.basic')} (1)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Clips Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="clips-grid" role="region" aria-label={t('clips.clipsGrid')}>
         {isLoading ? (
-          <Card className="col-span-full">
-            <CardContent className="py-12">
+          <div className="gaming-panel p-6 col-span-full">
+            <div className="py-12">
               <div className="flex items-center justify-center">
                 <Spinner size="lg" label={t('clips.loading')} />
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         ) : filteredClips.length === 0 ? (
-          <Card className="col-span-full">
-            <CardContent>
+          <div className="gaming-panel p-6 col-span-full">
+            <div>
               {clips.length === 0 ? (
                 <EmptyState
                   icon={Film}
@@ -374,17 +372,17 @@ export function ClipLibrary() {
                   size="md"
                 />
               )}
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         ) : (
           filteredClips.map((clip) => (
-            <Card key={clip.id} className="overflow-hidden">
+            <div key={clip.file_path} className="bg-black/40 rounded-lg border border-white/5 overflow-hidden">
               <div className="aspect-video bg-muted relative">
                 {/* Video thumbnail or placeholder */}
                 {clip.thumbnail_path ? (
                   <img
                     src={`file://${clip.thumbnail_path}`}
-                    alt={`${clip.event_type} thumbnail`}
+                    alt={`${typeof clip.event_type === 'string' ? clip.event_type : Object.keys(clip.event_type)[0]} thumbnail`}
                     className="absolute inset-0 w-full h-full object-cover"
                     onError={(e) => {
                       // Fallback to placeholder if image fails to load
@@ -395,7 +393,7 @@ export function ClipLibrary() {
                 ) : null}
 
                 {/* Loading indicator for thumbnail generation */}
-                {thumbnailGeneration.has(clip.id) ? (
+                {thumbnailGeneration.has(clip.file_path) ? (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/50">
                     <div className="text-center">
                       <Spinner size="md" className="text-white mx-auto mb-2" />
@@ -418,14 +416,14 @@ export function ClipLibrary() {
 
                 {/* Duration */}
                 <div className="absolute bottom-2 right-2 bg-black/70 px-2 py-1 rounded text-xs text-white">
-                  {clip.duration_secs}s
+                  {Math.round(clip.duration)}s
                 </div>
               </div>
 
-              <CardContent className="p-4">
+              <div className="p-4">
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <h3 className="font-semibold">{clip.event_type}</h3>
+                    <h3 className="font-semibold">{typeof clip.event_type === 'string' ? clip.event_type : Object.keys(clip.event_type)[0]}</h3>
                     <span className="text-xs text-muted-foreground">
                       @{formatTime(clip.event_time)}
                     </span>
@@ -441,8 +439,8 @@ export function ClipLibrary() {
                       size="sm"
                       className="flex-1"
                       onClick={() => handlePlayClip(clip)}
-                      data-testid={`play-clip-${clip.id}`}
-                      aria-label={`${t('clips.actions.play')} ${clip.event_type} ${t('clips.at')} ${formatTime(clip.event_time)}`}
+                      data-testid={`play-clip-${clip.file_path}`}
+                      aria-label={`${t('clips.actions.play')} ${typeof clip.event_type === 'string' ? clip.event_type : Object.keys(clip.event_type)[0]} ${t('clips.at')} ${formatTime(clip.event_time)}`}
                     >
                       <Eye className="mr-1 h-3 w-3" />
                       {t('clips.actions.play')}
@@ -451,8 +449,8 @@ export function ClipLibrary() {
                       variant="outline"
                       size="sm"
                       onClick={() => handleEditClip(clip)}
-                      data-testid={`edit-clip-${clip.id}`}
-                      aria-label={`${t('clips.actions.edit')} ${clip.event_type}`}
+                      data-testid={`edit-clip-${clip.file_path}`}
+                      aria-label={`${t('clips.actions.edit')} ${typeof clip.event_type === 'string' ? clip.event_type : Object.keys(clip.event_type)[0]}`}
                     >
                       <Edit className="h-3 w-3" />
                     </Button>
@@ -460,24 +458,24 @@ export function ClipLibrary() {
                       variant="outline"
                       size="sm"
                       onClick={() => handleDownloadClip(clip)}
-                      data-testid={`download-clip-${clip.id}`}
-                      aria-label={`${t('clips.actions.download')} ${clip.event_type}`}
+                      data-testid={`download-clip-${clip.file_path}`}
+                      aria-label={`${t('clips.actions.download')} ${typeof clip.event_type === 'string' ? clip.event_type : Object.keys(clip.event_type)[0]}`}
                     >
                       <Download className="h-3 w-3" />
                     </Button>
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => handleDeleteClip(clip.id)}
-                      data-testid={`delete-clip-${clip.id}`}
-                      aria-label={`${t('clips.actions.delete')} ${clip.event_type}`}
+                      onClick={() => handleDeleteClip(clip.file_path)}
+                      data-testid={`delete-clip-${clip.file_path}`}
+                      aria-label={`${t('clips.actions.delete')} ${typeof clip.event_type === 'string' ? clip.event_type : Object.keys(clip.event_type)[0]}`}
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ))
         )}
       </div>

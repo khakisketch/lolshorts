@@ -38,7 +38,10 @@ impl MacAudioDevice {
     }
 
     pub fn is_speaker(&self) -> bool {
-        matches!(self.device_type, MacAudioDeviceType::Speaker | MacAudioDeviceType::Headphones) && self.is_output
+        matches!(
+            self.device_type,
+            MacAudioDeviceType::Speaker | MacAudioDeviceType::Headphones
+        ) && self.is_output
     }
 }
 
@@ -68,14 +71,16 @@ impl MacAudioManager {
 
     /// Get only microphone devices
     pub fn get_microphones(&self) -> Vec<&MacAudioDevice> {
-        self.devices.iter()
+        self.devices
+            .iter()
             .filter(|device| device.is_microphone())
             .collect()
     }
 
     /// Get only speaker/output devices
     pub fn get_speakers(&self) -> Vec<&MacAudioDevice> {
-        self.devices.iter()
+        self.devices
+            .iter()
             .filter(|device| device.is_speaker())
             .collect()
     }
@@ -87,7 +92,8 @@ impl MacAudioManager {
 
     /// Find device by name (partial match)
     pub fn find_device_by_name(&self, name: &str) -> Option<&MacAudioDevice> {
-        self.devices.iter()
+        self.devices
+            .iter()
             .find(|device| device.name.to_lowercase().contains(&name.to_lowercase()))
     }
 }
@@ -95,10 +101,7 @@ impl MacAudioManager {
 /// Enumerate audio devices using system_profiler (macOS native)
 fn enumerate_audio_devices() -> Result<Vec<MacAudioDevice>> {
     let output = Command::new("system_profiler")
-        .args([
-            "SPAudioDataType",
-            "-json"
-        ])
+        .args(["SPAudioDataType", "-json"])
         .output()
         .context("Failed to run system_profiler for audio devices")?;
 
@@ -106,8 +109,8 @@ fn enumerate_audio_devices() -> Result<Vec<MacAudioDevice>> {
         anyhow::bail!("system_profiler command failed");
     }
 
-    let output_str = String::from_utf8(output.stdout)
-        .context("Invalid UTF-8 output from system_profiler")?;
+    let output_str =
+        String::from_utf8(output.stdout).context("Invalid UTF-8 output from system_profiler")?;
 
     // Parse the JSON output
     parse_system_profiler_audio(&output_str)
@@ -115,8 +118,8 @@ fn enumerate_audio_devices() -> Result<Vec<MacAudioDevice>> {
 
 /// Parse system_profiler JSON output for audio devices
 fn parse_system_profiler_audio(json_str: &str) -> Result<Vec<MacAudioDevice>> {
-    let json_data: serde_json::Value = serde_json::from_str(json_str)
-        .context("Failed to parse system_profiler JSON")?;
+    let json_data: serde_json::Value =
+        serde_json::from_str(json_str).context("Failed to parse system_profiler JSON")?;
 
     let mut devices = Vec::new();
 
@@ -142,23 +145,27 @@ fn parse_audio_device(json: &serde_json::Value) -> Option<MacAudioDevice> {
     let device_type = extract_device_type(json);
 
     // Check input/output capabilities
-    let is_input = json.get("spdev_device_inputs")
+    let is_input = json
+        .get("spdev_device_inputs")
         .and_then(|inputs| inputs.as_u64().ok())
         .map(|inputs| inputs > 0)
         .unwrap_or(false);
 
-    let is_output = json.get("spdev_device_outputs")
+    let is_output = json
+        .get("spdev_device_outputs")
         .and_then(|outputs| outputs.as_u64().ok())
         .map(|outputs| outputs > 0)
         .unwrap_or(false);
 
     // Extract audio properties
-    let channels = json.get("spdev_device_channel_count")
+    let channels = json
+        .get("spdev_device_channel_count")
         .and_then(|ch| ch.as_u64().ok())
         .map(|ch| ch as u32)
         .unwrap_or(2); // Default to stereo
 
-    let sample_rate = json.get("spdev_device_nominal_samplerate")
+    let sample_rate = json
+        .get("spdev_device_nominal_samplerate")
         .and_then(|sr| sr.as_f64().ok())
         .unwrap_or(44100.0); // Default to 44.1kHz
 
@@ -175,24 +182,29 @@ fn parse_audio_device(json: &serde_json::Value) -> Option<MacAudioDevice> {
 
 /// Extract device type from system_profiler data
 fn extract_device_type(json: &serde_json::Value) -> MacAudioDeviceType {
-    let transport_type = json.get("spdev_device_transport_type")
+    let transport_type = json
+        .get("spdev_device_transport_type")
         .and_then(|t| t.as_str())
         .unwrap_or("");
 
-    let device_name = json.get("_name")
-        .and_then(|n| n.as_str())
-        .unwrap_or("");
+    let device_name = json.get("_name").and_then(|n| n.as_str()).unwrap_or("");
 
     // Try to determine device type from transport type and name
     if transport_type == "Bluetooth" || device_name.to_lowercase().contains("bluetooth") {
         MacAudioDeviceType::Bluetooth
     } else if transport_type == "USB" || device_name.to_lowercase().contains("usb") {
         MacAudioDeviceType::USB
-    } else if device_name.to_lowercase().contains("microphone") || device_name.to_lowercase().contains("mic") {
+    } else if device_name.to_lowercase().contains("microphone")
+        || device_name.to_lowercase().contains("mic")
+    {
         MacAudioDeviceType::Microphone
-    } else if device_name.to_lowercase().contains("speaker") || device_name.to_lowercase().contains("output") {
+    } else if device_name.to_lowercase().contains("speaker")
+        || device_name.to_lowercase().contains("output")
+    {
         MacAudioDeviceType::Speaker
-    } else if device_name.to_lowercase().contains("headphone") || device_name.to_lowercase().contains("headset") {
+    } else if device_name.to_lowercase().contains("headphone")
+        || device_name.to_lowercase().contains("headset")
+    {
         MacAudioDeviceType::Headphones
     } else if device_name.to_lowercase().contains("line in") {
         MacAudioDeviceType::LineIn
@@ -214,8 +226,8 @@ fn enumerate_with_afinfo() -> Result<Vec<MacAudioDevice>> {
         anyhow::bail!("afinfo command failed");
     }
 
-    let output_str = String::from_utf8(output.stdout)
-        .context("Invalid UTF-8 output from afinfo")?;
+    let output_str =
+        String::from_utf8(output.stdout).context("Invalid UTF-8 output from afinfo")?;
 
     parse_afinfo_devices(&output_str)
 }

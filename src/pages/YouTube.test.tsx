@@ -1,6 +1,10 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { YouTube } from './YouTube';
 
+const mockProtectedFeature = jest.fn(
+  ({ children }: { children: React.ReactNode; requiresPro?: boolean; featureName?: string }) => <>{children}</>
+);
+
 // Mock i18n
 jest.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -19,7 +23,7 @@ jest.mock('@/lib/utils', () => ({
 
 // Mock ProtectedFeature to pass through children
 jest.mock('@/components/auth/ProtectedFeature', () => ({
-  ProtectedFeature: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ProtectedFeature: (props: { children: React.ReactNode; requiresPro?: boolean; featureName?: string }) => mockProtectedFeature(props),
 }));
 
 // Mock YouTube components
@@ -40,6 +44,10 @@ jest.mock('@/components/youtube/QuotaDisplay', () => ({
 }));
 
 describe('YouTube', () => {
+  beforeEach(() => {
+    mockProtectedFeature.mockClear();
+  });
+
   describe('Basic Rendering', () => {
     it('should render page title', () => {
       render(<YouTube />);
@@ -107,10 +115,15 @@ describe('YouTube', () => {
   });
 
   describe('Protected Feature', () => {
-    it('should wrap content in ProtectedFeature', () => {
-      // The component renders without error, meaning ProtectedFeature works
-      const { container } = render(<YouTube />);
-      expect(container.firstChild).toBeTruthy();
+    it('wraps content in a PRO-only ProtectedFeature', () => {
+      render(<YouTube />);
+
+      expect(mockProtectedFeature).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requiresPro: true,
+          featureName: 'youtube.title',
+        })
+      );
     });
   });
 });

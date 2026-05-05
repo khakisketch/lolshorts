@@ -2,7 +2,6 @@ import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Clock, Zap } from "lucide-react";
 
@@ -58,17 +57,17 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
   return (
     <div className="space-y-6">
       {/* Default Timing */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold text-base flex items-center gap-2">
             <Clock className="w-4 h-4" />
             {t('settings.recordingConfig.clipTiming.defaultDuration.title')}
-          </CardTitle>
-          <CardDescription>
+          </h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.clipTiming.defaultDuration.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+          </p>
+        </div>
+        <div className="space-y-6">
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <Label>{t('settings.recordingConfig.clipTiming.defaultDuration.beforeEvent')}</Label>
@@ -113,21 +112,21 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
             {t('settings.recordingConfig.clipTiming.defaultDuration.totalLength')}: {settings.default_pre_duration + settings.default_post_duration}s
             ({settings.default_pre_duration}s {t('settings.recordingConfig.clipTiming.defaultDuration.before')} + {settings.default_post_duration}s {t('settings.recordingConfig.clipTiming.defaultDuration.after')})
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Event-Specific Timing */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold text-base flex items-center gap-2">
             <Zap className="w-4 h-4" />
             {t('settings.recordingConfig.clipTiming.eventSpecific.title')}
-          </CardTitle>
-          <CardDescription>
+          </h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.clipTiming.eventSpecific.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+          </p>
+        </div>
+        <div className="space-y-6">
           {/* Multikill */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -259,18 +258,18 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Event Merging */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('settings.recordingConfig.clipTiming.eventMerging.title')}</CardTitle>
-          <CardDescription>
+      <div className="gaming-panel p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.clipTiming.eventMerging.title')}</h3>
+          <p className="text-sm text-muted-foreground">
             {t('settings.recordingConfig.clipTiming.eventMerging.description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="merge_consecutive" className="cursor-pointer">
@@ -311,8 +310,8 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
               </p>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
