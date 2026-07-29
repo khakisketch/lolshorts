@@ -1296,7 +1296,10 @@
           "encoder": "Encoder: {{encoder}}",
           "estimatedSize": "Estimated Size: {{size}}"
         }
-      }
+      },
+      "resetTitle": "Reset settings",
+      "resetDescription": "Puts every recording setting back to its starting value. Your saved clips are not touched.",
+      "resetAction": "Restore defaults"
     },
     "accountInfo": {
       "title": "Account Information",
@@ -1387,6 +1390,22 @@
     "diagnostics": {
       "title": "Diagnostics & Support",
       "description": "Service health, support summary, and system diagnostics"
+    },
+    "nav": {
+      "groups": {
+        "recording": "Recording",
+        "manage": "Manage",
+        "account": "Account"
+      },
+      "items": {
+        "video": "Video & quality",
+        "highlights": "Highlights",
+        "sound": "Sound",
+        "hotkeys": "Manual save & hotkeys",
+        "storage": "Files & space",
+        "app": "Notifications & startup",
+        "diagnostics": "Diagnostics"
+      }
     }
   },
   "common": {

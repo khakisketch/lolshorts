@@ -78,10 +78,34 @@ const SOUND_ICONS: Record<SoundMode, ReactNode> = {
  * 표시가 "직접 설정"으로 바뀐다.
  */
 
+/** 이 화면이 그릴 수 있는 카드들. */
+export type BasicSection =
+  | "highlights"
+  | "quality"
+  | "sound"
+  | "storage"
+  | "autoStart";
+
+const ALL_SECTIONS: readonly BasicSection[] = [
+  "highlights",
+  "quality",
+  "sound",
+  "storage",
+  "autoStart",
+];
+
 interface BasicSettingsProps {
   settings: RecordingSettings;
   onChange: (settings: RecordingSettings) => void;
   disabled?: boolean;
+  /**
+   * 그릴 카드를 고른다. 생략하면 전부.
+   *
+   * 설정 화면이 2단(카테고리 + 내용)으로 나뉘면서, 같은 카드가 서로 다른
+   * 카테고리에 흩어져 들어간다 — 화질은 「영상·화질」에, 장면은 「하이라이트」에.
+   * 카드를 따로 떼어 쓰기 위한 것이지 새 화면을 만드는 것이 아니다.
+   */
+  sections?: readonly BasicSection[];
 }
 
 type QualityLevel = "high" | "medium" | "low";
@@ -348,7 +372,9 @@ export function BasicSettings({
   settings,
   onChange,
   disabled,
+  sections = ALL_SECTIONS,
 }: BasicSettingsProps) {
+  const shows = (section: BasicSection) => sections.includes(section);
   const { t } = useTranslation();
   const { toast } = useToast();
   const [recordingsPath, setRecordingsPath] = useState<string | null>(null);
@@ -437,6 +463,7 @@ export function BasicSettings({
   return (
     <div data-testid="basic-settings" className="space-y-4">
       {/* 1. 어떤 장면을 담을까 */}
+      {shows("highlights") && (
       <BasicCard
         testId="basic-highlights"
         icon={<Film className="h-5 w-5" aria-hidden="true" />}
@@ -544,9 +571,10 @@ export function BasicSettings({
             value: t("settings.basic.seconds", { count: Number(row.value) }),
           }))}
         />
-      </BasicCard>
+      </BasicCard>)}
 
       {/* 2. 화질 */}
+      {shows("quality") && (
       <BasicCard
         testId="basic-quality"
         icon={<Monitor className="h-5 w-5" aria-hidden="true" />}
@@ -597,9 +625,10 @@ export function BasicSettings({
         >
           {t("settings.basic.quality.note")}
         </p>
-      </BasicCard>
+      </BasicCard>)}
 
       {/* 3. 소리 */}
+      {shows("sound") && (
       <BasicCard
         testId="basic-sound"
         icon={<Volume2 className="h-5 w-5" aria-hidden="true" />}
@@ -634,9 +663,10 @@ export function BasicSettings({
             {t("settings.basic.sound.systemAudioNote")}
           </p>
         )}
-      </BasicCard>
+      </BasicCard>)}
 
       {/* 4. 저장 위치 */}
+      {shows("storage") && (
       <BasicCard
         testId="basic-storage"
         icon={<HardDrive className="h-5 w-5" aria-hidden="true" />}
@@ -716,9 +746,10 @@ export function BasicSettings({
             />
           </div>
         </div>
-      </BasicCard>
+      </BasicCard>)}
 
       {/* 5. 리그 켜면 자동 실행 */}
+      {shows("autoStart") && (
       <BasicCard
         testId="basic-auto-start"
         icon={<Zap className="h-5 w-5" aria-hidden="true" />}
@@ -738,7 +769,7 @@ export function BasicSettings({
             }
           />
         </div>
-      </BasicCard>
+      </BasicCard>)}
     </div>
   );
 }

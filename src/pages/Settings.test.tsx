@@ -200,17 +200,11 @@ const defaultSettings: RecordingSettings = {
   overlay_enabled: true,
 };
 
-const openAdvanced = async () => {
-  const toggle = await screen.findByTestId('advanced-settings-toggle');
+/** 왼쪽 카테고리에서 한 칸을 고른다. */
+const goTo = async (section: string) => {
+  const item = await screen.findByTestId(`settings-nav-${section}`);
   act(() => {
-    fireEvent.click(toggle);
-  });
-};
-
-/** Radix 탭은 mousedown 으로 전환된다. */
-const selectTab = (label: string) => {
-  act(() => {
-    fireEvent.mouseDown(screen.getByText(label));
+    fireEvent.click(item);
   });
 };
 
@@ -234,59 +228,71 @@ describe('Settings', () => {
       });
     });
 
-    it('should render the five basic cards without expanding anything', async () => {
+    /**
+     * 설정은 2단이다 — 왼쪽 카테고리, 오른쪽 그 칸의 내용.
+     *
+     * 예전에는 다섯 카드가 한 화면에 다 쌓이고 그 아래 고급 설정이 접혀 있어서,
+     * 1280x800 에서 3화면분이었다. 뭘 찾으려면 무조건 스크롤해야 했다.
+     */
+    it('처음에는 영상·화질 칸만 보인다', async () => {
       render(<Settings />);
 
-      expect(await screen.findByTestId('basic-highlights')).toBeInTheDocument();
-      expect(screen.getByTestId('basic-quality')).toBeInTheDocument();
-      expect(screen.getByTestId('basic-sound')).toBeInTheDocument();
-      expect(screen.getByTestId('basic-storage')).toBeInTheDocument();
-      expect(screen.getByTestId('basic-auto-start')).toBeInTheDocument();
-    });
-
-    it('should keep the advanced panels collapsed until asked', async () => {
-      render(<Settings />);
-
-      expect(await screen.findByTestId('advanced-settings')).toBeInTheDocument();
-      expect(screen.queryByText('Event Filter Settings')).not.toBeInTheDocument();
-      expect(screen.queryByText('Video Settings')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('diagnostics-section')).not.toBeInTheDocument();
-      expect(screen.queryByText('Language Selector')).not.toBeInTheDocument();
-    });
-
-    it('should reveal every advanced panel when expanded', async () => {
-      render(<Settings />);
-      await openAdvanced();
-
-      expect(screen.getByText('settings.recordingConfig.title')).toBeInTheDocument();
-      expect(screen.getByText('Language Selector')).toBeInTheDocument();
-      expect(screen.getByTestId('diagnostics-section')).toBeInTheDocument();
-      // 기본 탭(일반)만 즉시 렌더되고, 나머지는 탭을 눌러야 마운트된다.
-      expect(screen.getByText('General Settings')).toBeInTheDocument();
-
-      selectTab('settings.recordingConfig.tabs.events');
-      expect(screen.getByText('Event Filter Settings')).toBeInTheDocument();
-
-      selectTab('settings.recordingConfig.tabs.video');
+      expect(await screen.findByTestId('basic-quality')).toBeInTheDocument();
       expect(screen.getByText('Video Settings')).toBeInTheDocument();
+      // 다른 칸의 내용은 렌더되지 않는다 — 그게 스크롤을 없애는 방법이다.
+      expect(screen.queryByTestId('basic-highlights')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('basic-storage')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('diagnostics-section')).not.toBeInTheDocument();
+    });
 
-      selectTab('settings.recordingConfig.tabs.audio');
+    it('카테고리를 고르면 그 칸으로 바뀐다', async () => {
+      render(<Settings />);
+
+      await goTo('highlights');
+      expect(screen.getByTestId('basic-highlights')).toBeInTheDocument();
+      expect(screen.getByText('Event Filter Settings')).toBeInTheDocument();
+      expect(screen.getByText('Clip Timing Settings')).toBeInTheDocument();
+      expect(screen.queryByTestId('basic-quality')).not.toBeInTheDocument();
+
+      await goTo('sound');
+      expect(screen.getByTestId('basic-sound')).toBeInTheDocument();
       expect(screen.getByText('Audio Settings')).toBeInTheDocument();
 
-      selectTab('settings.recordingConfig.tabs.timing');
-      expect(screen.getByText('Clip Timing Settings')).toBeInTheDocument();
+      await goTo('storage');
+      expect(screen.getByTestId('basic-storage')).toBeInTheDocument();
 
-      selectTab('settings.recordingConfig.tabs.hotkeys');
+      await goTo('app');
+      expect(screen.getByTestId('basic-auto-start')).toBeInTheDocument();
+      expect(screen.getByText('Language Selector')).toBeInTheDocument();
+
+      await goTo('hotkeys');
       expect(screen.getByText('Hotkey Settings')).toBeInTheDocument();
-
-      selectTab('settings.recordingConfig.tabs.modes');
-      expect(screen.getByText('Game Mode Settings')).toBeInTheDocument();
     });
+
+    /**
+     * 홈에서 「수동 리플레이 저장」을 뺐을 때 갈 곳을 만들어 둔 칸이다.
+     * 이 칸이 사라지면 F8/F9/F10 을 조절할 화면이 없어진다.
+     */
+    it('수동 저장·단축키 칸이 존재한다', async () => {
+      render(<Settings />);
+      expect(await screen.findByTestId('settings-nav-hotkeys')).toBeInTheDocument();
+    });
+
+    /** 초기화는 고급 설정이 사라지면서 진단 칸으로 옮겼다 — 잃어버리지 않았는지. */
+    it('초기화 버튼이 진단 칸에 남아 있다', async () => {
+      render(<Settings />);
+      await goTo('diagnostics');
+      expect(screen.getByTestId('diagnostics-section')).toBeInTheDocument();
+      expect(screen.getByTestId('settings-reset')).toBeInTheDocument();
+    });
+
+
   });
 
   describe('Basic ↔ advanced sync', () => {
     it('writes the canonical toggle set when a basic preset is picked', async () => {
       render(<Settings />);
+      await goTo('highlights');
 
       const bestOnly = await screen.findByRole('radio', {
         name: 'settings.basic.highlights.options.best_only.label',
@@ -311,6 +317,7 @@ describe('Settings', () => {
 
     it('falls back to "직접 설정" when an advanced toggle deviates', async () => {
       render(<Settings />);
+      await goTo('highlights');
 
       expect(
         await screen.findByRole('radio', {
@@ -318,8 +325,7 @@ describe('Settings', () => {
         }),
       ).toBeChecked();
 
-      await openAdvanced();
-      selectTab('settings.recordingConfig.tabs.events');
+      await goTo('highlights');
       act(() => {
         fireEvent.click(screen.getByText('toggle-record-deaths'));
       });
@@ -372,7 +378,7 @@ describe('Settings', () => {
 
     it('should pass the complete general recording fixture shape', async () => {
       render(<Settings />);
-      await openAdvanced();
+      await goTo('app');
 
       const fixtureShape = await screen.findByTestId('general-settings-fixture-shape');
 

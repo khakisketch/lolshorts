@@ -45,6 +45,7 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
+          "$DATA/lolshorts/**",
           "$APPDATA/**",
           "$VIDEO/**",
           "$DOWNLOAD/**",

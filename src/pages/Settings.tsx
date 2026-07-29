@@ -1,7 +1,6 @@
 import { useCallback, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuthStore } from "@/lib/auth";
 import { settingsApi } from "@/api/settings";
 import { authApi, EntitlementInfo } from "@/api/auth";
@@ -22,10 +21,20 @@ import { LicensePanel } from "@/components/settings/LicensePanel";
 import { AccountInfoPanel } from "@/components/settings/AccountInfoPanel";
 import { DiagnosticsSection } from "@/components/settings/DiagnosticsSection";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
-import { ChevronDown, SlidersHorizontal, Save } from "lucide-react";
+import { RotateCcw, Save } from "lucide-react";
 import { pageStyles } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
 import { logger } from "@/lib/logger";
+
+/** 왼쪽 카테고리. 그룹 이름과 항목 이름은 로케일이 SSOT. */
+const SETTINGS_GROUPS = [
+  { key: "recording", items: ["video", "highlights", "sound", "hotkeys"] },
+  { key: "manage", items: ["storage", "app"] },
+  { key: "account", items: ["diagnostics"] },
+] as const;
+
+type SettingsSection =
+  (typeof SETTINGS_GROUPS)[number]["items"][number];
 
 /**
  * 설정 — 기본 5가지 + 접힌 고급.
@@ -49,7 +58,8 @@ export function Settings() {
   const [showSubscriptionManagement, setShowSubscriptionManagement] = useState(false);
   const [license, setLicense] = useState<EntitlementInfo | null>(null);
   const [isLoadingLicense, setIsLoadingLicense] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  // 어느 칸을 보고 있나. 기본은 「영상·화질」 — 새 사용자가 가장 먼저 궁금해하는 것.
+  const [section, setSection] = useState<SettingsSection>("video");
 
   const [recordingSettings, setRecordingSettings] = useState<RecordingSettings | null>(null);
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
@@ -173,171 +183,186 @@ export function Settings() {
           </div>
         ) : recordingSettings ? (
           <>
-            <BasicSettings
-              settings={recordingSettings}
-              onChange={saveRecordingSettings}
-              disabled={isSavingSettings}
-            />
-
-            {isSavingSettings && (
-              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                <Save className="w-4 h-4 animate-pulse" />
-                {t('settings.recordingConfig.savingSettings')}
-              </div>
-            )}
-
-            {/* 고급 설정 — 개별 항목은 사라지지 않고 여기로 내려왔다. */}
-            <section data-testid="advanced-settings" className="gaming-panel">
-              <button
-                type="button"
-                onClick={() => setShowAdvanced((open) => !open)}
-                aria-expanded={showAdvanced}
-                data-testid="advanced-settings-toggle"
-                className="flex w-full items-center gap-3 px-6 py-4 text-left min-h-[44px]"
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+              {/* 왼쪽: 카테고리. 설정이 한 화면에 다 쌓여 있으면 1280x800 에서
+                  3화면분이 되고, 뭘 찾으려면 무조건 스크롤해야 한다. */}
+              <nav
+                data-testid="settings-nav"
+                className="flex shrink-0 gap-1 overflow-x-auto lg:w-52 lg:flex-col lg:overflow-visible"
+                aria-label={t('settings.title')}
               >
-                <SlidersHorizontal className="h-5 w-5 shrink-0 text-gaming-cyan" />
-                <span className="flex-1">
-                  <span className="block text-base font-semibold">
-                    {t('settings.advanced.title')}
-                  </span>
-                  <span
-                    className="block text-sm text-muted-foreground"
-                    style={{ wordBreak: 'keep-all' }}
-                  >
-                    {t('settings.advanced.description')}
-                  </span>
-                </span>
-                <ChevronDown
-                  className={`h-5 w-5 shrink-0 text-muted-foreground transition-transform ${
-                    showAdvanced ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
+                {SETTINGS_GROUPS.map((group) => (
+                  <div key={group.key} className="contents lg:block">
+                    <p className="hidden px-3 pb-1 pt-4 text-xs uppercase tracking-wider text-muted-foreground first:pt-0 lg:block">
+                      {t(`settings.nav.groups.${group.key}`)}
+                    </p>
+                    {group.items.map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => setSection(item)}
+                        aria-current={section === item ? 'page' : undefined}
+                        data-testid={`settings-nav-${item}`}
+                        className={[
+                          'min-h-[44px] whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition-colors lg:block lg:w-full',
+                          section === item
+                            ? 'bg-gaming-cyan/10 text-foreground shadow-[inset_2px_0_0_theme(colors.gaming-cyan)]'
+                            : 'text-muted-foreground hover:text-foreground',
+                        ].join(' ')}
+                      >
+                        {t(`settings.nav.items.${item}`)}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </nav>
 
-              {showAdvanced && (
-                <div className="space-y-6 border-t border-white/5 p-6">
-                  <p
-                    className="text-xs text-muted-foreground"
-                    style={{ wordBreak: 'keep-all' }}
-                  >
-                    {t('settings.advanced.syncNotice')}
-                  </p>
+              {/* 오른쪽: 고른 칸만. 스크롤은 여기 안에서만 일어난다. */}
+              <div className="min-w-0 flex-1 space-y-4" data-testid={`settings-section-${section}`}>
+                {section === 'video' && (
+                  <>
+                    <BasicSettings
+                      settings={recordingSettings}
+                      onChange={saveRecordingSettings}
+                      disabled={isSavingSettings}
+                      sections={['quality']}
+                    />
+                    <VideoSettings
+                      settings={recordingSettings.video}
+                      onChange={(video) =>
+                        saveRecordingSettings({ ...recordingSettings, video })
+                      }
+                    />
+                  </>
+                )}
 
-                  <LanguageSelector />
+                {section === 'highlights' && (
+                  <>
+                    <BasicSettings
+                      settings={recordingSettings}
+                      onChange={saveRecordingSettings}
+                      disabled={isSavingSettings}
+                      sections={['highlights']}
+                    />
+                    <EventFilterSettings
+                      settings={recordingSettings.event_filter}
+                      onChange={(eventFilter) =>
+                        saveRecordingSettings({ ...recordingSettings, event_filter: eventFilter })
+                      }
+                    />
+                    <ClipTimingSettings
+                      settings={recordingSettings.clip_timing}
+                      onChange={(clip_timing) =>
+                        saveRecordingSettings({ ...recordingSettings, clip_timing })
+                      }
+                    />
+                    <GameModeSettings
+                      settings={recordingSettings.game_mode}
+                      onChange={(gameMode) =>
+                        saveRecordingSettings({ ...recordingSettings, game_mode: gameMode })
+                      }
+                    />
+                  </>
+                )}
 
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
+                {section === 'sound' && (
+                  <>
+                    <BasicSettings
+                      settings={recordingSettings}
+                      onChange={saveRecordingSettings}
+                      disabled={isSavingSettings}
+                      sections={['sound']}
+                    />
+                    <AudioSettings
+                      settings={recordingSettings.audio}
+                      onChange={(audio) =>
+                        saveRecordingSettings({ ...recordingSettings, audio })
+                      }
+                    />
+                  </>
+                )}
+
+                {section === 'hotkeys' && (
+                  <HotkeySettings
+                    settings={recordingSettings.hotkeys}
+                    onChange={(hotkeys) =>
+                      saveRecordingSettings({ ...recordingSettings, hotkeys })
+                    }
+                  />
+                )}
+
+                {section === 'storage' && (
+                  <BasicSettings
+                    settings={recordingSettings}
+                    onChange={saveRecordingSettings}
+                    disabled={isSavingSettings}
+                    sections={['storage']}
+                  />
+                )}
+
+                {section === 'app' && (
+                  <>
+                    <BasicSettings
+                      settings={recordingSettings}
+                      onChange={saveRecordingSettings}
+                      disabled={isSavingSettings}
+                      sections={['autoStart']}
+                    />
+                    <GeneralSettings
+                      settings={{
+                        auto_start_with_league: recordingSettings.auto_start_with_league,
+                        minimize_to_tray: recordingSettings.minimize_to_tray,
+                        show_notifications: recordingSettings.show_notifications,
+                        show_replay_popup: recordingSettings.show_replay_popup,
+                        crash_reporting_enabled: recordingSettings.crash_reporting_enabled,
+                        overlay_enabled: recordingSettings.overlay_enabled,
+                        storage: recordingSettings.storage,
+                      }}
+                      onChange={(updatedGeneral) =>
+                        saveRecordingSettings({ ...recordingSettings, ...updatedGeneral })
+                      }
+                    />
+                    <LanguageSelector />
+                  </>
+                )}
+
+                {section === 'diagnostics' && (
+                  <>
+                    <DiagnosticsSection />
+                    {/* 초기화는 고급 설정이 사라지면서 갈 곳이 없어졌다. 되돌리기
+                        어려운 동작이라 평소 눈에 띄지 않는 진단 칸이 맞다. */}
+                    <section className="gaming-panel p-6">
                       <h3 className="text-base font-semibold">
-                        {t('settings.recordingConfig.title')}
+                        {t('settings.recordingConfig.resetTitle')}
                       </h3>
                       <p
-                        className="text-sm text-muted-foreground mt-1"
+                        className="mt-1 text-sm text-muted-foreground"
                         style={{ wordBreak: 'keep-all' }}
                       >
-                        {t('settings.recordingConfig.description')}
+                        {t('settings.recordingConfig.resetDescription')}
                       </p>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="shrink-0 min-h-[44px]"
-                      onClick={resetSettingsToDefault}
-                      disabled={isSavingSettings}
-                    >
-                      {t('settings.recordingConfig.resetToDefaults')}
-                    </Button>
+                      <Button
+                        variant="outline"
+                        className="mt-4"
+                        onClick={resetSettingsToDefault}
+                        disabled={isSavingSettings}
+                        data-testid="settings-reset"
+                      >
+                        <RotateCcw className="mr-2 h-4 w-4" aria-hidden="true" />
+                        {t('settings.recordingConfig.resetAction')}
+                      </Button>
+                    </section>
+                  </>
+                )}
+
+                {isSavingSettings && (
+                  <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                    <Save className="w-4 h-4 animate-pulse" />
+                    {t('settings.recordingConfig.savingSettings')}
                   </div>
-
-                  <Tabs defaultValue="general" className="w-full">
-                    <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 h-auto gap-1">
-                      <TabsTrigger value="general" className="min-h-[44px] text-xs sm:text-sm">{t('settings.recordingConfig.tabs.general')}</TabsTrigger>
-                      <TabsTrigger value="events" className="min-h-[44px] text-xs sm:text-sm">{t('settings.recordingConfig.tabs.events')}</TabsTrigger>
-                      <TabsTrigger value="modes" className="min-h-[44px] text-xs sm:text-sm">{t('settings.recordingConfig.tabs.modes')}</TabsTrigger>
-                      <TabsTrigger value="video" className="min-h-[44px] text-xs sm:text-sm">{t('settings.recordingConfig.tabs.video')}</TabsTrigger>
-                      <TabsTrigger value="audio" className="min-h-[44px] text-xs sm:text-sm">{t('settings.recordingConfig.tabs.audio')}</TabsTrigger>
-                      <TabsTrigger value="timing" className="min-h-[44px] text-xs sm:text-sm">{t('settings.recordingConfig.tabs.timing')}</TabsTrigger>
-                      <TabsTrigger value="hotkeys" className="min-h-[44px] text-xs sm:text-sm">{t('settings.recordingConfig.tabs.hotkeys')}</TabsTrigger>
-                    </TabsList>
-
-                    <div className="mt-6">
-                      <TabsContent value="general" className="space-y-4">
-                        <GeneralSettings
-                          settings={{
-                            auto_start_with_league: recordingSettings.auto_start_with_league,
-                            minimize_to_tray: recordingSettings.minimize_to_tray,
-                            show_notifications: recordingSettings.show_notifications,
-                            show_replay_popup: recordingSettings.show_replay_popup,
-                            crash_reporting_enabled: recordingSettings.crash_reporting_enabled,
-                            overlay_enabled: recordingSettings.overlay_enabled,
-                            storage: recordingSettings.storage,
-                          }}
-                          onChange={(updatedGeneral) =>
-                            saveRecordingSettings({ ...recordingSettings, ...updatedGeneral })
-                          }
-                        />
-                      </TabsContent>
-
-                      <TabsContent value="events" className="space-y-4">
-                        <EventFilterSettings
-                          settings={recordingSettings.event_filter}
-                          onChange={(eventFilter) =>
-                            saveRecordingSettings({ ...recordingSettings, event_filter: eventFilter })
-                          }
-                        />
-                      </TabsContent>
-
-                      <TabsContent value="modes" className="space-y-4">
-                        <GameModeSettings
-                          settings={recordingSettings.game_mode}
-                          onChange={(gameMode) =>
-                            saveRecordingSettings({ ...recordingSettings, game_mode: gameMode })
-                          }
-                        />
-                      </TabsContent>
-
-                      <TabsContent value="video" className="space-y-4">
-                        <VideoSettings
-                          settings={recordingSettings.video}
-                          onChange={(video) =>
-                            saveRecordingSettings({ ...recordingSettings, video })
-                          }
-                        />
-                      </TabsContent>
-
-                      <TabsContent value="audio" className="space-y-4">
-                        <AudioSettings
-                          settings={recordingSettings.audio}
-                          onChange={(audio) =>
-                            saveRecordingSettings({ ...recordingSettings, audio })
-                          }
-                        />
-                      </TabsContent>
-
-                      <TabsContent value="timing" className="space-y-4">
-                        <ClipTimingSettings
-                          settings={recordingSettings.clip_timing}
-                          onChange={(clip_timing) =>
-                            saveRecordingSettings({ ...recordingSettings, clip_timing })
-                          }
-                        />
-                      </TabsContent>
-
-                      <TabsContent value="hotkeys" className="space-y-4">
-                        <HotkeySettings
-                          settings={recordingSettings.hotkeys}
-                          onChange={(hotkeys) =>
-                            saveRecordingSettings({ ...recordingSettings, hotkeys })
-                          }
-                        />
-                      </TabsContent>
-                    </div>
-                  </Tabs>
-
-                  {/* 진단도 고급으로 — 평소에는 볼 일이 없고, 필요할 때만 펼친다. */}
-                  <DiagnosticsSection />
-                </div>
-              )}
-            </section>
+                )}
+              </div>
+            </div>
           </>
         ) : (
           <div className="gaming-panel p-6 text-center">

@@ -1346,7 +1346,10 @@
           "encoder": "인코더",
           "estimatedSize": "예상 크기"
         }
-      }
+      },
+      "resetTitle": "설정 초기화",
+      "resetDescription": "모든 녹화 설정을 처음 상태로 되돌립니다. 저장된 클립은 지워지지 않습니다.",
+      "resetAction": "기본값으로 되돌리기"
     },
     "accountInfo": {
       "title": "계정 정보",
@@ -1437,6 +1440,22 @@
     "diagnostics": {
       "title": "진단 및 지원",
       "description": "서비스 상태, 지원 요약, 시스템 진단"
+    },
+    "nav": {
+      "groups": {
+        "recording": "녹화",
+        "manage": "관리",
+        "account": "계정"
+      },
+      "items": {
+        "video": "영상·화질",
+        "highlights": "하이라이트",
+        "sound": "소리",
+        "hotkeys": "수동 저장·단축키",
+        "storage": "파일·용량",
+        "app": "알림·실행",
+        "diagnostics": "진단"
+      }
     }
   },
   "common": {
