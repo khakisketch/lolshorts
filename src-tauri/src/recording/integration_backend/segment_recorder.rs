@@ -234,6 +234,27 @@ impl SegmentRecorder {
 
         let ffmpeg_path = get_ffmpeg_path().context("FFmpeg를 찾을 수 없습니다")?;
 
+        // 창이 쓸 만한 크기가 될 때까지 기다린다.
+        //
+        // 실게임에서 관측된 실패다(2026-07-29):
+        //
+        // ```
+        // [gdigrab] Found window League of Legends (TM) Client, capturing 1x1x32 at (0,0)
+        // [h264_nvenc] InitializeEncoder failed: invalid param (8):
+        //              Frame Dimension less than the minimum supported value.
+        // ```
+        //
+        // 게임 프로세스가 뜨는 즉시 녹화를 시작하는데, 그 순간 창은 만들어지기만
+        // 하고 크기가 아직 1x1 이다. 사슬은 이렇게 이어졌다: HWND 경로는
+        // `even_dimensions(1, 1) == (0, 0)` 이라 **올바르게** 거부하고 title 캡처로
+        // 폴백하는데, **폴백 경로에는 크기 검증이 없어서** gdigrab 이 1x1 을 그대로
+        // 잡고 인코더가 즉사했다. 재시도가 없어 그 판은 통째로 녹화되지 않았다.
+        //
+        // 폴백 쪽에 가드를 더하는 대신 여기서 기다리는 이유: 크기를 모른 채
+        // 시작할 이유가 없고, 기다리면 두 경로가 모두 안전해진다.
+        #[cfg(target_os = "windows")]
+        wait_for_capturable_window().await;
+
         let mut cmd = tokio::process::Command::new(&ffmpeg_path);
 
         cmd.arg("-y");
@@ -257,6 +278,14 @@ impl SegmentRecorder {
         {
             cmd.arg("-f").arg("gdigrab");
             cmd.arg("-framerate").arg(self.config.fps.to_string());
+            // 커서를 합성하지 않는다.
+            //
+            // gdigrab 의 기본값은 `draw_mouse=1` 이라 매 프레임 GDI 에서 커서를 읽어
+            // 합성하는데, 60fps 로 이걸 하면 **실제 화면의 커서가 깜빡이는 것처럼
+            // 보인다**(실사용 중 보고됨). 롤은 커서를 계속 움직이는 게임이라 특히
+            // 두드러진다. 녹화가 게임 플레이를 방해하는 것은 클립에 커서가 안 남는
+            // 것보다 나쁘다.
+            cmd.arg("-draw_mouse").arg("0");
 
             // Re-resolve the League window at every recording start.
             //
@@ -276,12 +305,20 @@ impl SegmentRecorder {
                 // (a restored/DPI-scaled window is regularly 1919x1079), and h264 with
                 // yuv420p then dies instantly with "width not divisible by 2" — the
                 // spawn succeeds, so recording *looks* live while nothing is captured.
+                // 인코더가 받아들일 수 있는 최소 크기. 이보다 작으면 title 폴백도
+                // 소용이 없다 — 같은 창을 같은 크기로 잡을 뿐이다.
+                //
+                // 예전에는 `w == 0 || h == 0` 만 보고 title 캡처로 넘겼는데,
+                // 폴백 경로에는 크기 검증이 아예 없어서 1x1 창을 그대로 gdigrab 에
+                // 넘겼고 NVENC 가 즉사했다(실게임 관측). 재시도가 없어 그 판은
+                // 통째로 녹화되지 않았다.
+                const MIN_ENCODABLE: u32 = 64;
+
                 let rect = get_window_rect(hwnd).and_then(|(x, y, w, h)| {
                     let (w, h) = even_dimensions(w, h);
-                    if w == 0 || h == 0 {
+                    if w < MIN_ENCODABLE || h < MIN_ENCODABLE {
                         warn!(
-                            "HWND 0x{:X} rect is too small to capture ({}x{}), \
-                             falling back to title capture",
+                            "HWND 0x{:X} 창이 아직 너무 작습니다({}x{}) — 인코더가 받아들일 수 없습니다.",
                             hwnd, w, h
                         );
                         None
@@ -289,6 +326,14 @@ impl SegmentRecorder {
                         Some((x, y, w, h))
                     }
                 });
+
+                // 창은 찾았는데 크기가 안 나오면, 제목으로 잡아도 같은 창을 같은
+                // 크기로 잡을 뿐이다. 그대로 두면 인코더가 죽고 그 판이 사라진다.
+                if rect.is_none() {
+                    anyhow::bail!(
+                        "League 창이 아직 캡처할 수 있는 크기가 아닙니다(게임 로딩 중일 수 있습니다)."
+                    );
+                }
 
                 if let Some((x, y, w, h)) = rect {
                     cmd.arg("-offset_x").arg(x.to_string());
@@ -500,19 +545,28 @@ impl SegmentRecorder {
             .encoder
             .to_ffmpeg_name_with_hw(self.config.hw_accel);
         cmd.arg("-c:v").arg(encoder);
-        cmd.arg("-b:v")
-            .arg(format!("{}k", self.config.bitrate / 1000));
+        let bitrate_k = self.config.bitrate / 1000;
+        cmd.arg("-b:v").arg(format!("{}k", bitrate_k));
+        // 상한이 없으면 VBR 이 목표치를 한참 넘긴다 — 20Mbps 로 설정했는데 실측
+        // 클립이 28Mbps 였고, 8초짜리가 27MB 였다. 한 판이면 수백 MB 가 쌓인다.
+        // `save_clip` 이 `-c:v copy` 라 여기서 낭비한 용량은 뒤에서 회수되지 않는다.
+        cmd.arg("-maxrate").arg(format!("{}k", bitrate_k * 3 / 2));
+        cmd.arg("-bufsize").arg(format!("{}k", bitrate_k * 3));
 
         if encoder.contains("nvenc") {
-            cmd.arg("-preset").arg("p1");
-            cmd.arg("-tune").arg("ll");
+            // p1(최속) 은 곧 최저 품질이고, `save_clip` 이 `-c:v copy` 라
+            // 이 손실은 절대 회복되지 않는다 — 화질 상한이 여기서 정해진다.
+            // 리플레이 버퍼는 실시간 송출이 아니라 지연 요구가 낮으므로 최속을
+            // 쓸 이유가 없다.
+            cmd.arg("-preset").arg("p4");
         } else if encoder.contains("qsv") {
             cmd.arg("-preset").arg("veryfast");
         } else if encoder.contains("amf") {
             cmd.arg("-preset").arg("speed");
         } else {
-            cmd.arg("-preset").arg("ultrafast");
-            cmd.arg("-tune").arg("zerolatency");
+            // 위 NVENC 와 같은 이유. `zerolatency` 는 B프레임을 끄고 룩어헤드를
+            // 없애 화질을 크게 떨어뜨리는데, 여기서 얻을 지연 이득이 없다.
+            cmd.arg("-preset").arg("veryfast");
         }
         cmd.arg("-g").arg((self.config.fps * 2).to_string());
         cmd.arg("-keyint_min").arg(self.config.fps.to_string());
@@ -1195,8 +1249,24 @@ impl ClipExtractionContext {
         // no longer needs the `.max(0.1)` floor that turned an empty window into a 0.1s
         // file FFmpeg happily reported as a success.
         cmd.arg("-t").arg(format!("{:.3}", window.duration));
-        // Rebase output timestamps so the clip starts cleanly at t=0.
-        cmd.arg("-avoid_negative_ts").arg("make_zero");
+        // `-avoid_negative_ts make_zero` 는 **쓰지 않는다.**
+        //
+        // 클립을 0초부터 시작시키려고 넣었던 옵션인데, 실측해 보니 두 가지를 동시에
+        // 망가뜨리고 있었다(실게임 세그먼트로 재현):
+        //
+        // ```
+        //   -ss 42.21 -t 17.37 + make_zero -> 57.58s, 오디오 start_time 40.188s
+        //   -ss 42.21 -t 17.37 (옵션 없음)  -> 17.37s, 오디오 start_time 0.000s
+        // ```
+        //
+        // 1) `-t` 의 기준 시각이 어긋나 **오차가 `-ss` 에 비례해 커진다**
+        //    (`-ss 5` 면 1초 초과, `-ss 42` 면 40초 초과). 실게임에서 13초를
+        //    요청한 클립이 39초로 나왔다.
+        // 2) 오디오 스트림의 start_time 이 40초로 밀려, **클립 앞부분이 통째로
+        //    무음이고 들리는 소리는 다른 순간의 것**이 된다.
+        //
+        // mp4 머서가 이미 출력 타임스탬프를 0 기준으로 정규화하므로(위 실측의
+        // start_time=0.000) 이 옵션 없이도 클립은 0초부터 시작한다.
 
         let audio_bitrate = self
             .config
@@ -1465,6 +1535,63 @@ fn parse_progress_frame(line: &str) -> Option<u64> {
 /// window/monitor rects verbatim, so an odd one (a restored or DPI-scaled window is
 /// routinely 1919x1079) makes the encoder abort with "width not divisible by 2" the
 /// instant it starts — after `spawn()` has already reported success.
+/// 캡처할 수 있는 크기의 League 창이 나타날 때까지 (상한을 두고) 기다린다.
+///
+/// 게임이 막 뜬 순간의 창은 1x1 이고, 그 상태로 gdigrab 을 걸면 인코더가
+/// "Frame Dimension less than the minimum supported value" 로 즉사한다.
+/// 재시도 경로가 없으므로 그 판은 통째로 녹화되지 않는다 — 실게임에서 관측했다.
+///
+/// 창을 못 찾아도 그냥 진행한다. 여기서 실패로 끝내면 창 제목이 다른 지역/버전
+/// 클라이언트에서 녹화가 아예 불가능해지는데, 그건 지금 고치려는 문제보다 나쁘다.
+/// 기다리는 것은 "1x1 인 동안"이지 "창이 있어야 한다"가 아니다.
+#[cfg(target_os = "windows")]
+async fn wait_for_capturable_window() {
+    /// 이보다 작으면 아직 초기화 중으로 본다. 실제 게임 창은 최소 640x480 이다.
+    const MIN_CAPTURABLE: u32 = 320;
+    const POLL: Duration = Duration::from_millis(200);
+    const MAX_WAIT: Duration = Duration::from_secs(20);
+
+    let deadline = tokio::time::Instant::now() + MAX_WAIT;
+    let mut warned = false;
+
+    loop {
+        match super::types::find_league_hwnd().and_then(super::types::get_window_rect) {
+            Some((_, _, w, h)) if w >= MIN_CAPTURABLE && h >= MIN_CAPTURABLE => {
+                if warned {
+                    info!("League 창이 캡처 가능한 크기가 되었습니다: {}x{}", w, h);
+                }
+                return;
+            }
+            Some((_, _, w, h)) => {
+                if !warned {
+                    info!(
+                        "League 창이 아직 {}x{} 입니다. 캡처 가능한 크기가 될 때까지 기다립니다.",
+                        w, h
+                    );
+                    warned = true;
+                }
+            }
+            None => {
+                // 창을 못 찾음 — 제목이 다르거나 아직 안 만들어졌다. 기다려는 보되
+                // 이것 때문에 녹화를 막지는 않는다.
+                if !warned {
+                    warned = true;
+                }
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            warn!(
+                "League 창이 {}초 안에 캡처 가능한 크기가 되지 않았습니다. 그대로 진행합니다.",
+                MAX_WAIT.as_secs()
+            );
+            return;
+        }
+
+        tokio::time::sleep(POLL).await;
+    }
+}
+
 fn even_dimensions(width: u32, height: u32) -> (u32, u32) {
     (width & !1, height & !1)
 }

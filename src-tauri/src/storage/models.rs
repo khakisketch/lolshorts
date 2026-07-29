@@ -93,6 +93,16 @@ pub struct ClipMetadata {
     pub event_time: f64, // Game time when event occurred
     pub priority: u8,
     pub duration: f64, // Clip duration in seconds
+    /// 클립 **안에서** 하이라이트가 일어나는 지점(초).
+    ///
+    /// 이 값이 없던 동안 하류가 전부 "중앙 = 하이라이트"로 가정했고, 그래서
+    /// 썸네일은 아무 일도 없는 프레임을 찍었고(13초 킬 클립의 6.5초 지점 —
+    /// 킬은 10초에 있다) 이벤트 줌도 빌드업 구간에 걸렸다. 저장 시점에는 이미
+    /// 알고 있는 값(`pre_duration`)인데 버리고 있었다.
+    ///
+    /// 예전 클립에는 없으므로 `default`. 없으면 소비하는 쪽이 중앙으로 되돌아간다.
+    #[serde(default)]
+    pub event_offset_secs: Option<f64>,
     pub created_at: DateTime<Utc>,
     #[serde(default)]
     pub usage_count: u32, // Number of times this clip has been used in auto-edits

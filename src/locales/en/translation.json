@@ -881,6 +881,17 @@
           "steal": "Steals",
           "death": "Deaths",
           "game_end": "Game end"
+        },
+        "coverage": {
+          "none": {
+            "title": "No clips will be created with these settings",
+            "description": "Nothing gets saved while you play. Pick a preset above to fix it."
+          },
+          "narrow": {
+            "title": "Very little will be captured",
+            "description": "You may finish a game with no clips at all. Choose Balanced or Capture more to widen it."
+          },
+          "blocked": "Turned on but dropped by the minimum tier: {{scenes}}"
         }
       },
       "quality": {

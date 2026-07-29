@@ -1056,6 +1056,9 @@ pub async fn persist_manual_replay_metadata(
     let clip_meta = ClipMetadata {
         file_path: clip_path.to_string_lossy().to_string(),
         thumbnail_path: None,
+        // 수동 저장은 "방금 그거"를 담는 것이라 볼거리가 끝쪽에 있다.
+        // 마지막 3초 앞을 대표 지점으로 본다.
+        event_offset_secs: (measured_duration_secs - 3.0).max(0.0).into(),
         event_type: EventType::Custom("ManualReplay".to_string()),
         event_time: 0.0,
         priority: 3,

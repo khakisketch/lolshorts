@@ -5,6 +5,14 @@ use std::time::Duration;
 use tokio::process::Command as TokioCommand;
 use tracing::{info, warn};
 
+/// 출력 fps 를 모르는 옛 경로가 쓰는 값.
+///
+/// `zoompan` 의 `fps` 인자는 **출력 프레임레이트를 강제**하므로 실제와 다르면
+/// 영상이 리샘플된다. 예전에는 `30` 이 하드코딩돼 있어서 60fps 소스가 30fps 로
+/// 반토막 났다. 메인 경로(`compose_with_options`)는 실제 fps 를 넘기고, 이 상수는
+/// fps 를 알 수 없는 옛 경로에서만 쓰인다 — `AutoEditConfig::fps` 기본값과 같다.
+const DEFAULT_OUTPUT_FPS: u32 = 60;
+
 use super::super::{execute_ffmpeg_command, Result, VideoError};
 use super::types::{ClipSpec, ComposeOptions, LoudnessInfo, TransitionType, VideoEncoder};
 use crate::utils::ffmpeg::{get_ffmpeg_path, get_ffprobe_path};
@@ -347,8 +355,13 @@ impl VideoProcessor {
             );
         }
 
+        // `x`/`y` 를 반드시 준다.
+        //
+        // `zoompan` 의 x,y 기본값은 **0** 이라 생략하면 화면 중앙이 아니라
+        // **좌상단 모서리를 기준으로 확대**된다. 즉 이 기능은 켜는 순간 영상을
+        // 망가뜨리고 있었다(기존 테스트는 필터 문자열이 붙었는지만 봤다).
         format!(
-            "zoompan=z='{}':d=1:s={}x{}:fps={}",
+            "zoompan=z='{}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={}x{}:fps={}",
             expr, width, height, fps
         )
     }
@@ -445,7 +458,12 @@ impl VideoProcessor {
         );
         let vf = match event_times {
             Some(times) if !times.is_empty() => {
-                let zoom = Self::generate_event_zoom_filter(times, 30, target_width, target_height);
+                let zoom = Self::generate_event_zoom_filter(
+                    times,
+                    DEFAULT_OUTPUT_FPS,
+                    target_width,
+                    target_height,
+                );
                 format!("{},{}", base_filter, zoom)
             }
             _ => base_filter,
@@ -756,7 +774,12 @@ impl VideoProcessor {
         );
         let filter = match event_times {
             Some(times) if !times.is_empty() => {
-                let zoom = Self::generate_event_zoom_filter(times, 30, target_width, target_height);
+                let zoom = Self::generate_event_zoom_filter(
+                    times,
+                    DEFAULT_OUTPUT_FPS,
+                    target_width,
+                    target_height,
+                );
                 format!("{},{}", base_filter, zoom)
             }
             _ => base_filter,
@@ -1630,6 +1653,33 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_generate_thumbnail_integration() {}
+
+    /// `zoompan` 은 x,y 기본값이 0 이라, 생략하면 화면 중앙이 아니라 **좌상단
+    /// 모서리를 기준으로** 확대된다. 이 기능은 그 상태로 코드에 들어와 있었고
+    /// 기본값이 꺼져 있어서 아무도 눈치채지 못했다 — 켜는 순간 영상이 망가진다.
+    #[test]
+    fn zoom_is_anchored_to_the_centre_not_the_corner() {
+        let filter = VideoProcessor::generate_event_zoom_filter(&[5.0], 60, 1080, 1920);
+        assert!(
+            filter.contains("x='iw/2-(iw/zoom/2)'"),
+            "가로 앵커가 없다 — 좌상단으로 확대된다: {filter}"
+        );
+        assert!(
+            filter.contains("y='ih/2-(ih/zoom/2)'"),
+            "세로 앵커가 없다 — 좌상단으로 확대된다: {filter}"
+        );
+    }
+
+    /// `zoompan` 의 `fps` 인자는 출력 프레임레이트를 **강제**한다. 예전에는 두
+    /// 경로가 `30` 을 하드코딩해서 60fps 소스가 30fps 로 반토막 났다.
+    #[test]
+    fn zoom_keeps_the_source_frame_rate() {
+        let filter = VideoProcessor::generate_event_zoom_filter(&[5.0], 60, 1080, 1920);
+        assert!(
+            filter.contains("fps=60"),
+            "60fps 가 유지되지 않는다: {filter}"
+        );
+    }
 
     #[test]
     fn test_generate_event_zoom_filter_empty_events() {

@@ -42,6 +42,7 @@ import {
   qualitySpecs,
   type SceneFlag,
 } from "./settingSpecs";
+import { evaluateCoverage } from "./captureCoverage";
 
 /** 프리셋별 아이콘. 카드가 셋 나란히 놓이면 글자만으로는 구분이 느리다. */
 const ICON_CLASS = "h-6 w-6";
@@ -379,6 +380,11 @@ export function BasicSettings({
   const scenes = enabledScenes(
     settings.event_filter as Partial<Record<SceneFlag, boolean>>,
   );
+  // 이 설정으로 실제로 뭐가 담기는지. 오늘 두 번, 값 하나 때문에 한 판 분량의
+  // 클립을 통째로 잃었는데 화면은 아무 말도 하지 않았다.
+  const coverage = evaluateCoverage(
+    settings.event_filter as unknown as Record<string, boolean | number>,
+  );
 
   const handlePresetChange = (value: string) => {
     onChange({
@@ -486,6 +492,50 @@ export function BasicSettings({
               : t("settings.basic.highlights.scenesEmpty")}
           </p>
         </div>
+
+        {/* 아무것도 안 담기거나 아주 좁으면 반드시 말한다.
+            녹화는 정상으로 보이는데 결과물이 0개인 상태를 화면이 구분해 주지
+            못해서, 실기기에서 두 판을 통째로 잃었다. */}
+        {coverage.level !== "normal" && (
+          <div
+            data-testid="highlights-coverage-warning"
+            className={[
+              "mt-3 rounded-lg border p-3 text-sm",
+              coverage.level === "none"
+                ? "border-red-500/40 bg-red-500/10"
+                : "border-amber-500/40 bg-amber-500/10",
+            ].join(" ")}
+            role="status"
+          >
+            <p className="font-medium" style={{ wordBreak: "keep-all" }}>
+              {t(`settings.basic.highlights.coverage.${coverage.level}.title`)}
+            </p>
+            <p
+              className="mt-1 text-xs text-muted-foreground"
+              style={{ wordBreak: "keep-all" }}
+            >
+              {t(
+                `settings.basic.highlights.coverage.${coverage.level}.description`,
+              )}
+            </p>
+            {coverage.blockedByPriority.length > 0 && (
+              <p
+                data-testid="highlights-coverage-blocked"
+                className="mt-2 text-xs"
+                style={{ wordBreak: "keep-all" }}
+              >
+                {t("settings.basic.highlights.coverage.blocked", {
+                  scenes: coverage.blockedByPriority
+                    .slice(0, 5)
+                    .map((s) =>
+                      t(`settings.basic.highlights.scenes.${s.labelKey}`),
+                    )
+                    .join(" · "),
+                })}
+              </p>
+            )}
+          </div>
+        )}
 
         <SpecTable
           testId="highlights-specs"

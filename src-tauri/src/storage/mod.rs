@@ -1558,6 +1558,7 @@ mod tests {
             event_time: 42.0,
             priority: 3,
             duration: 15.0,
+            event_offset_secs: None,
             created_at: Utc::now(),
             usage_count: 0,
         };
@@ -1795,6 +1796,7 @@ mod tests {
                     event_time: 1.0,
                     priority: 1,
                     duration: 10.0,
+                    event_offset_secs: None,
                     created_at: Utc::now(),
                     usage_count: 0,
                 },
@@ -1832,6 +1834,7 @@ mod tests {
             event_time: 1.0,
             priority: 1,
             duration: 12.5,
+            event_offset_secs: None,
             created_at: Utc::now(),
             usage_count: 0,
         };
@@ -1869,6 +1872,7 @@ mod tests {
             event_time: 1.0,
             priority: 1,
             duration: 0.0, // legacy row: duration was never recorded
+            event_offset_secs: None,
             created_at: Utc::now(),
             usage_count: 0,
         };
@@ -1938,6 +1942,7 @@ mod tests {
             event_time: 1.0,
             priority: 1,
             duration: 0.0, // legacy row: duration was never recorded
+            event_offset_secs: None,
             created_at: Utc::now(),
             usage_count: 0,
         };
@@ -2124,6 +2129,7 @@ mod tests {
             event_time: 42.0,
             priority: 3,
             duration: 12.0,
+            event_offset_secs: None,
             created_at: Utc::now(),
             usage_count: 0,
         };

@@ -17,6 +17,9 @@ const MODELS_RS = path.join(SRC_TAURI, 'settings/models.rs');
 const AUTO_CLIP_RS = path.join(SRC_TAURI, 'recording/auto_clip_manager.rs');
 const LIVE_CLIENT_RS = path.join(SRC_TAURI, 'recording/live_client.rs');
 
+/** 함수 본문의 끝을 찾는 표식 — 줄바꿈 + 들여쓰기 4칸 + 닫는 중괄호. */
+const FN_END = ['', '    }'].join('\n');
+
 /**
  * 이 화면은 한 번 거짓말을 한 전력이 있다 — 저장된 `resolution` 을 캡처 해상도인
  * 것처럼 보여줬는데 Windows 캡처는 그 값을 쓰지 않는다. 카드 아래에 수치를 더
@@ -49,22 +52,33 @@ describe('settingSpecs (backend mirror)', () => {
   describe('클립 길이 버킷', () => {
     const source = fs.readFileSync(AUTO_CLIP_RS, 'utf8');
 
-    it('calculate_clip_window 이 매핑하는 버킷 이름과 정확히 같다', () => {
+    it('설정 키로 인정되는 버킷 이름과 정확히 같다', () => {
       const start = source.indexOf('fn calculate_clip_window');
       expect(start).toBeGreaterThan(-1);
-      // `let event_type = match trigger {` 블록만 잘라낸다.
+      // `let settings_key = match trigger {` 블록만 잘라낸다.
       const matchStart = source.indexOf('match trigger {', start);
       const matchEnd = source.indexOf('};', matchStart);
       const block = source.slice(matchStart, matchEnd);
 
       const buckets = new Set<string>();
-      const re = /=>\s*"([a-z_]+)"/g;
+      const re = /Some\("([a-z_]+)"\)/g;
       let m: RegExpExecArray | null;
       while ((m = re.exec(block)) !== null) {
         buckets.add(m[1]);
       }
 
       expect([...buckets].sort()).toEqual([...CLIP_WINDOW_BUCKETS].sort());
+    });
+
+    it('설정에 키가 없는 이벤트는 기본값으로 뭉개지지 않는다', () => {
+      // 예전에는 `_ => "kill"` 이라 에이스·바론·1vX 아웃플레이가 전부 킬과 같은
+      // 13초를 받았다. 지금은 `None` 으로 떨어져 `EventTrigger` 가 스스로 권장하는
+      // 길이를 쓴다 — 그 분기가 사라지면 이 테스트가 먼저 깨진다.
+      const start = source.indexOf('fn calculate_clip_window');
+      const body = source.slice(start, source.indexOf(FN_END, start));
+      expect(body).toContain('_ => None');
+      expect(body).toContain('trigger.pre_duration()');
+      expect(body).toContain('trigger.post_duration()');
     });
   });
 

@@ -1276,20 +1276,33 @@ impl LiveClientMonitor {
                 //    branch above already recorded the killer's team.
                 // 3. If neither signal resolves, do NOT trigger. An unrelated
                 //    Ace being kept is worse than a real one being dropped.
-                let my_team = {
+                // 내 팀과 **내 생존 여부**를 함께 읽는다.
+                //
+                // 예전에는 팀만 확인했다. 그래서 내가 죽어 분수대에서 아이템을 사는
+                // 동안 팀이 에이스하면 그 8초짜리 상점 화면이 "에이스 클립"으로
+                // 저장됐다(실기기 확인 — 클립 전체에 액션이 0이었다).
+                //
+                // 쇼츠 관점에서 이런 클립은 **안 만들어지는 것보다 나쁘다**. 열어본
+                // 사용자가 실망하고, 자동 편집이 이걸 골라 넣으면 영상 전체가 죽는다.
+                let me = {
                     let cache = self.game_state_cache.read().await;
                     cache.data.as_ref().and_then(|data| {
                         data.all_players
                             .iter()
                             .find(|p| same_player(&p.summoner_name, player_name))
-                            .map(|p| p.team.clone())
+                            .map(|p| (p.team.clone(), p.is_dead))
                     })
                 };
-                let my_team = match my_team {
-                    Some(t) => t,
+                let (my_team, i_was_dead) = match me {
+                    Some(v) => v,
                     // Can't even tell which team the local player is on yet.
                     None => return None,
                 };
+
+                if i_was_dead {
+                    debug!("Ace 무시: 내가 죽어 있는 동안 일어난 에이스라 볼 장면이 없다");
+                    return None;
+                }
 
                 let mut acing_team = match event.killer_name.as_deref() {
                     Some(acer) => {

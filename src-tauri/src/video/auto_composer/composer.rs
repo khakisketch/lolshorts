@@ -354,14 +354,33 @@ impl AutoComposer {
 
         let mut sorted_clips = all_clips.to_vec();
 
-        sorted_clips.sort_by(|a, b| {
-            if !config.allow_duplicates {
-                let usage_cmp = a.usage_count.cmp(&b.usage_count);
-                if usage_cmp != std::cmp::Ordering::Equal {
-                    return usage_cmp;
-                }
+        // 재탕 방지는 **1차 정렬키가 아니라 점수 감쇠**로 넣는다.
+        //
+        // 예전에는 `usage_count` 오름차순이 1차 키였다. 그래서 두 번째 영상부터는
+        // **이미 한 번 쓴 펜타킬이 아직 안 쓴 평범한 킬보다 뒤로 밀렸다** — 앞에
+        // 와야 할 장면이 뒤로 가면 쇼츠의 훅이 통째로 무너진다.
+        //
+        // 감쇠 방식이면 "안 쓴 것을 선호하되, 충분히 좋은 장면은 재사용된다"가
+        // 된다. 계수 0.6 은 한 등급쯤(펜타킬 100 -> 60, 트리플킬 70 자리) 내려가는
+        // 값이라, 한 번 쓴 펜타킬은 안 쓴 트리플킬과 겨루게 된다.
+        const REUSE_DECAY: f64 = 0.6;
+        let effective_score = |c: &ClipInfo| -> f64 {
+            let base = c.priority as f64;
+            if config.allow_duplicates {
+                base
+            } else {
+                base * REUSE_DECAY.powi(c.usage_count.min(4) as i32)
             }
-            b.priority.cmp(&a.priority)
+        };
+
+        sorted_clips.sort_by(|a, b| {
+            effective_score(b)
+                .partial_cmp(&effective_score(a))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                // 동점이면 안 쓴 것 먼저, 그 다음 이른 시각 — 실행마다 순서가
+                // 달라지지 않도록 완전한 순서를 만든다.
+                .then_with(|| a.usage_count.cmp(&b.usage_count))
+                .then_with(|| a.id.cmp(&b.id))
         });
 
         let target_duration = config.target_duration as f64;

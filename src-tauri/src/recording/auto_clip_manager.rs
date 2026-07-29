@@ -1293,6 +1293,7 @@ impl AutoClipManager {
             trigger.priority(),
             &clip_path,
             actual_duration,
+            pre_duration,
         )
         .await?;
 
@@ -1468,6 +1469,7 @@ impl AutoClipManager {
                 window.priority,
                 clip_path,
                 actual_duration,
+                pre_duration,
             )
             .await?;
         }
@@ -1545,21 +1547,38 @@ impl AutoClipManager {
         trigger: &EventTrigger,
         settings: &RecordingSettings,
     ) -> ClipWindow {
-        // Map EventTrigger to settings event type string
-        let event_type = match trigger {
-            EventTrigger::Multikill(_) => "multikill",
-            EventTrigger::Steal => "steal",
-            EventTrigger::Death => "death",
-            EventTrigger::GameEnd => "game_end",
-            _ => "kill", // Default for other events
+        // 사용자가 설정에서 명시적으로 정한 값이 있으면 그것을 최우선으로 쓴다.
+        // 설정 파일의 `event_timings` 는 이 이름들로만 키가 붙는다.
+        let settings_key = match trigger {
+            EventTrigger::Multikill(_) => Some("multikill"),
+            EventTrigger::Steal => Some("steal"),
+            EventTrigger::Death => Some("death"),
+            EventTrigger::GameEnd => Some("game_end"),
+            EventTrigger::ChampionKill => Some("kill"),
+            // 나머지는 설정에 대응하는 키가 없다 — 예전에는 전부 "kill" 로
+            // 떨어뜨렸는데, 그 바람에 에이스·바론·1vX 아웃플레이·저체력 역전이
+            // 전부 킬과 같은 13초가 됐다.
+            _ => None,
         };
 
-        // Get event-specific timing or use defaults
-        let timing = settings.clip_timing.get_timing_for_event(event_type);
+        if let Some(key) = settings_key {
+            if let Some(timing) = settings.clip_timing.event_timings.get(key) {
+                return ClipWindow {
+                    pre_duration: timing.pre_duration,
+                    post_duration: timing.post_duration,
+                };
+            }
+        }
 
+        // 설정에 없으면 이벤트가 스스로 권장하는 길이를 쓴다.
+        //
+        // `EventTrigger::pre_duration()/post_duration()` 에는 이벤트별로 조정된
+        // 값이 이미 들어 있었는데(게임 끝 30+10, 1vX 15+5, 스틸 20+5 …)
+        // **프로덕션 호출부가 하나도 없어서 죽은 코드였다.** 그래서 승리 순간이
+        // 13초로 잘리고, 빌드업이 필요한 1v3 역전이 평범한 킬과 같은 길이였다.
         ClipWindow {
-            pre_duration: timing.pre_duration,
-            post_duration: timing.post_duration,
+            pre_duration: trigger.pre_duration(),
+            post_duration: trigger.post_duration(),
         }
     }
 
@@ -1578,6 +1597,10 @@ impl AutoClipManager {
         priority: u8,
         clip_path: &std::path::Path,
         duration: f64,
+        // `event_offset_secs`: 클립 안에서 하이라이트가 일어나는 지점(= 요청한
+        // pre-roll). 저장된 클립이 요청보다 짧으면 앞이 잘렸다는 뜻이므로, 이
+        // 값이 길이를 넘지 않도록 호출부가 아니라 이 함수 안에서 조인다.
+        event_offset_secs: f64,
     ) -> Result<()> {
         let game_id = self.current_game_id.read().await;
 
@@ -1592,12 +1615,24 @@ impl AutoClipManager {
             //
             // 실패해도 클립 저장을 막지 않는다. 썸네일이 없으면 화면이 아이콘으로
             // 대신하지만, 메타데이터가 없으면 클립 자체가 목록에서 사라진다.
-            let thumbnail_path = match crate::video::thumbnail::auto_generate_thumbnail(
+            // 하이라이트가 일어난 지점에서 뽑는다.
+            //
+            // `auto_generate_thumbnail` 은 클립 **중앙**을 찍는데, 킬 클립은
+            // pre-roll 10초 뒤에 킬이 있으므로 13초 클립의 6.5초 = 아무 일도
+            // 일어나지 않은 이동 장면이 잡힌다. 실게임에서 확인했다 — 더블킬은
+            // 33초 지점인데 썸네일은 21.5초(중앙)를 찍었다.
+            //
+            // 이 JPEG 은 화면 목록의 미리보기이자 YouTube 커스텀 썸네일로 그대로
+            // 올라가므로, 어느 프레임을 고르느냐가 곧 클릭률이다.
+            let thumb_at = event_offset_secs.clamp(0.0, (duration - 0.1).max(0.0));
+            let thumbnail_path = match crate::video::thumbnail::generate_event_thumbnail(
                 clip_path.to_path_buf(),
                 clip_path
                     .parent()
                     .unwrap_or_else(|| std::path::Path::new("."))
                     .to_path_buf(),
+                thumb_at,
+                clip_id,
             )
             .await
             {
@@ -1608,9 +1643,18 @@ impl AutoClipManager {
                 }
             };
 
+            // 앞이 잘린 클립에서는 이벤트가 그만큼 앞으로 당겨진다. 길이를 넘는
+            // 오프셋은 썸네일 추출을 실패시키므로 클립 안으로 조인다.
+            let event_offset = if duration > 0.0 {
+                Some(event_offset_secs.clamp(0.0, duration))
+            } else {
+                None
+            };
+
             let metadata = ClipMetadata {
                 file_path: clip_path.to_string_lossy().to_string(),
                 thumbnail_path,
+                event_offset_secs: event_offset,
                 event_type: EventType::Custom(event.event_name.clone()),
                 event_time: event.event_time as f64,
                 priority,
@@ -1916,6 +1960,7 @@ mod tests {
                 3,
                 &clip_path,
                 18.0,
+                10.0,
             )
             .await
             .expect("metadata save should succeed");
@@ -1936,6 +1981,7 @@ mod tests {
                 5,
                 &temp_dir.path().join("unassigned.mp4"),
                 12.0,
+                10.0,
             )
             .await
             .expect("missing current game should not fail event processing");
