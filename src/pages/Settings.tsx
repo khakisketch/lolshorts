@@ -9,6 +9,7 @@ import { PaymentModal } from "@/components/PaymentModal";
 import { SubscriptionManagement } from "@/components/SubscriptionManagement";
 import { RecordingSettings } from "@/types";
 import { BasicSettings } from "@/components/settings/BasicSettings";
+import { AdvancedDisclosure } from "@/components/settings/AdvancedDisclosure";
 import { EventFilterSettings } from "@/components/settings/EventFilterSettings";
 import { GameModeSettings } from "@/components/settings/GameModeSettings";
 import { VideoSettings } from "@/components/settings/VideoSettings";
@@ -30,7 +31,7 @@ import { logger } from "@/lib/logger";
 const SETTINGS_GROUPS = [
   { key: "recording", items: ["video", "highlights", "sound", "hotkeys"] },
   { key: "manage", items: ["storage", "app"] },
-  { key: "account", items: ["diagnostics"] },
+  { key: "account", items: ["license", "diagnostics"] },
 ] as const;
 
 type SettingsSection =
@@ -227,12 +228,17 @@ export function Settings() {
                       disabled={isSavingSettings}
                       sections={['quality']}
                     />
-                    <VideoSettings
-                      settings={recordingSettings.video}
-                      onChange={(video) =>
-                        saveRecordingSettings({ ...recordingSettings, video })
-                      }
-                    />
+                    <AdvancedDisclosure
+                      testId="advanced-video"
+                      summary={t('settings.advanced.summary.video')}
+                    >
+                      <VideoSettings
+                        settings={recordingSettings.video}
+                        onChange={(video) =>
+                          saveRecordingSettings({ ...recordingSettings, video })
+                        }
+                      />
+                    </AdvancedDisclosure>
                   </>
                 )}
 
@@ -244,24 +250,29 @@ export function Settings() {
                       disabled={isSavingSettings}
                       sections={['highlights']}
                     />
-                    <EventFilterSettings
-                      settings={recordingSettings.event_filter}
-                      onChange={(eventFilter) =>
-                        saveRecordingSettings({ ...recordingSettings, event_filter: eventFilter })
-                      }
-                    />
-                    <ClipTimingSettings
-                      settings={recordingSettings.clip_timing}
-                      onChange={(clip_timing) =>
-                        saveRecordingSettings({ ...recordingSettings, clip_timing })
-                      }
-                    />
-                    <GameModeSettings
-                      settings={recordingSettings.game_mode}
-                      onChange={(gameMode) =>
-                        saveRecordingSettings({ ...recordingSettings, game_mode: gameMode })
-                      }
-                    />
+                    <AdvancedDisclosure
+                      testId="advanced-highlights"
+                      summary={t('settings.advanced.summary.highlights')}
+                    >
+                      <EventFilterSettings
+                        settings={recordingSettings.event_filter}
+                        onChange={(eventFilter) =>
+                          saveRecordingSettings({ ...recordingSettings, event_filter: eventFilter })
+                        }
+                      />
+                      <ClipTimingSettings
+                        settings={recordingSettings.clip_timing}
+                        onChange={(clip_timing) =>
+                          saveRecordingSettings({ ...recordingSettings, clip_timing })
+                        }
+                      />
+                      <GameModeSettings
+                        settings={recordingSettings.game_mode}
+                        onChange={(gameMode) =>
+                          saveRecordingSettings({ ...recordingSettings, game_mode: gameMode })
+                        }
+                      />
+                    </AdvancedDisclosure>
                   </>
                 )}
 
@@ -273,12 +284,17 @@ export function Settings() {
                       disabled={isSavingSettings}
                       sections={['sound']}
                     />
-                    <AudioSettings
-                      settings={recordingSettings.audio}
-                      onChange={(audio) =>
-                        saveRecordingSettings({ ...recordingSettings, audio })
-                      }
-                    />
+                    <AdvancedDisclosure
+                      testId="advanced-sound"
+                      summary={t('settings.advanced.summary.sound')}
+                    >
+                      <AudioSettings
+                        settings={recordingSettings.audio}
+                        onChange={(audio) =>
+                          saveRecordingSettings({ ...recordingSettings, audio })
+                        }
+                      />
+                    </AdvancedDisclosure>
                   </>
                 )}
 
@@ -323,6 +339,22 @@ export function Settings() {
                       }
                     />
                     <LanguageSelector />
+                  </>
+                )}
+
+                {section === 'license' && (
+                  <>
+                    <LicensePanel
+                      isAuthenticated={isAuthenticated}
+                      isLoadingLicense={isLoadingLicense}
+                      license={license}
+                      userEmail={user?.email}
+                      onLogin={() => setShowAuthModal(true)}
+                      onUpgradeToPro={handleUpgradeToPro}
+                      onManageSubscription={handleManageSubscription}
+                      onRetry={loadLicenseInfo}
+                    />
+                    {isAuthenticated && user && <AccountInfoPanel user={user} />}
                   </>
                 )}
 
@@ -373,22 +405,6 @@ export function Settings() {
           </div>
         )}
 
-        {/* License & Subscription */}
-        <LicensePanel
-          isAuthenticated={isAuthenticated}
-          isLoadingLicense={isLoadingLicense}
-          license={license}
-          userEmail={user?.email}
-          onLogin={() => setShowAuthModal(true)}
-          onUpgradeToPro={handleUpgradeToPro}
-          onManageSubscription={handleManageSubscription}
-          onRetry={loadLicenseInfo}
-        />
-
-        {/* Account Information */}
-        {isAuthenticated && user && (
-          <AccountInfoPanel user={user} />
-        )}
       </div>
 
       <ConfirmDialog />

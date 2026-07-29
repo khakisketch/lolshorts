@@ -176,6 +176,27 @@ describe('BasicSettings', () => {
     await waitFor(() => expect(mockDataDir).toHaveBeenCalled());
   });
 
+  /**
+   * 프리셋으로 큰 틀을 잡고 세부는 같은 카드에서 바로 바꾼다.
+   *
+   * 예전에는 이 자리가 읽기 전용 표라, 프레임 하나 바꾸려면 아래 고급 설정까지
+   * 스크롤해서 같은 항목을 다시 찾아야 했다.
+   */
+  it('화질 세부값을 카드 안에서 바로 바꿀 수 있다', async () => {
+    await renderUI(<Harness />);
+    expect(screen.getByTestId('quality-fps')).toBeInTheDocument();
+    expect(screen.getByTestId('quality-bitrate')).toBeInTheDocument();
+  });
+
+  /** 녹화 크기는 Windows 캡처가 무시하는 값이라 드롭다운이 되면 안 된다. */
+  it('녹화 크기는 고를 수 있는 컨트롤이 아니다', async () => {
+    await renderUI(<Harness />);
+    expect(screen.queryByTestId('quality-capture-size')).not.toBeInTheDocument();
+    expect(
+      screen.getByText('settings.basic.quality.specs.captureSizeValue'),
+    ).toBeInTheDocument();
+  });
+
   it('does not expose codec or encoder on the basic screen', async () => {
     await renderUI(<Harness />);
 

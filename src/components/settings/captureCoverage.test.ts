@@ -67,6 +67,7 @@ describe('captureCoverage (백엔드 미러)', () => {
     const MAP: Record<string, string> = {
       record_kills: 'ChampionKill',
       record_deaths: 'Death',
+      record_first_blood_victim: 'FirstBloodVictim',
       record_assists: 'Assist',
       record_turret: 'TurretKill',
       record_dragon: 'DragonKill',

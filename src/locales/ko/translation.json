@@ -913,6 +913,7 @@
           "record_low_hp": "아슬아슬 생존",
           "record_assists": "어시스트",
           "record_deaths": "죽는 장면",
+          "record_first_blood_victim": "퍼블 당함",
           "record_steal": "스틸",
           "record_baron": "바론",
           "record_elder": "장로 드래곤",
@@ -969,7 +970,8 @@
           "sizePerMinute": "1분당 용량",
           "codec": "저장 형식",
           "captureSize": "녹화 크기",
-          "captureSizeValue": "게임 창 크기 그대로"
+          "captureSizeValue": "게임 창 크기 그대로",
+          "sizePerMinuteHint": "1분당 약 {{size}} MB"
         }
       },
       "sound": {
@@ -1013,8 +1015,12 @@
     },
     "advanced": {
       "title": "고급 설정",
-      "description": "이벤트 개별 항목, 코덱·인코더, 오디오 장치, 클립 길이, 게임 모드, 단축키, 진단",
-      "syncNotice": "여기서 바꾼 값은 기본 화면에 바로 반영됩니다. 묶음과 다른 조합이 되면 기본 화면에 \"직접 설정\"으로 표시됩니다."
+      "defaultSummary": "개별 항목 직접 조정",
+      "summary": {
+        "video": "해상도 · 코덱 · 인코더 · 모니터",
+        "highlights": "이벤트별 켜기/끄기 · 클립 길이 · 게임 모드",
+        "sound": "장치 선택 · 볼륨 · 샘플레이트 · 음량 평준화"
+      }
     },
     "license": {
       "title": "라이선스 & 구독",
@@ -1454,6 +1460,7 @@
         "hotkeys": "수동 저장·단축키",
         "storage": "파일·용량",
         "app": "알림·실행",
+        "license": "구독·라이선스",
         "diagnostics": "진단"
       }
     }

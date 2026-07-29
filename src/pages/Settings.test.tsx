@@ -278,6 +278,29 @@ describe('Settings', () => {
       expect(await screen.findByTestId('settings-nav-hotkeys')).toBeInTheDocument();
     });
 
+    /**
+     * 카테고리를 나눠도 각 칸은 여전히 길었다. 프레임·비트레이트를 위 카드에서
+     * 드롭다운으로 고르게 해 놓고, **바로 아래 상세 설정에 같은 항목이 또** 나오기
+     * 때문이다. 같은 값이 두 번 보이면 어느 쪽이 진짜인지 알 수 없어 결국 둘 다
+     * 스크롤로 훑게 된다 — 대표자가 지적한 "스크롤 스트레스"의 정체다.
+     *
+     * 지우지 않고 접는다. `open` 이 붙는 순간 이 단언이 깨진다.
+     */
+    it('고급 설정은 기본으로 접혀 있다', async () => {
+      render(<Settings />);
+
+      const video = await screen.findByTestId('advanced-video');
+      expect(video).not.toHaveAttribute('open');
+      // 지운 게 아니라 접은 것이다 — 안의 항목은 그대로 있다.
+      expect(screen.getByText('Video Settings')).toBeInTheDocument();
+
+      await goTo('highlights');
+      expect(screen.getByTestId('advanced-highlights')).not.toHaveAttribute('open');
+
+      await goTo('sound');
+      expect(screen.getByTestId('advanced-sound')).not.toHaveAttribute('open');
+    });
+
     /** 초기화는 고급 설정이 사라지면서 진단 칸으로 옮겼다 — 잃어버리지 않았는지. */
     it('초기화 버튼이 진단 칸에 남아 있다', async () => {
       render(<Settings />);
@@ -347,6 +370,10 @@ describe('Settings', () => {
       });
 
       render(<Settings />);
+      // 구독 패널은 이제 「계정 > 구독·라이선스」 칸 안에 있다. 예전에는 어느
+      // 칸을 보고 있든 화면 맨 아래에 딸려 나와서, 녹화 설정을 만지는 내내
+      // 결제 안내를 스크롤로 지나쳐야 했다.
+      await goTo('license');
 
       await waitFor(() => {
         expect(screen.getByText('settings.license.loginRequired')).toBeInTheDocument();
@@ -360,6 +387,7 @@ describe('Settings', () => {
       });
 
       render(<Settings />);
+      await goTo('license');
 
       await waitFor(() => {
         expect(screen.getByText('settings.license.title')).toBeInTheDocument();
@@ -417,10 +445,12 @@ describe('Settings', () => {
       });
 
       render(<Settings />);
+      await goTo('license');
 
       await waitFor(() => {
         expect(screen.getByText('settings.accountInfo.title')).toBeInTheDocument();
-        expect(screen.getByText('test@example.com')).toBeInTheDocument();
+        // 구독 패널과 계정 패널이 같은 칸에 있으므로 이메일은 두 번 나온다.
+        expect(screen.getAllByText('test@example.com').length).toBeGreaterThan(0);
       });
     });
   });

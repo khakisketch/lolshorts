@@ -863,6 +863,7 @@
           "record_low_hp": "Clutch survivals",
           "record_assists": "Assists",
           "record_deaths": "Deaths",
+          "record_first_blood_victim": "First blood (you died)",
           "record_steal": "Steals",
           "record_baron": "Baron",
           "record_elder": "Elder Dragon",
@@ -919,7 +920,8 @@
           "sizePerMinute": "Size per minute",
           "codec": "Format",
           "captureSize": "Capture size",
-          "captureSizeValue": "Same as the game window"
+          "captureSizeValue": "Same as the game window",
+          "sizePerMinuteHint": "About {{size}} MB per minute"
         }
       },
       "sound": {
@@ -962,9 +964,13 @@
       "seconds": "{{count}}s"
     },
     "advanced": {
-      "title": "Advanced settings",
-      "description": "Individual events, codec and encoder, audio devices, clip length, game modes, hotkeys, diagnostics",
-      "syncNotice": "Changes here show up on the basic screen right away. Any combination that differs from a bundle shows as \"Custom\" there."
+      "title": "Advanced",
+      "defaultSummary": "Tune individual options",
+      "summary": {
+        "video": "Resolution · codec · encoder · monitor",
+        "highlights": "Per-event toggles · clip length · game modes",
+        "sound": "Devices · volume · sample rate · normalization"
+      }
     },
     "license": {
       "title": "License & Subscription",
@@ -1404,6 +1410,7 @@
         "hotkeys": "Manual save & hotkeys",
         "storage": "Files & space",
         "app": "Notifications & startup",
+        "license": "Subscription",
         "diagnostics": "Diagnostics"
       }
     }

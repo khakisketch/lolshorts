@@ -40,8 +40,9 @@ export interface CanonicalEventFilter {
   record_kills: boolean;
   record_multikills: boolean;
   record_first_blood: boolean;
-  record_deaths: boolean;
   record_shutdown: boolean;
+  record_deaths: boolean;
+  record_first_blood_victim: boolean;
   record_assists: boolean;
   record_dragon: boolean;
   record_baron: boolean;
@@ -68,8 +69,11 @@ export const EVENT_FILTER_DEFAULTS: CanonicalEventFilter = {
   record_kills: true,
   record_multikills: true,
   record_first_blood: true,
+  // 셧다운은 킬 계열이라 기본으로 담는다 — `false` 이던 동안 기본 설정 사용자는
+  // "킬을 담겠다"고 켜 둔 채로 연속킬 저지 장면을 잃고 있었다.
+  record_shutdown: true,
   record_deaths: false,
-  record_shutdown: false,
+  record_first_blood_victim: false,
   // Balanced 프리셋과 같은 값. 어긋나면 새 설치가 "직접 설정" 으로 뜬다.
   record_assists: true,
   record_dragon: true,
@@ -100,7 +104,7 @@ export const HIGHLIGHT_PRESET_FILTERS: Record<
   everything: {
     ...EVENT_FILTER_DEFAULTS,
     record_deaths: true,
-    record_shutdown: true,
+    record_first_blood_victim: true,
     record_assists: true,
     record_turret: true,
   },

@@ -21,11 +21,20 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
 import { logger } from "@/lib/logger";
 import type {
   AudioSettings,
+  BitratePreset,
+  FrameRate,
   RecordingSettings,
   VideoSettings,
 } from "@/types";
@@ -37,9 +46,11 @@ import {
   type SelectableHighlightPreset,
 } from "./highlightPreset";
 import {
+  BITRATE_MBPS,
   clipLengthSpecs,
   enabledScenes,
-  qualitySpecs,
+  FRAME_RATE_FPS,
+  megabytesPerMinute,
   type SceneFlag,
 } from "./settingSpecs";
 import { evaluateCoverage } from "./captureCoverage";
@@ -146,6 +157,12 @@ const QUALITY_LEVELS: readonly QualityLevel[] = ["high", "medium", "low"];
  * "성능을 지킬수록 왼쪽" 이라는 사용자 멘탈 모델을 따라야 한다.
  */
 const QUALITY_DISPLAY_ORDER: readonly QualityLevel[] = ["low", "medium", "high"];
+
+/** 드롭다운에 노출할 프레임. 120/144 는 롤에서 흔치 않지만 고사양 사용자가 있다. */
+const FRAME_RATE_OPTIONS: readonly FrameRate[] = ["fps30", "fps60", "fps120", "fps144"];
+
+/** 화질(비트레이트). 숫자를 그대로 보여준다 — "높음" 보다 "40 Mbps" 가 판단에 낫다. */
+const BITRATE_OPTIONS: readonly BitratePreset[] = ["low", "medium", "high", "very_high"];
 
 /** `VideoSettings::default()` 가 만드는 조합(60fps + medium)에 대응. */
 const RECOMMENDED_QUALITY: QualityLevel = "medium";
@@ -289,6 +306,63 @@ function OptionCards({
         );
       })}
     </RadioGroup>
+  );
+}
+
+interface SettingRowProps {
+  label: string;
+  hint?: string;
+  value: string;
+  options: readonly { value: string; label: string }[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  testId: string;
+}
+
+/**
+ * 값 하나를 바로 바꾸는 줄. 라벨은 왼쪽, 드롭다운은 오른쪽.
+ *
+ * 예전에는 이 자리가 **읽기 전용 표**였고, 실제로 바꾸려면 아래 고급 설정까지
+ * 스크롤해서 같은 항목을 다시 찾아야 했다. 프리셋으로 큰 틀을 잡고 여기서 바로
+ * 손보는 게 자연스럽다 — 바꾸는 순간 위 프리셋 배지가 "직접 설정" 으로 넘어가므로
+ * 사용자는 자기가 기본에서 벗어났다는 걸 그 자리에서 안다.
+ */
+function SettingRow({
+  label,
+  hint,
+  value,
+  options,
+  onChange,
+  disabled,
+  testId,
+}: SettingRowProps) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 py-2.5 last:border-b-0">
+      <div className="min-w-0">
+        <p className="text-sm">{label}</p>
+        {hint && (
+          <p className="text-xs text-muted-foreground" style={{ wordBreak: "keep-all" }}>
+            {hint}
+          </p>
+        )}
+      </div>
+      <Select value={value} onValueChange={onChange} disabled={disabled}>
+        <SelectTrigger
+          className="h-11 w-[11.5rem] shrink-0"
+          data-testid={testId}
+          aria-label={label}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -599,26 +673,59 @@ export function BasicSettings({
           }))}
         />
 
-        <SpecTable
-          testId="quality-specs"
-          rows={[
-            ...qualitySpecs(settings.video).map((row) => ({
-              label: t(`settings.basic.quality.specs.${row.key}`),
-              value:
-                row.key === "frameRate"
-                  ? t("settings.basic.quality.specs.frameRateValue", {
-                      fps: row.value,
-                    })
-                  : row.value,
-            })),
-            // 해상도는 설정이 아니라 사실 보고다 — 캡처는 게임 창 크기를 그대로
-            // 쓰므로(Windows), 고를 수 있는 값처럼 보이면 안 된다.
-            {
-              label: t("settings.basic.quality.specs.captureSize"),
-              value: t("settings.basic.quality.specs.captureSizeValue"),
-            },
-          ]}
-        />
+        {/* 프리셋으로 큰 틀을 잡고, 세부는 여기서 바로. 하나라도 바꾸면 위
+            배지가 "직접 설정" 이 된다(`detectQualityLevel`). */}
+        <div className="mt-4 border-t border-white/5">
+          <SettingRow
+            testId="quality-fps"
+            label={t("settings.basic.quality.specs.frameRate")}
+            value={settings.video.frame_rate}
+            options={FRAME_RATE_OPTIONS.map((v) => ({
+              value: v,
+              label: t("settings.basic.quality.specs.frameRateValue", {
+                fps: FRAME_RATE_FPS[v],
+              }),
+            }))}
+            onChange={(frame_rate) =>
+              onChange({
+                ...settings,
+                video: { ...settings.video, frame_rate: frame_rate as FrameRate },
+              })
+            }
+            disabled={disabled}
+          />
+          <SettingRow
+            testId="quality-bitrate"
+            label={t("settings.basic.quality.specs.bitrate")}
+            hint={t("settings.basic.quality.specs.sizePerMinuteHint", {
+              size: megabytesPerMinute(BITRATE_MBPS[settings.video.bitrate_preset]),
+            })}
+            value={settings.video.bitrate_preset}
+            options={BITRATE_OPTIONS.map((v) => ({
+              value: v,
+              label: `${BITRATE_MBPS[v]} Mbps`,
+            }))}
+            onChange={(bitrate_preset) =>
+              onChange({
+                ...settings,
+                video: {
+                  ...settings.video,
+                  bitrate_preset: bitrate_preset as BitratePreset,
+                },
+              })
+            }
+            disabled={disabled}
+          />
+          {/* 녹화 크기는 고를 수 있는 값이 아니다 — Windows 캡처는 게임 창 크기를
+              그대로 쓴다(`commands.rs` 의 `recording_quality_resolution_label`).
+              드롭다운으로 만들면 눌러도 아무 일이 없는 가짜 컨트롤이 된다. */}
+          <div className="flex items-center justify-between gap-3 py-2.5 text-sm">
+            <span>{t("settings.basic.quality.specs.captureSize")}</span>
+            <span className="text-muted-foreground">
+              {t("settings.basic.quality.specs.captureSizeValue")}
+            </span>
+          </div>
+        </div>
         <p
           className="mt-3 text-xs text-muted-foreground"
           style={{ wordBreak: "keep-all" }}

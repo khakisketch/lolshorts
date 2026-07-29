@@ -45,6 +45,12 @@ export interface CaptureScene {
 export const CAPTURE_SCENES: readonly CaptureScene[] = [
   { flag: "record_kills", priority: 1, labelKey: "record_kills" },
   { flag: "record_deaths", priority: 1, labelKey: "record_deaths" },
+  // 퍼블을 당한 것 — 데스의 하위 상황인데 우선순위는 일반 데스보다 높다.
+  {
+    flag: "record_first_blood_victim",
+    priority: 3,
+    labelKey: "record_first_blood_victim",
+  },
   { flag: "record_assists", priority: 1, labelKey: "record_assists" },
   { flag: "record_turret", priority: 1, labelKey: "record_turret" },
   { flag: "record_dragon", priority: 2, labelKey: "record_dragon" },

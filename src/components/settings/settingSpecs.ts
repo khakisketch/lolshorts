@@ -55,13 +55,13 @@ export function megabytesPerMinute(bitrateMbps: number): number {
 }
 
 /**
- * `AutoClipManager::calculate_clip_window` 가 쓰는 버킷
+ * `AutoClipManager::calculate_clip_window` 가 설정에서 찾아보는 버킷
  * (`src-tauri/src/recording/auto_clip_manager.rs`).
  *
- * 중요한 사실: 이벤트 종류는 20가지가 넘는데 클립 길이는 이 5개로만 갈린다.
- * 나머지(에이스·퍼블·드래곤·바론·아웃플레이…)는 전부 `kill` 로 떨어진다.
- * 화면이 "킬 13초" 라고만 적으면 사용자는 에이스도 13초라는 걸 모르므로,
- * 라벨에 "그 외 장면" 을 명시한다.
+ * 설정 파일의 `event_timings` 에는 이 다섯 이름으로만 키가 붙는다. 나머지
+ * 이벤트(에이스·바론·아웃플레이…)는 설정으로 조절할 수 없고 이벤트가 스스로
+ * 권장하는 길이를 쓴다 — 그래서 이 표는 "다섯 종류의 길이" 가 아니라
+ * "설정으로 바꿀 수 있는 다섯 가지" 다.
  */
 export const CLIP_WINDOW_BUCKETS = [
   "kill",
@@ -74,8 +74,30 @@ export const CLIP_WINDOW_BUCKETS = [
 export type ClipWindowBucket = (typeof CLIP_WINDOW_BUCKETS)[number];
 
 /**
- * `ClipTimingSettings::get_timing_for_event` 미러 — 이벤트별 항목이 있으면 그걸,
- * 없으면 기본 앞/뒤 길이를 쓴다.
+ * 설정에 항목이 없을 때 백엔드가 쓰는 길이 —
+ * `EventTrigger::pre_duration()/post_duration()` (`live_client.rs`) 미러.
+ *
+ * **이 표가 없던 동안 화면은 거짓말을 하고 있었다.** 프론트는 항목이 없으면
+ * `default_pre + default_post`(=13초) 라고 적었는데, 백엔드는 그 경로에서
+ * 이벤트별 설계값을 쓴다. 그래서 「게임 끝」은 화면상 13초, 실제로는 40초였다.
+ * 승리 화면을 길게 담으려고 넣은 설계값이 화면에는 반영되지 않은 것이다.
+ *
+ * 값이 어긋나면 `settingSpecs.test.ts` 가 Rust 소스를 직접 읽어 깨뜨린다.
+ */
+export const TRIGGER_DEFAULT_SECONDS: Record<ClipWindowBucket, number> = {
+  kill: 10 + 3,
+  multikill: 15 + 5,
+  steal: 20 + 3,
+  death: 8 + 3,
+  game_end: 30 + 10,
+};
+
+/**
+ * `AutoClipManager::calculate_clip_window` 미러 — 설정에 그 이벤트 항목이 있으면
+ * 그 값을, 없으면 이벤트가 스스로 권장하는 길이를 쓴다.
+ *
+ * `default_pre_duration`/`default_post_duration` 은 **여기에 쓰이지 않는다.**
+ * 백엔드가 그 두 값을 이 경로에서 읽지 않기 때문이다.
  */
 export function clipWindowSeconds(
   timing: ClipTimingSettings,
@@ -85,7 +107,7 @@ export function clipWindowSeconds(
   if (specific) {
     return specific.pre_duration + specific.post_duration;
   }
-  return timing.default_pre_duration + timing.default_post_duration;
+  return TRIGGER_DEFAULT_SECONDS[bucket];
 }
 
 /**
@@ -106,6 +128,7 @@ export const SCENE_FLAGS = [
   "record_low_hp",
   "record_assists",
   "record_deaths",
+  "record_first_blood_victim",
   "record_steal",
   "record_baron",
   "record_elder",

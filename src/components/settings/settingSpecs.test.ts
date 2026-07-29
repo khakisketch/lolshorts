@@ -9,6 +9,7 @@ import {
   megabytesPerMinute,
   qualitySpecs,
   SCENE_FLAGS,
+  TRIGGER_DEFAULT_SECONDS,
 } from './settingSpecs';
 import type { ClipTimingSettings } from '@/types';
 
@@ -68,6 +69,49 @@ describe('settingSpecs (backend mirror)', () => {
       }
 
       expect([...buckets].sort()).toEqual([...CLIP_WINDOW_BUCKETS].sort());
+    });
+
+    it('설정에 항목이 없을 때 쓰는 길이가 EventTrigger 설계값과 같다', () => {
+      // 이 단언이 없던 동안 화면은 「게임 끝 13초」라고 적었고 실제 산출물은
+      // 40초였다. 프론트는 `default_pre + default_post` 로 떨어뜨렸는데 백엔드는
+      // 그 경로에서 이벤트별 설계값을 쓴다.
+      const live = fs.readFileSync(LIVE_CLIENT_RS, 'utf8');
+
+      /** `pub fn <name>(&self) -> u32 {` 본문에서 `Variant => N` 을 뽑는다. */
+      const durations = (fn: 'pre_duration' | 'post_duration') => {
+        const start = live.indexOf(`pub fn ${fn}(&self) -> u32 {`);
+        expect(start).toBeGreaterThan(-1);
+        const block = live.slice(start, live.indexOf(FN_END, start));
+        const out: Record<string, number> = {};
+        const re = /EventTrigger::(\w+)(?:\([^)]*\))?\s*=>\s*(\d+)\s*,/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(block)) !== null) {
+          if (out[m[1]] === undefined) out[m[1]] = Number(m[2]);
+        }
+        // `_ => N` 갈래(다른 변형 전부).
+        const fallback = /_\s*=>\s*(\d+)\s*,/.exec(block);
+        expect(fallback).not.toBeNull();
+        out.__fallback = Number(fallback![1]);
+        return out;
+      };
+
+      const pre = durations('pre_duration');
+      const post = durations('post_duration');
+      const total = (variant: string) =>
+        (pre[variant] ?? pre.__fallback) + (post[variant] ?? post.__fallback);
+
+      // `calculate_clip_window` 의 버킷 -> `EventTrigger` 변형 대응.
+      expect(TRIGGER_DEFAULT_SECONDS).toEqual({
+        kill: total('ChampionKill'),
+        multikill: total('Multikill'),
+        steal: total('Steal'),
+        death: total('Death'),
+        game_end: total('GameEnd'),
+      });
+      // 승리 순간이 킬과 같은 길이면 설계값이 다시 죽은 것이다.
+      expect(TRIGGER_DEFAULT_SECONDS.game_end).toBeGreaterThan(
+        TRIGGER_DEFAULT_SECONDS.kill,
+      );
     });
 
     it('설정에 키가 없는 이벤트는 기본값으로 뭉개지지 않는다', () => {
@@ -179,13 +223,14 @@ describe('settingSpecs (계산)', () => {
     merge_time_threshold: 15,
   } as ClipTimingSettings;
 
-  it('이벤트별 항목이 있으면 그 값을, 없으면 기본값을 쓴다', () => {
+  it('이벤트별 항목이 있으면 그 값을, 없으면 이벤트 설계값을 쓴다', () => {
     expect(clipWindowSeconds(timing, 'kill')).toBe(13);
     expect(clipWindowSeconds(timing, 'multikill')).toBe(20);
     expect(clipWindowSeconds(timing, 'steal')).toBe(25);
-    // 항목이 없는 버킷은 기본 10+3.
-    expect(clipWindowSeconds(timing, 'death')).toBe(13);
-    expect(clipWindowSeconds(timing, 'game_end')).toBe(13);
+    // 항목이 없는 버킷은 `default_pre + default_post`(13) 가 아니라 그 이벤트의
+    // 설계값을 쓴다 — 백엔드 `calculate_clip_window` 와 같은 규칙이다.
+    expect(clipWindowSeconds(timing, 'death')).toBe(TRIGGER_DEFAULT_SECONDS.death);
+    expect(clipWindowSeconds(timing, 'game_end')).toBe(40);
   });
 
   it('클립 길이 표는 모든 버킷을 빠짐없이 낸다', () => {
