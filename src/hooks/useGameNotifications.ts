@@ -23,7 +23,7 @@ export function useGameNotifications(gameStatus: UnifiedGameStatus | null) {
 
     // 게임 종료 감지
     if (!currentInGame && prevInGame.current) {
-      notifyGameEnded(0);
+      notifyGameEnded(gameStatus.session_clip_count ?? 0);
     }
 
     prevInGame.current = currentInGame;

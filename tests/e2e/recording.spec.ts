@@ -43,22 +43,26 @@ test.describe("Dashboard Game Status", () => {
   }) => {
     const dashboard = page.getByTestId("dashboard");
     await expect(dashboard).toBeVisible({ timeout: 5000 });
-    const readinessPanel = dashboard
-      .locator(".gaming-panel")
-      .filter({ hasText: /Recording Readiness|dashboard\.readiness\.title/ })
-      .first();
 
+    // Readiness is now a one-line summary that expands into full detail.
+    const readinessToggle = dashboard.getByRole("button", {
+      name: /Details|자세히/,
+    });
+    await expect(readinessToggle).toBeVisible({ timeout: 10000 });
+    await readinessToggle.click();
+
+    // Blocker/warning messages come from the mocked backend (not translated).
     await expect(
-      readinessPanel.getByText(/FFmpeg unavailable in test fixture/),
+      dashboard.getByText(/FFmpeg unavailable in test fixture/),
     ).toBeVisible({ timeout: 5000 });
     await expect(
-      readinessPanel.getByText(/Storage space low in test fixture/),
+      dashboard.getByText(/Storage space low in test fixture/),
     ).toBeVisible();
-    await expect(readinessPanel.getByText(/^ffmpeg$/i)).toBeVisible();
-    await expect(readinessPanel.getByText(/^audio$/i)).toBeVisible();
-    await expect(readinessPanel.getByText(/^disk$/i)).toBeVisible();
-    await expect(readinessPanel.getByText(/^lcu$/i)).toBeVisible();
-    await expect(readinessPanel.getByText(/^gpu$/i)).toBeVisible();
+
+    // Component names are now human-readable and localized (English fixture).
+    await expect(dashboard.getByText(/Recording engine/i)).toBeVisible();
+    await expect(dashboard.getByText(/League connection/i)).toBeVisible();
+    await expect(dashboard.getByText(/Graphics card/i)).toBeVisible();
   });
 });
 
@@ -99,6 +103,8 @@ test.describe("Navigation", () => {
 
     const settings = page.getByTestId("settings");
     await expect(settings).toBeVisible({ timeout: 5000 });
+    // 개별 항목은 기본 화면에서 내려가 "고급 설정" 안에 있다.
+    await settings.getByTestId("advanced-settings-toggle").click();
     await expect(
       settings.getByText("Show Replay Detection Popup"),
     ).toBeVisible();

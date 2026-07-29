@@ -3,13 +3,19 @@ use anyhow::Result;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock as TokioRwLock;
 use tokio::time::Instant;
 use tracing::info;
 
-use super::segment_recorder::SegmentRecorder;
+use super::segment_recorder::{now_wall_secs, SegmentRecorder};
 use super::types::{RecordingConfig, RecordingStats, RecordingStatus};
 use crate::storage::GameMetadata;
+
+/// Extra slack added to the buffer-coverage wait on top of one segment boundary.
+const COVERAGE_WAIT_SLACK: f64 = 2.0;
+/// Hard ceiling for the coverage wait so a pathological window can never hang a save.
+const MAX_COVERAGE_WAIT_SECS: f64 = 120.0;
 
 /// Check whether the League of Legends game window is visible and not minimized.
 ///
@@ -73,6 +79,8 @@ pub struct WindowsCaptureRecorder {
     pub(super) current_game: Arc<TokioRwLock<Option<GameMetadata>>>,
     pub(super) start_time: Arc<TokioRwLock<Option<Instant>>>,
     pub(super) total_frames: Arc<TokioRwLock<u64>>,
+    /// Cancels the background FFmpeg health-monitor task when recording stops.
+    pub(super) health_cancel_tx: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 impl WindowsCaptureRecorder {
@@ -88,6 +96,7 @@ impl WindowsCaptureRecorder {
             current_game: Arc::new(TokioRwLock::new(None)),
             start_time: Arc::new(TokioRwLock::new(None)),
             total_frames: Arc::new(TokioRwLock::new(0)),
+            health_cancel_tx: None,
         })
     }
 
@@ -123,21 +132,102 @@ impl WindowsCaptureRecorder {
             );
         }
 
+        // `start()` now verifies FFmpeg is still alive ~1.2s after spawn, so a bad
+        // capture rect / encoder fails HERE instead of pretending to record. Roll the
+        // status back to Idle on failure, otherwise it would stay stuck on Buffering
+        // and every retry would bail with "이미 녹화가 진행 중입니다".
         {
             let mut recorder = self.segment_recorder.write().await;
-            recorder.start().await?;
+            if let Err(e) = recorder.start().await {
+                drop(recorder);
+                *self.status.write().await = RecordingStatus::Idle;
+                return Err(e);
+            }
         }
 
         *self.start_time.write().await = Some(Instant::now());
         *self.total_frames.write().await = 0;
         *self.status.write().await = RecordingStatus::Recording;
 
+        // Task 28: start the FFmpeg crash-recovery watchdog. Without this the recovery
+        // logic in SegmentRecorder::monitor_ffmpeg_health was never called, so a mid-game
+        // FFmpeg crash left status stuck on "Recording" while no new segments were written.
+        self.spawn_health_monitor();
+
         info!("녹화가 성공적으로 시작되었습니다");
         Ok(())
     }
 
+    /// Spawn a background task that periodically checks FFmpeg health and, on an
+    /// unexpected exit, attempts ONE restart (preserving segments AND the running WASAPI
+    /// audio thread). If FFmpeg is dead and cannot be restarted, the recording status is
+    /// transitioned to `Error` so the UI can surface the failure.
+    fn spawn_health_monitor(&mut self) {
+        // Cancel any previous monitor before starting a new one.
+        if let Some(tx) = self.health_cancel_tx.take() {
+            let _ = tx.send(true);
+        }
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        self.health_cancel_tx = Some(tx);
+
+        let segment_recorder = Arc::clone(&self.segment_recorder);
+        let status = Arc::clone(&self.status);
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = rx.changed() => {
+                        if *rx.borrow() {
+                            break;
+                        }
+                    }
+                }
+                if *rx.borrow() {
+                    break;
+                }
+
+                // Only monitor while actively recording; stop once it ends elsewhere.
+                let current = *status.read().await;
+                match current {
+                    RecordingStatus::Recording | RecordingStatus::Buffering => {}
+                    RecordingStatus::Idle | RecordingStatus::Error => break,
+                    RecordingStatus::Processing => continue,
+                }
+
+                let (restarted, still_alive) = {
+                    let mut recorder = segment_recorder.write().await;
+                    let restarted = recorder.monitor_ffmpeg_health().await;
+                    (restarted, recorder.is_recording())
+                };
+
+                if restarted {
+                    tracing::warn!(
+                        "FFmpeg crash detected — recording restarted (segments & audio preserved)"
+                    );
+                }
+
+                if !still_alive {
+                    tracing::error!(
+                        "FFmpeg process is dead and could not be restarted; marking recording as Error"
+                    );
+                    *status.write().await = RecordingStatus::Error;
+                    break;
+                }
+            }
+            tracing::debug!("FFmpeg health monitor task exiting");
+        });
+    }
+
     /// 녹화 중지
     pub async fn stop_recording(&mut self) -> Result<PathBuf> {
+        // Stop the health watchdog first so it cannot restart FFmpeg mid-stop.
+        if let Some(tx) = self.health_cancel_tx.take() {
+            let _ = tx.send(true);
+        }
+
         {
             let mut status = self.status.write().await;
             match *status {
@@ -177,61 +267,73 @@ impl WindowsCaptureRecorder {
         Ok(output_path)
     }
 
-    /// 마지막 N초 클립 저장
-    pub async fn save_last_seconds(&self, seconds: u32) -> Result<PathBuf> {
-        let status = self.status.read().await;
-        if *status != RecordingStatus::Recording && *status != RecordingStatus::Buffering {
-            anyhow::bail!("녹화가 진행 중이 아닙니다");
+    /// 마지막 N초 클립 저장.
+    ///
+    /// Returns the saved clip path **and its measured duration**. The measured
+    /// value is what callers must persist: the rolling buffer may hold less than
+    /// `secs` (short session, coverage timeout), in which case the produced file is
+    /// shorter than requested and storing the request value would make auto-edit
+    /// plan around footage that does not exist.
+    pub async fn save_last_seconds(&self, secs: u64) -> Result<(PathBuf, f64), String> {
+        let status = *self.status.read().await;
+        if status != RecordingStatus::Recording && status != RecordingStatus::Buffering {
+            return Err("녹화가 진행 중이 아닙니다".to_string());
         }
-        drop(status);
-
-        let recorder = self.segment_recorder.read().await;
-        let elapsed = recorder.get_elapsed_secs();
-
-        let start_offset = if elapsed > seconds as f64 {
-            elapsed - seconds as f64
-        } else {
-            0.0
-        };
-
-        let duration = seconds as f64;
 
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let filename = format!("clip_{}_{}.mp4", timestamp, seconds);
+        let filename = format!("clip_{}_{}.mp4", timestamp, secs);
         let output_path = self.config.output_dir.join("clips").join(&filename);
 
         if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
 
-        recorder
-            .save_clip(&output_path, start_offset, duration)
+        // Offset/duration are computed against the actual rolling-buffer timeline
+        // inside save_clip; we only pass the requested window length.
+        //
+        // The recorder guard is released BEFORE the extraction runs: an export holds no
+        // recorder state (it works off the snapshot) and can take minutes, during which
+        // the health monitor's 5-second `write()` would otherwise park every status/stats
+        // read behind it — tokio's RwLock is write-preferring.
+        let ctx = {
+            let recorder = self.segment_recorder.read().await;
+            recorder.extraction_context()
+        };
+        ctx.save_clip(&output_path, secs as f64)
             .await
+            .map_err(|e| e.to_string())
     }
 
-    /// 특정 이벤트 시점 기준 클립 저장 (상대 시간 적용)
+    /// 특정 이벤트 시점 기준 클립 저장.
+    ///
+    /// `event_wall_secs` is the WALL-CLOCK instant (seconds since the UNIX epoch) at
+    /// which the event was DETECTED — `AutoClipManager` stamps it the moment the Live
+    /// Client poll surfaces the event. The clip window is therefore the explicit
+    /// `[event − pre, event + post]` range.
+    ///
+    /// It used to be ignored (`_event_time_secs`) and every clip was simply "the last
+    /// pre+post seconds ending now", so the clip drifted by however long queueing,
+    /// merging, lock contention and the post-event wait had taken — for a merged window
+    /// that is easily 30+ seconds past the play the user wanted.
+    ///
+    /// Returns `(clip_path, actual_duration_secs)`. The duration is MEASURED on the
+    /// produced file, not `pre_secs + post_secs`: whenever the rolling buffer could not
+    /// cover the window the export is clamped to a shorter clip, and storing the request
+    /// instead of the result made auto-edit trim against footage that does not exist.
     pub async fn save_event_clip(
         &self,
-        _event_time_secs: f64,
+        event_wall_secs: f64,
         pre_secs: f64,
         post_secs: f64,
         clip_id: &str,
-    ) -> Result<PathBuf> {
-        let status = self.status.read().await;
-        if *status != RecordingStatus::Recording && *status != RecordingStatus::Buffering {
+    ) -> Result<(PathBuf, f64)> {
+        let status = *self.status.read().await;
+        if status != RecordingStatus::Recording && status != RecordingStatus::Buffering {
             anyhow::bail!("녹화가 진행 중이 아닙니다");
         }
-        drop(status);
 
-        let recorder = self.segment_recorder.read().await;
-        let elapsed = recorder.get_elapsed_secs();
         let total_duration = pre_secs + post_secs;
-
-        let start_offset = if elapsed > total_duration {
-            elapsed - total_duration
-        } else {
-            0.0
-        };
+        let end_anchor = event_wall_secs + post_secs;
 
         let filename = format!("{}.mp4", clip_id);
         let output_path = self.config.output_dir.join("clips").join(&filename);
@@ -240,9 +342,31 @@ impl WindowsCaptureRecorder {
             std::fs::create_dir_all(parent)?;
         }
 
-        recorder
-            .save_clip(&output_path, start_offset, total_duration)
-            .await
+        // Budget for the buffer to reach the end of the window: whatever post-event time
+        // is still in the future, plus one segment boundary (the in-progress segment has
+        // no moov atom and is unusable), plus slack.
+        let coverage_timeout = Duration::from_secs_f64(
+            ((end_anchor - now_wall_secs()).max(0.0)
+                + self.config.segment_duration_secs as f64
+                + COVERAGE_WAIT_SLACK)
+                .clamp(0.0, MAX_COVERAGE_WAIT_SECS),
+        );
+
+        // Snapshot under the guard, extract without it — the coverage wait (up to 120s),
+        // the per-segment verify pass and the export itself must not keep the recorder
+        // lock, or the health monitor's periodic `write()` freezes every status poll for
+        // the whole save (see `ClipExtractionContext`).
+        let ctx = {
+            let recorder = self.segment_recorder.read().await;
+            recorder.extraction_context()
+        };
+        ctx.save_clip_anchored(
+            &output_path,
+            total_duration,
+            Some(end_anchor),
+            coverage_timeout,
+        )
+        .await
     }
 
     pub async fn get_status(&self) -> RecordingStatus {
@@ -250,17 +374,29 @@ impl WindowsCaptureRecorder {
     }
 
     pub async fn get_stats(&self) -> RecordingStats {
-        let total_frames = *self.total_frames.read().await;
         let start_time = *self.start_time.read().await;
         let uptime = start_time.map(|t| t.elapsed().as_secs_f64());
+
+        // Real measured values from FFmpeg progress output — do NOT fabricate the
+        // configured fps (the old code returned config.fps as if it were measured).
+        let (total_frames, audio_active, mic_active) = {
+            let recorder = self.segment_recorder.read().await;
+            (
+                recorder.frame_count(),
+                recorder.system_audio_active(),
+                recorder.mic_active(),
+            )
+        };
 
         RecordingStats {
             total_frames,
             uptime_seconds: uptime.unwrap_or(0.0),
             current_fps: match uptime {
                 Some(u) if u > 0.0 => total_frames as f64 / u,
-                _ => self.config.fps as f64,
+                _ => 0.0,
             },
+            audio_active,
+            mic_active,
         }
     }
 

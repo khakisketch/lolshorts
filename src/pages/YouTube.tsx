@@ -21,8 +21,10 @@ export function YouTube() {
   const { t } = useTranslation();
   const { path: initialUploadPath, resultId: initialResultId } = getInitialUploadParams();
 
+  // Uploading is free for signed-in users — only scheduled/batch uploads are
+  // PRO — so this surface only requires an account, not an entitlement.
   return (
-    <ProtectedFeature requiresPro={true} featureName={t('youtube.title')}>
+    <ProtectedFeature requiresPro={false} featureName={t('youtube.title')}>
       <div className="h-full flex flex-col overflow-hidden p-6">
         <div className="flex items-center gap-3 mb-6">
           <Youtube className="h-8 w-8 text-red-500" />

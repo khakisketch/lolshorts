@@ -30,6 +30,10 @@ interface AutoEditStore {
   targetDuration: DurationOption;
   setTargetDuration: (duration: DurationOption) => void;
 
+  // Effects (experimental)
+  enableEventZoom: boolean;
+  setEnableEventZoom: (enabled: boolean) => void;
+
   // Canvas template
   currentTemplate: CanvasTemplate | null;
   availableTemplates: CanvasTemplateInfo[];
@@ -78,6 +82,8 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
 
   targetDuration: 60,
 
+  enableEventZoom: false,
+
   currentTemplate: null,
   availableTemplates: [],
   isEditingCanvas: false,
@@ -117,6 +123,9 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
 
   // Duration
   setTargetDuration: (duration) => set({ targetDuration: duration }),
+
+  // Effects (experimental)
+  setEnableEventZoom: (enabled) => set({ enableEventZoom: enabled }),
 
   // Canvas template
   setCurrentTemplate: (template) => set({ currentTemplate: template }),
@@ -160,11 +169,18 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
       currentTemplate,
       backgroundMusic,
       audioLevels,
+      enableEventZoom,
     } = get();
 
     const config: AutoEditConfig = {
       game_ids: selectedGameIds,
       target_duration: targetDuration,
+      enable_event_zoom: enableEventZoom,
+      // Always sent: `audio_levels` also carries the GAME audio volume, so it is
+      // meaningful without background music. The Rust side takes it by value
+      // (AutoEditConfig.audio_levels is not Option), so omitting it used to fail
+      // deserialization with "missing field audio_levels".
+      audio_levels: audioLevels,
     };
 
     if (currentTemplate) {
@@ -173,7 +189,6 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
 
     if (backgroundMusic) {
       config.background_music = backgroundMusic;
-      config.audio_levels = audioLevels;
     }
 
     return config;
@@ -184,6 +199,7 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
     currentStep: 'configure',
     selectedGameIds: [],
     targetDuration: 60,
+    enableEventZoom: false,
     currentTemplate: null,
     isEditingCanvas: false,
     backgroundMusic: null,

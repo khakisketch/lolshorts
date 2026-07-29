@@ -21,7 +21,9 @@ pub mod wasapi_audio;
 pub mod audio;
 pub mod auto_clip_manager;
 pub mod commands;
+pub mod game_lifecycle;
 pub mod game_monitor;
+pub mod highlight_score;
 pub mod live_client;
 
 // Complete integration exports

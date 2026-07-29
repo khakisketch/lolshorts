@@ -84,10 +84,11 @@ export const test = base.extend({
           case "get_settings":
           case "get_recording_settings":
             return {
+              // 백엔드 기본값(1080p60 / medium / h264)과 같은 조합 = 기본 화면의 "보통".
               video: {
                 resolution: "r1920x1080",
                 frame_rate: "fps60",
-                bitrate_preset: "high",
+                bitrate_preset: "medium",
                 codec: "h264",
                 encoder: "auto",
               },
@@ -101,24 +102,34 @@ export const test = base.extend({
                 microphone_volume: 100,
                 system_audio_volume: 100,
               },
+              // 백엔드가 실제로 돌려주는 전체 필드 = HighlightPreset::Balanced 조합.
+              // 일부만 담으면 설정 화면이 "직접 설정"으로 보여 갓 설치한 앱 상태를
+              // 재현하지 못한다(src-tauri/src/settings/models.rs 참조).
               event_filter: {
                 record_kills: true,
                 record_multikills: true,
                 record_first_blood: true,
                 record_deaths: false,
-                record_shutdown: true,
-                record_assists: false,
+                record_shutdown: false,
+                record_assists: true,
                 record_dragon: true,
                 record_baron: true,
                 record_elder: true,
                 record_herald: true,
-                record_turret: true,
+                record_turret: false,
                 record_inhibitor: true,
                 record_nexus: true,
                 record_ace: true,
                 record_game_end: true,
                 record_steal: true,
-                min_priority: 2,
+                record_voidgrubs: true,
+                record_atakhan: true,
+                record_outplay: true,
+                record_trade_kill: true,
+                record_low_hp: true,
+                min_priority: 1,
+                min_game_duration_secs: 300,
+                contest_window_secs: 10,
               },
               game_mode: {
                 record_ranked_solo: true,
@@ -170,6 +181,13 @@ export const test = base.extend({
                 device_type: "Microphone",
               },
             ];
+
+          // cpal 기반 장치 열거 (AudioSettings 드롭다운)
+          case "list_system_audio_devices":
+            return ["Default Audio Device", "Speakers (Realtek)"];
+
+          case "list_microphone_devices":
+            return ["Default Microphone", "Headset Mic (USB)"];
 
           case "get_audio_devices_with_cache_info":
             return {

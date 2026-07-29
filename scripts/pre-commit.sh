@@ -55,7 +55,7 @@ if [ ! -z "$RUST_STAGED" ]; then
 
     # Run clippy
     print_status $BLUE "Running Rust lints..."
-    if ! cargo clippy --all-targets --all-features -- -D warnings; then
+    if ! cargo clippy --all-targets -- -D warnings; then
         print_status $RED "❌ Rust code has linting errors."
         print_status $YELLOW "Fix the linting errors and try again."
         exit 1

@@ -2,9 +2,9 @@ use anyhow::Result;
 /// Global hotkey system for LoLShorts
 ///
 /// Registers system-wide hotkeys for recording control:
-/// - F8: Toggle auto-capture (start/stop)
-/// - F9: Save last 60 seconds (instant replay)
-/// - F10: Quick save 30 seconds
+/// - F8: Save last 60 seconds (manual instant replay)
+/// - F9: Toggle auto-capture (start/stop)
+/// - F10: Delete the most recently saved clip
 ///
 /// Uses Windows RegisterHotKey API for global hotkey registration
 use std::sync::Arc;
@@ -45,16 +45,16 @@ use windows::Win32::{
 };
 
 /// Hotkey identifiers
-const HOTKEY_F8: i32 = 1; // Toggle auto-capture
-const HOTKEY_F9: i32 = 2; // Save 60s
-const HOTKEY_F10: i32 = 3; // Save 30s
+const HOTKEY_F8: i32 = 1; // Save 60s (manual clip)
+const HOTKEY_F9: i32 = 2; // Toggle auto-capture
+const HOTKEY_F10: i32 = 3; // Delete last clip
 
 /// Hotkey event type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyEvent {
-    ToggleAutoCapture, // F8
-    SaveReplay60,      // F9
-    SaveReplay30,      // F10
+    ToggleAutoCapture, // F9
+    SaveReplay60,      // F8
+    DeleteLastClip,    // F10
 }
 
 /// Configuration for dynamic hotkey registration
@@ -260,7 +260,7 @@ impl HotkeyManager {
                     register_hotkey(HOTKEY_F9, "toggle_recording fallback", MOD_NOREPEAT, VK_F9);
                 }
 
-                // delete_last_clip -> SaveReplay30 (HOTKEY_F10)
+                // delete_last_clip -> DeleteLastClip (HOTKEY_F10)
                 if let Some((modifiers, vk)) = parse_hotkey(&config.delete_last_clip) {
                     register_hotkey(HOTKEY_F10, "delete_last_clip", modifiers, vk);
                 } else {
@@ -310,7 +310,7 @@ impl HotkeyManager {
                         let event = match hotkey_id {
                             HOTKEY_F8 => Some(HotkeyEvent::SaveReplay60),
                             HOTKEY_F9 => Some(HotkeyEvent::ToggleAutoCapture),
-                            HOTKEY_F10 => Some(HotkeyEvent::SaveReplay30),
+                            HOTKEY_F10 => Some(HotkeyEvent::DeleteLastClip),
                             _ => None,
                         };
 

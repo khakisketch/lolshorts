@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { dirname } from '@tauri-apps/api/path';
 import { useEditorStore } from '@/stores/editorStore';
 import { useEditor } from '@/hooks/useEditor';
 import { useStorage } from '@/hooks/useStorage';
@@ -7,6 +8,7 @@ import { EditorLayout } from '@/components/editor/EditorLayout';
 import { ClipLibrary } from '@/components/editor/ClipLibrary';
 import { VideoPreview } from '@/components/editor/VideoPreview';
 import { CompositionSettings } from '@/components/editor/CompositionSettings';
+import { EffectsPanel } from '@/components/editor/EffectsPanel';
 import { Timeline } from '@/components/editor/Timeline';
 import { ExportModal } from '@/components/editor/ExportModal';
 import { Button } from '@/components/ui/button';
@@ -21,31 +23,52 @@ import { useToast } from '@/components/ui/use-toast';
 export function Editor() {
   const { t } = useTranslation();
   const { toast } = useToast();
-  const { selectedGameId, setSelectedGameId, availableClips, setAvailableClips } = useEditorStore();
+  const { selectedGameId, setSelectedGameId, availableClips, setAvailableClips, selectedClipId } = useEditorStore();
   const { loadGameClips, isLoading, error } = useEditor();
-  const { getAllGames, isLoading: isLoadingGames } = useStorage();
+  const { getAllGames, isLoading: isLoadingGames, error: gamesError } = useStorage();
 
   const [games, setGames] = useState<Array<{ id: string; date: string; name: string }>>([]);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [effectsOutputDir, setEffectsOutputDir] = useState<string | null>(null);
+
+  // Effects (slow-motion/color grading/text overlay) apply to whichever clip
+  // is currently selected for preview; derive its containing directory as
+  // the default output location for the generated effect_*.mp4 files.
+  const effectsInputPath = availableClips.find((c) => c.file_path === selectedClipId)?.file_path ?? null;
 
   useEffect(() => {
-    const loadGames = async () => {
-      try {
-        const allGames = await getAllGames();
-        const gameList = allGames.map((game) => ({
-          id: game.game_id,
-          date: new Date(game.start_time).toLocaleDateString(),
-          name: `${game.champion} - ${game.game_mode}`,
-        }));
-        setGames(gameList);
-      } catch (err) {
-        logger.error('Failed to load games:', err);
-        toast({ title: t('editor.error.loadGamesFailed'), variant: 'destructive' });
-      }
-    };
+    if (!effectsInputPath) {
+      setEffectsOutputDir(null);
+      return;
+    }
+    dirname(effectsInputPath)
+      .then(setEffectsOutputDir)
+      .catch((err) => {
+        logger.error('Failed to resolve effects output directory:', err);
+        setEffectsOutputDir(null);
+      });
+  }, [effectsInputPath]);
 
-    loadGames();
+  const loadGames = useCallback(async () => {
+    try {
+      // Same guard as Games/Results: a failed or missing IPC returns null and
+      // `.map` on it throws before the empty state can render.
+      const allGames = (await getAllGames()) ?? [];
+      const gameList = allGames.map((game) => ({
+        id: game.game_id,
+        date: new Date(game.start_time).toLocaleDateString(),
+        name: `${game.champion} - ${game.game_mode}`,
+      }));
+      setGames(gameList);
+    } catch (err) {
+      logger.error('Failed to load games:', err);
+      toast({ title: t('editor.error.loadGamesFailed'), variant: 'destructive' });
+    }
   }, [getAllGames, t, toast]);
+
+  useEffect(() => {
+    loadGames();
+  }, [loadGames]);
 
   useEffect(() => {
     if (selectedGameId) {
@@ -81,8 +104,24 @@ export function Editor() {
           </p>
 
           {isLoadingGames ? (
-            <div className="flex items-center justify-center p-8">
+            <div className="flex flex-col items-center justify-center gap-3 p-8">
               <Loader2 className="w-8 h-8 animate-spin text-gaming-cyan" />
+              <p className="text-sm text-muted-foreground">{t('editor.loadingGames')}</p>
+            </div>
+          ) : gamesError ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-gaming-magenta" />
+                <h3 className="text-base font-semibold text-gaming-magenta">
+                  {t('editor.errorLoadingGames')}
+                </h3>
+              </div>
+              <Alert variant="destructive">
+                <AlertDescription>{gamesError}</AlertDescription>
+              </Alert>
+              <Button onClick={() => loadGames()} variant="outline" className="w-full">
+                {t('editor.retry')}
+              </Button>
             </div>
           ) : games.length === 0 ? (
             <Alert>
@@ -232,6 +271,9 @@ export function Editor() {
             <CompositionSettings
               onExport={() => setIsExportModalOpen(true)}
             />
+          }
+          effectsPanel={
+            <EffectsPanel inputPath={effectsInputPath} outputDir={effectsOutputDir} />
           }
           timeline={<Timeline />}
         />

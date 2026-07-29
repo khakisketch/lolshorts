@@ -10,7 +10,13 @@
     "autoEdit": "自動編集",
     "youtube": "YouTube",
     "settings": "設定",
-    "pro": "PRO"
+    "pro": "PRO",
+    "sidebarLabel": "アプリケーションサイドバー",
+    "mainNavigation": "メインナビゲーション",
+    "results": "結果",
+    "proRequired": "PROが必要です",
+    "replays": "リプレイ",
+    "userProfile": "ユーザープロフィール"
   },
   "auth": {
     "login": "ログイン",
@@ -99,7 +105,84 @@
         "autoRecord": "試合開始時に録画が自動的に開始されます",
         "playNormal": "通常通りプレイ - キル、オブジェクト、マルチキルに基づいてハイライトが自動検出されます",
         "afterGame": "試合終了後、録画は自動的に停止し、クリップが編集用に保存されます"
+      },
+      "show": "ガイドを表示",
+      "hide": "ガイドを閉じる"
+    },
+    "hero": {
+      "connectSubtitle": "リーグクライアントを起動すると自動的に接続します",
+      "connectHint": "接続されない場合はLoLShortsを管理者として実行してください",
+      "waitingSubtitle": "ゲームに入ると自動的に録画が始まります",
+      "recordingSubtitle": "ハイライトを自動的にキャプチャしています"
+    },
+    "hotkeys": {
+      "title": "ショートカット",
+      "toggleRecording": "自動録画の切り替え",
+      "manualSave": "クリップを手動保存",
+      "deleteLast": "最後のクリップを削除"
+    },
+    "readiness": {
+      "summaryReady": "録画準備完了",
+      "summaryActionNeeded": "対応が必要な項目 {{n}}件",
+      "summaryChecking": "録画準備状況を確認中",
+      "showDetails": "詳細",
+      "hideDetails": "閉じる",
+      "componentNames": {
+        "ffmpeg": "録画エンジン",
+        "audio": "オーディオ",
+        "disk": "ストレージ",
+        "lcu": "リーグ接続",
+        "gpu": "グラフィックカード"
+      },
+      "componentStatus": {
+        "ok": "正常",
+        "warning": "注意",
+        "error": "エラー"
       }
+    },
+    "services": {
+      "title": "サービス状態",
+      "labels": {
+        "capture": "キャプチャ",
+        "replay": "リプレイ",
+        "autoEdit": "自動編集",
+        "publish": "アップロード",
+        "storage": "ストレージ",
+        "service": "サービス"
+      },
+      "status": {
+        "ready": "準備完了",
+        "needsSetup": "設定が必要",
+        "blocked": "ブロック中",
+        "checking": "確認中"
+      },
+      "messages": {
+        "captureReady": "録画準備完了",
+        "captureCheck": "録画コンポーネントを確認",
+        "replayReady": "リプレイ準備完了",
+        "replayCheck": "リーグ接続を確認",
+        "autoEditReady": "AIエディタ準備完了",
+        "autoEditCheck": "システム要件を確認",
+        "publishReady": "YouTube接続済み",
+        "publishCheck": "アップロードするにはアカウントを接続",
+        "serviceOk": "すべてのサービス正常",
+        "serviceWarning": "一部の警告を検出",
+        "serviceBlocked": "サービスの問題を検出",
+        "storageChecking": "ストレージを確認中",
+        "storageOk": "十分な空き容量 ({{gb}}GB)",
+        "storageWarning": "空き容量が少ない ({{gb}}GB)",
+        "storageBlocked": "ディスクがほぼ満杯 ({{gb}}GB)"
+      }
+    },
+    "error": {
+      "title": "エラー",
+      "retry": "再試行"
+    },
+    "recordingError": {
+      "title": "録画ステータスエラー"
+    },
+    "errors": {
+      "initialization": "ダッシュボードの初期化に失敗しました"
     }
   },
   "games": {
@@ -314,6 +397,130 @@
         "audio": "オーディオ",
         "timing": "タイミング",
         "hotkeys": "ホットキー"
+      },
+      "audioSettings": {
+        "microphoneRecording": {
+          "title": "マイク録音",
+          "description": "ゲームプレイ中の音声解説を録音します",
+          "enableMicrophone": "マイク録音を有効にする",
+          "microphoneDevice": "マイクデバイス",
+          "defaultDevice": "デフォルトデバイス",
+          "selectDevice": "デバイスを選択",
+          "microphoneVolume": "マイク音量",
+          "muted": "ミュート",
+          "boost": "200%(ブースト)",
+          "comingSoon": "近日対応",
+          "disabledNotice": "現在のバージョンではマイク録音はサポートされていません(近日対応予定)。",
+          "mixingNotice": "マイクはシステム音声と1つのトラックにミキシングされます。"
+        },
+        "systemAudioRecording": {
+          "title": "システム音声録音",
+          "description": "ゲーム音、音楽などのシステム音声を録音します",
+          "enableSystemAudio": "システム音声録音を有効にする",
+          "systemAudioDevice": "システム音声デバイス",
+          "systemAudioVolume": "システム音声音量",
+          "defaultDevice": "デフォルトデバイス",
+          "selectDevice": "デバイスを選択",
+          "deviceListHint": "このリストは実際の録画キャプチャで使用されるデバイス名と同じです。",
+          "muted": "ミュート",
+          "boost": "200%(ブースト)"
+        },
+        "audioQuality": {
+          "title": "音声品質",
+          "description": "録音のサンプルレートとビットレートを設定します",
+          "sampleRate": "サンプルレート",
+          "sampleRateLabels": {
+            "hz44100": "44.1kHz(CD品質)",
+            "hz48000": "48kHz(プロフェッショナル)"
+          },
+          "audioBitrate": "音声ビットレート",
+          "bitrateLabels": {
+            "kbps128": "128kbps(標準)",
+            "kbps192": "192kbps(高)",
+            "kbps256": "256kbps(非常に高い)",
+            "kbps320": "320kbps(最大)"
+          },
+          "recommended": "推奨"
+        },
+        "currentConfiguration": {
+          "title": "現在の音声設定",
+          "microphoneEnabled": "マイク: 有効({{volume}}%音量)",
+          "microphoneDevice": "デバイス: {{device}}",
+          "systemAudioEnabled": "システム音声: 有効({{volume}}%音量)",
+          "systemAudioDevice": "デバイス: {{device}}",
+          "quality": "品質: {{sampleRate}} @ {{bitrate}}",
+          "default": "デフォルト",
+          "microphone": "マイク",
+          "systemAudio": "システム音声",
+          "enabled": "有効",
+          "volume": "音量",
+          "device": "デバイス"
+        }
+      },
+      "videoSettings": {
+        "resolution": {
+          "title": "解像度",
+          "description": "動画出力解像度(高いほど高品質・大容量)",
+          "labels": {
+            "r1920x1080": "1920x1080(1080p)",
+            "r2560x1440": "2560x1440(1440p)",
+            "r3840x2160": "3840x2160(4K)"
+          },
+          "recommended": "推奨",
+          "captureNotice": "録画キャプチャは常にゲームウィンドウのネイティブ解像度を使用します。この設定はエクスポート/処理品質のターゲットのみを設定します。"
+        },
+        "frameRate": {
+          "title": "フレームレート",
+          "description": "1秒あたりのフレーム数(高いほど滑らか・大容量)",
+          "labels": {
+            "fps30": "30 FPS",
+            "fps60": "60 FPS",
+            "fps120": "120 FPS",
+            "fps144": "144 FPS"
+          },
+          "recommended": "推奨"
+        },
+        "bitratePreset": {
+          "title": "ビットレートプリセット",
+          "description": "映像品質プリセット(高いほど高品質・大容量)",
+          "labels": {
+            "low": "低(10Mbps) - 720p60",
+            "medium": "中(20Mbps) - 1080p60",
+            "high": "高(40Mbps) - 1440p60",
+            "veryHigh": "非常に高い(80Mbps) - 4K60"
+          },
+          "estimatedSize": "推定ファイルサイズ: {{size}}"
+        },
+        "videoCodec": {
+          "title": "動画コーデック",
+          "description": "圧縮方式(効率のためH.265を推奨)",
+          "labels": {
+            "h264": "H.264(互換性最高)",
+            "h265": "H.265(効率最高)",
+            "av1": "AV1(実験的)"
+          },
+          "recommended": "推奨"
+        },
+        "encoderPreference": {
+          "title": "エンコーダー設定",
+          "description": "ハードウェアアクセラレーション(自動で最適なものを検出)",
+          "labels": {
+            "auto": "自動(推奨)",
+            "nvenc": "NVENC(NVIDIA GPU)",
+            "qsv": "QSV(Intel GPU)",
+            "amf": "AMF(AMD GPU)",
+            "software": "ソフトウェア(CPU)"
+          },
+          "recommended": "推奨"
+        },
+        "currentConfiguration": {
+          "title": "現在の設定",
+          "resolution": "解像度: {{resolution}}",
+          "frameRate": "フレームレート: {{frameRate}}",
+          "codec": "コーデック: {{codec}}",
+          "encoder": "エンコーダー: {{encoder}}",
+          "estimatedSize": "推定サイズ: {{size}}"
+        }
       }
     },
     "accountInfo": {
@@ -390,6 +597,10 @@
       "website": "ウェブサイト",
       "support": "サポート",
       "discord": "Discordコミュニティ"
+    },
+    "diagnostics": {
+      "title": "診断とサポート",
+      "description": "サービス状態、サポート要約、システム診断"
     }
   },
   "common": {
@@ -441,7 +652,11 @@
     "processingFailed": "処理に失敗しました",
     "lcuNotConnected": "LoLクライアントが接続されていません",
     "recordingFailed": "録画に失敗しました",
-    "quotaExceeded": "YouTubeの上限を超えました"
+    "quotaExceeded": "YouTubeの上限を超えました",
+    "audioNoDevicesAvailable": "利用可能な音声デバイスがありません。音声なしで録画が続行されます。",
+    "audioDeviceNotFoundHint": "Windowsの設定 > サウンドで録音デバイスを確認してください。ステレオミックスや仮想オーディオドライバーが必要な場合があります。",
+    "audioDeviceNotFound": "音声デバイスが見つかりません",
+    "noAudioDeviceWarning": "音声デバイスが見つかりません。オーディオデバイス設定を確認してください。"
   },
   "tooltips": {
     "replayBuffer": "最後の{{seconds}}秒を継続的に録画します。ホットキーを押して保存してください。",
@@ -458,5 +673,30 @@
     "uploadComplete": "アップロード完了：{{title}}",
     "uploadFailed": "アップロード失敗：{{error}}",
     "updateAvailable": "アップデート利用可能：v{{version}}"
+  },
+  "statusDashboard": {
+    "readiness": {
+      "title": "起動前チェック",
+      "ready": "準備完了",
+      "notReady": "準備未完了",
+      "components": "コンポーネント",
+      "blockers": "対応項目",
+      "noBlockers": "ブロック項目なし"
+    },
+    "diagnostics": {
+      "description": "アップデータ、署名、ランタイム構成の可視化"
+    }
+  },
+  "support": {
+    "summary": {
+      "title": "サポートと診断",
+      "copyButton": "サポート要約をコピー",
+      "copied": "コピーしました！",
+      "copiedTitle": "要約をコピーしました",
+      "copiedDesc": "サポートチケットに貼り付けできます。",
+      "errorTitle": "エラー",
+      "errorDesc": "サポート要約の生成またはコピーに失敗しました。",
+      "disclaimer": "サポート要約にはアプリバージョン、接続状態、システム指標、ディスク容量、診断チェックが含まれます。パスワード、OAuthトークン、リフレッシュトークン、決済キー、秘密鍵、プライベートメディア、スクリーンショット、個人ファイルは含まれません。"
+    }
   }
 }

@@ -90,6 +90,41 @@ impl VideoMetadata {
 
         Ok(())
     }
+
+    /// Ensure the upload is discoverable on YouTube's Shorts surface.
+    ///
+    /// If "shorts" (case-insensitive) doesn't already appear anywhere in the
+    /// title, description, or tags, appends `#Shorts` to the description and
+    /// adds a `Shorts` tag. Each addition is skipped individually if it would
+    /// push the description or total tags length past YouTube's API limits
+    /// (see [`VideoMetadata::validate`]), so this call can never turn
+    /// previously-valid metadata into metadata that fails validation.
+    pub fn ensure_shorts_tag(&mut self) {
+        let already_tagged = self.title.to_lowercase().contains("shorts")
+            || self.description.to_lowercase().contains("shorts")
+            || self
+                .tags
+                .iter()
+                .any(|tag| tag.to_lowercase().contains("shorts"));
+
+        if already_tagged {
+            return;
+        }
+
+        const SHORTS_DESCRIPTION_SUFFIX: &str = "\n#Shorts";
+        const SHORTS_TAG: &str = "Shorts";
+
+        if self.description.len() + SHORTS_DESCRIPTION_SUFFIX.len() <= MAX_DESCRIPTION_LENGTH {
+            self.description.push_str(SHORTS_DESCRIPTION_SUFFIX);
+        }
+
+        let total_tags_len: usize = self.tags.iter().map(|t| t.len()).sum();
+        if SHORTS_TAG.len() <= MAX_TAG_LENGTH
+            && total_tags_len + SHORTS_TAG.len() <= MAX_TOTAL_TAGS_LENGTH
+        {
+            self.tags.push(SHORTS_TAG.to_string());
+        }
+    }
 }
 
 /// YouTube video privacy status
@@ -872,6 +907,88 @@ mod tests {
 
         assert_eq!(metadata.title, "Test Video");
         assert_eq!(metadata.tags.len(), 2);
+    }
+
+    fn base_metadata() -> VideoMetadata {
+        VideoMetadata {
+            title: "Pentakill montage".to_string(),
+            description: "Insane pentakill from ranked solo queue".to_string(),
+            tags: vec!["gaming".to_string(), "lol".to_string()],
+            category_id: "20".to_string(),
+            privacy_status: PrivacyStatus::Private,
+            made_for_kids: false,
+        }
+    }
+
+    #[test]
+    fn ensure_shorts_tag_appends_hashtag_and_tag_when_absent() {
+        let mut metadata = base_metadata();
+        metadata.ensure_shorts_tag();
+
+        assert!(metadata.description.ends_with("\n#Shorts"));
+        assert!(metadata.tags.iter().any(|t| t == "Shorts"));
+        assert!(metadata.validate().is_ok());
+    }
+
+    #[test]
+    fn ensure_shorts_tag_is_noop_when_title_already_mentions_shorts() {
+        let mut metadata = base_metadata();
+        metadata.title = "Pentakill Shorts".to_string();
+        let description_before = metadata.description.clone();
+        let tags_before = metadata.tags.clone();
+
+        metadata.ensure_shorts_tag();
+
+        assert_eq!(metadata.description, description_before);
+        assert_eq!(metadata.tags, tags_before);
+    }
+
+    #[test]
+    fn ensure_shorts_tag_is_noop_when_description_already_mentions_shorts_case_insensitive() {
+        let mut metadata = base_metadata();
+        metadata.description = "Check out my #SHORTS clip".to_string();
+        let tags_before = metadata.tags.clone();
+
+        metadata.ensure_shorts_tag();
+
+        assert_eq!(metadata.tags, tags_before);
+    }
+
+    #[test]
+    fn ensure_shorts_tag_is_noop_when_tag_already_present() {
+        let mut metadata = base_metadata();
+        metadata.tags.push("shorts".to_string());
+        let description_before = metadata.description.clone();
+
+        metadata.ensure_shorts_tag();
+
+        assert_eq!(metadata.description, description_before);
+    }
+
+    #[test]
+    fn ensure_shorts_tag_skips_description_append_when_it_would_exceed_limit() {
+        let mut metadata = base_metadata();
+        metadata.description = "x".repeat(MAX_DESCRIPTION_LENGTH);
+        let description_before = metadata.description.clone();
+
+        metadata.ensure_shorts_tag();
+
+        // Description untouched (would exceed limit), but tag can still be added.
+        assert_eq!(metadata.description, description_before);
+        assert!(metadata.tags.iter().any(|t| t == "Shorts"));
+        assert!(metadata.validate().is_ok());
+    }
+
+    #[test]
+    fn ensure_shorts_tag_skips_tag_append_when_total_tags_would_exceed_limit() {
+        let mut metadata = base_metadata();
+        metadata.tags = vec!["x".repeat(MAX_TOTAL_TAGS_LENGTH)];
+        let tags_before = metadata.tags.clone();
+
+        metadata.ensure_shorts_tag();
+
+        assert_eq!(metadata.tags, tags_before);
+        assert!(metadata.description.ends_with("\n#Shorts"));
     }
 
     #[test]

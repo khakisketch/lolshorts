@@ -40,23 +40,27 @@ LoLShorts uses a sophisticated CI/CD pipeline designed for cross-platform develo
 ### Platform-Specific Requirements
 
 #### Windows
+
 - Windows 10+ (64-bit)
 - Visual Studio Build Tools 2022
 - WiX Toolset (for MSI installers)
 - Windows SDK
 
 #### macOS
+
 - macOS 10.15+ (Catalina or later)
 - Xcode Command Line Tools
 - Create DMG tool
 
 #### Linux (for CI/CD)
+
 - Ubuntu 20.04+
 - Basic build tools and libraries
 
 ### GitHub Repository Setup
 
 1. Fork/clone the repository:
+
    ```bash
    git clone https://github.com/your-org/lolshorts.git
    cd lolshorts
@@ -84,21 +88,25 @@ The CI/CD pipeline consists of several workflow files in `.github/workflows/`:
 Add these secrets to your GitHub repository:
 
 **Build & Signing:**
+
 - `TAURI_PRIVATE_KEY`: Tauri private key for signing
 - `TAURI_KEY_PASSWORD`: Password for Tauri private key
 
 **Windows Code Signing:**
+
 - `WINDOWS_CERTIFICATE_BASE64`: Base64-encoded code signing certificate
 - `WINDOWS_CERTIFICATE_PASSWORD`: Certificate password
 - `WINDOWS_CERTIFICATE_THUMBPRINT`: Certificate thumbprint
 
 **macOS Code Signing:**
+
 - `MACOS_CERTIFICATE_BASE64`: Base64-encoded macOS signing certificate
 - `MACOS_CERTIFICATE_PASSWORD`: Certificate password
 - `MACOS_SIGNING_IDENTITY`: Apple Developer signing identity
 - `MACOS_KEYCHAIN_PASSWORD`: Keychain password
 
 **Optional Integrations:**
+
 - `DISCORD_WEBHOOK_URL`: For release notifications
 - `LHCI_GITHUB_APP_TOKEN`: For Lighthouse CI integration
 
@@ -108,9 +116,9 @@ Key environment variables used in workflows:
 
 ```yaml
 env:
-  CARGO_TERM_COLOR: always    # Colorize Rust output
-  RUST_BACKTRACE: 1          # Show Rust backtraces
-  NODE_ENV: production       # Node.js environment
+  CARGO_TERM_COLOR: always # Colorize Rust output
+  RUST_BACKTRACE: 1 # Show Rust backtraces
+  NODE_ENV: production # Node.js environment
 ```
 
 ## 🏗️ Build Pipeline Architecture
@@ -184,6 +192,7 @@ LoLShorts follows Semantic Versioning (SemVer):
 #### Automated Releases
 
 1. **Tag Creation**:
+
    ```bash
    git tag v1.2.3
    git push origin v1.2.3
@@ -300,7 +309,7 @@ xcrun stapler staple app.dmg
   run: cargo fmt --all -- --check
 
 - name: Clippy linting
-  run: cargo clippy --all-targets --all-features -- -D warnings
+  run: cargo clippy --all-targets -- -D warnings
 
 - name: Security audit
   run: cargo audit
@@ -529,6 +538,7 @@ when video generation is cancelled.
 **Problem**: Rust compilation fails with dependency errors
 
 **Solution**:
+
 ```bash
 # Clean and rebuild
 cargo clean
@@ -545,6 +555,7 @@ rustup component add rustfmt clippy
 **Problem**: npm install fails with permission errors
 
 **Solution**:
+
 ```bash
 # Clear npm cache
 npm cache clean --force
@@ -561,6 +572,7 @@ npm ci
 **Problem**: FFmpeg not found or version incompatible
 
 **Solution**:
+
 ```bash
 # Prepare FFmpeg binaries
 cd src-tauri/build_scripts
@@ -573,6 +585,7 @@ cd src-tauri/build_scripts
 **Problem**: Code signing fails with certificate errors
 
 **Solution**:
+
 1. Verify certificate is valid and not expired
 2. Check certificate password and thumbprint
 3. Ensure timestamp server is accessible
@@ -585,6 +598,7 @@ cd src-tauri/build_scripts
 **Problem**: CI jobs timeout due to long build times
 
 **Solution**:
+
 - Optimize caching strategy
 - Reduce build complexity
 - Increase timeout limits in workflows
@@ -595,6 +609,7 @@ cd src-tauri/build_scripts
 **Problem**: CI runners run out of memory
 
 **Solution**:
+
 ```yaml
 # Use larger runners
 runs-on: ubuntu-latest-4-cores
@@ -610,6 +625,7 @@ env:
 **Problem**: Tests fail intermittently in CI
 
 **Solution**:
+
 - Add retry logic for flaky tests
 - Increase test timeouts
 - Use deterministic test data
@@ -622,6 +638,7 @@ env:
 **Problem**: Build times are excessive
 
 **Solution**:
+
 - Enable parallel builds
 - Optimize dependency caching
 - Use pre-built binaries for large dependencies
@@ -632,6 +649,7 @@ env:
 **Problem**: Frontend bundle is too large
 
 **Solution**:
+
 - Implement code splitting
 - Optimize imports and tree shaking
 - Compress assets
@@ -668,6 +686,7 @@ env:
 ---
 
 For additional help or questions:
+
 - Create an issue in the repository
 - Join our Discord community
 - Check the troubleshooting section above

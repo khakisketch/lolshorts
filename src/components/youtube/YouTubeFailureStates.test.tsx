@@ -68,6 +68,8 @@ function makeUseYouTube(
     loadQueue: jest.fn(),
     startProgressPolling: jest.fn(),
     stopProgressPolling: jest.fn(),
+    authEventError: null,
+    clearAuthEventError: jest.fn(),
     ...overrides,
   };
 }

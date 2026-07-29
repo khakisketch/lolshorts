@@ -29,10 +29,11 @@ pub fn validate_ffmpeg_color(color: &str) -> std::result::Result<String, VideoEr
         return Ok(lower);
     }
     // Accept hex colors: 0xRRGGBB or 0xRRGGBBAA
-    if lower.starts_with("0x") && (lower.len() == 8 || lower.len() == 10) {
-        if lower[2..].chars().all(|c| c.is_ascii_hexdigit()) {
-            return Ok(lower);
-        }
+    if lower.starts_with("0x")
+        && (lower.len() == 8 || lower.len() == 10)
+        && lower[2..].chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Ok(lower);
     }
     Err(VideoError::ProcessingError {
         message: format!(
@@ -54,6 +55,26 @@ fn build_atempo_chain(speed: f64) -> String {
     }
     parts.push(format!("atempo={}", remaining));
     parts.join(",")
+}
+
+/// Shared input/output pre-validation for single-effect functions so callers
+/// get a friendly `VideoError` instead of a raw FFmpeg stderr dump.
+fn validate_effect_io(inputs: &[&Path], output: &Path) -> Result<()> {
+    for input in inputs {
+        if !input.exists() {
+            return Err(VideoError::FileNotFound {
+                path: input.display().to_string(),
+            });
+        }
+    }
+    if let Some(parent) = output.parent() {
+        if !parent.exists() {
+            return Err(VideoError::OutputDirectoryNotFound {
+                path: parent.display().to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 impl VideoProcessor {
@@ -136,6 +157,8 @@ impl VideoProcessor {
             duration
         );
 
+        validate_effect_io(&[input1.as_ref(), input2.as_ref()], output)?;
+
         let filter_complex = match transition_type {
             TransitionType::Fade => format!(
                 "[0:v][1:v]xfade=transition=fade:duration={}:offset=0[outv]",
@@ -168,6 +191,7 @@ impl VideoProcessor {
         for arg in self.optimal_encoder.get_ffmpeg_args() {
             command.arg(arg);
         }
+        command.args(["-c:a", "aac", "-b:a", "192k"]);
         command.arg("-y").arg(output);
 
         execute_ffmpeg_command(&mut command).await?;
@@ -188,6 +212,8 @@ impl VideoProcessor {
             input_path.as_ref(),
             output
         );
+
+        validate_effect_io(&[input_path.as_ref()], output)?;
 
         let mut filters = Vec::new();
 
@@ -230,6 +256,7 @@ impl VideoProcessor {
         for arg in self.optimal_encoder.get_ffmpeg_args() {
             command.arg(arg);
         }
+        command.args(["-c:a", "aac", "-b:a", "192k"]);
         command.arg("-y").arg(output);
 
         execute_ffmpeg_command(&mut command).await?;
@@ -258,6 +285,8 @@ impl VideoProcessor {
             });
         }
 
+        validate_effect_io(&[input_path.as_ref()], output)?;
+
         let video_filter = format!("setpts={}*PTS", 1.0 / speed_factor);
         // FIX #8: Also adjust audio tempo to match slow motion speed
         let audio_filter = build_atempo_chain(speed_factor);
@@ -275,6 +304,7 @@ impl VideoProcessor {
         for arg in self.optimal_encoder.get_ffmpeg_args() {
             command.arg(arg);
         }
+        command.args(["-c:a", "aac", "-b:a", "192k"]);
         command.arg("-y").arg(output);
 
         execute_ffmpeg_command(&mut command).await?;
@@ -298,6 +328,8 @@ impl VideoProcessor {
             input_path.as_ref(),
             output
         );
+
+        validate_effect_io(&[input_path.as_ref()], output)?;
 
         let (x, y) = match position {
             TextPosition::TopLeft => ("10", "10"),
@@ -324,6 +356,7 @@ impl VideoProcessor {
         for arg in self.optimal_encoder.get_ffmpeg_args() {
             command.arg(arg);
         }
+        command.args(["-c:a", "aac", "-b:a", "192k"]);
         command.arg("-y").arg(output);
 
         execute_ffmpeg_command(&mut command).await?;
@@ -431,12 +464,13 @@ impl VideoProcessor {
         // If slow motion is active, also adjust audio tempo.
         // FFmpeg atempo only accepts [0.5, 100.0], so chain filters for lower speeds.
         if let Some(speed) = effects.slow_motion {
-            command.arg("-filter:a").arg(&build_atempo_chain(speed));
+            command.arg("-filter:a").arg(build_atempo_chain(speed));
         }
 
         for arg in self.optimal_encoder.get_ffmpeg_args() {
             command.arg(arg);
         }
+        command.args(["-c:a", "aac", "-b:a", "192k"]);
         command.arg("-y").arg(output);
 
         execute_ffmpeg_command(&mut command).await?;

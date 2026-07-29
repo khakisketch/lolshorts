@@ -189,6 +189,10 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
               <Badge variant="secondary">{t('settings.recordingConfig.videoSettings.resolution.recommended')}</Badge>
             )}
           </div>
+          <div className="flex items-start gap-2 mt-3 text-xs text-muted-foreground">
+            <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+            <span>{t('settings.recordingConfig.videoSettings.resolution.captureNotice')}</span>
+          </div>
         </div>
       </div>
 

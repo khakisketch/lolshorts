@@ -62,6 +62,7 @@ mod tests {
             background_music: None,
             audio_levels: AudioLevels::default(),
             allow_duplicates: false,
+            enable_event_zoom: false,
         };
 
         let selected = composer.select_clips(&clips, &config).await.unwrap();
@@ -94,6 +95,7 @@ mod tests {
             background_music: None,
             audio_levels: AudioLevels::default(),
             allow_duplicates: false,
+            enable_event_zoom: false,
         };
 
         let selected = composer.select_clips(&clips, &config).await.unwrap();
@@ -123,6 +125,7 @@ mod tests {
             background_music: None,
             audio_levels: AudioLevels::default(),
             allow_duplicates: false,
+            enable_event_zoom: false,
         };
 
         let selected = composer.select_clips(&clips, &config).await.unwrap();

@@ -18,8 +18,14 @@ pub fn validate_env() -> EnvValidationResult {
         }
     }
 
-    // Optional
-    for var in ["SENTRY_DSN", "VITE_YOUTUBE_CLIENT_ID"] {
+    // Optional runtime integrations. YouTube OAuth is read by the Rust backend,
+    // not by Vite, so these names must match init_youtube_manager.
+    for var in [
+        "SENTRY_DSN",
+        "YOUTUBE_CLIENT_ID",
+        "YOUTUBE_CLIENT_SECRET",
+        "YOUTUBE_REDIRECT_URI",
+    ] {
         if std::env::var(var).unwrap_or_default().is_empty() {
             result.optional_missing.push(var.to_string());
         }

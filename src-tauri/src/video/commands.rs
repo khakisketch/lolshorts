@@ -1,10 +1,12 @@
-use crate::auth::middleware::{require_auth, require_tier};
-use crate::auth::SubscriptionTier;
+use crate::auth::command_policy::require_command_access;
+use crate::auth::{AuthManager, SubscriptionTier};
 use crate::error::{AppError, AppResult};
 use crate::storage::models::ClipMetadata;
 use crate::storage::{CanvasTemplateInfo, StorageError};
 use crate::utils::security;
-use crate::video::processor::types::{ChainedEffects, ColorGrading, TextPosition, TextStyle};
+use crate::video::processor::types::{
+    ChainedEffects, ClipSpec, ColorGrading, ComposeOptions, TextPosition, TextStyle,
+};
 use crate::video::{AutoEditConfig, AutoEditProgress, AutoEditResult, VideoProcessor};
 use crate::AppState;
 use std::path::PathBuf;
@@ -13,13 +15,42 @@ use tauri::State;
 
 const GIF_EXPORT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
+/// Read the configured LUFS target for final-export loudness normalization,
+/// or `None` if the user disabled it. Sourced from the recording settings
+/// (`AudioSettings.audio_normalize` / `audio_target_lufs`).
+async fn export_normalize_lufs(state: &AppState) -> Option<f64> {
+    let settings = state.recording_settings.read().await;
+    if settings.audio.audio_normalize {
+        Some(settings.audio.audio_target_lufs)
+    } else {
+        None
+    }
+}
+
+fn emit_export_progress(app: &tauri::AppHandle, pct: f64) {
+    use tauri::Emitter;
+    let _ = app.emit("export-progress", serde_json::json!({ "progress": pct }));
+}
+
+fn emit_export_complete(app: &tauri::AppHandle, output_path: &str) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "export-complete",
+        serde_json::json!({ "output_path": output_path }),
+    );
+}
+
+fn emit_export_error(app: &tauri::AppHandle, message: &str) {
+    use tauri::Emitter;
+    let _ = app.emit("export-error", message.to_string());
+}
+
 #[tauri::command]
 pub async fn get_clips(
     state: State<'_, AppState>,
     game_id: String,
 ) -> AppResult<Vec<ClipMetadata>> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "get_clips").map_err(|e| AppError::Auth(e.to_string()))?;
 
     // Validate game_id (prevent SQL injection)
     let validated_game_id =
@@ -27,7 +58,8 @@ pub async fn get_clips(
 
     state
         .storage
-        .load_clip_metadata(&validated_game_id)
+        .load_clip_metadata_with_duration_backfill(&validated_game_id)
+        .await
         .map_err(|e| AppError::Database(e.to_string()))
 }
 
@@ -40,8 +72,8 @@ pub async fn extract_clip(
     start_time: f64,
     duration: f64,
 ) -> AppResult<String> {
-    // Require PRO tier for manual clip extraction
-    require_tier(&state.auth, SubscriptionTier::Pro).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "extract_clip")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     // Security validation
     let validated_input = security::validate_video_input_path(&input_path)
@@ -71,12 +103,15 @@ pub async fn extract_clip(
 /// Compose multiple clips into a YouTube Short (9:16 aspect ratio) (PRO feature)
 #[tauri::command]
 pub async fn compose_shorts(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     clip_paths: Vec<String>,
     output_path: String,
 ) -> AppResult<String> {
-    // Require PRO tier for YouTube Shorts composition
-    require_tier(&state.auth, SubscriptionTier::Pro).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "compose_shorts")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
+
+    emit_export_progress(&app, 5.0);
 
     // Security validation
     let validated_clips: Result<Vec<PathBuf>, AppError> = clip_paths
@@ -92,13 +127,24 @@ pub async fn compose_shorts(
 
     let processor = VideoProcessor::new_with_fallback();
 
+    emit_export_progress(&app, 30.0);
+
     // Standard YouTube Shorts resolution: 1080x1920 (9:16)
-    let result_path = processor
+    let result_path = match processor
         .compose_shorts(&validated_clips, validated_output, 1080, 1920)
         .await
-        .map_err(|e| AppError::Video(e.to_string()))?;
+    {
+        Ok(path) => path,
+        Err(e) => {
+            let msg = e.to_string();
+            emit_export_error(&app, &msg);
+            return Err(AppError::Video(msg));
+        }
+    };
 
-    Ok(result_path.to_string_lossy().to_string())
+    let output_str = result_path.to_string_lossy().to_string();
+    emit_export_complete(&app, &output_str);
+    Ok(output_str)
 }
 
 /// Generate a thumbnail from a video file (PRO feature)
@@ -109,8 +155,8 @@ pub async fn generate_thumbnail(
     output_path: String,
     time_offset: f64,
 ) -> AppResult<String> {
-    // Require PRO tier for custom thumbnail generation
-    require_tier(&state.auth, SubscriptionTier::Pro).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "generate_thumbnail")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     // Security validation
     let validated_input = security::validate_video_input_path(&input_path)
@@ -136,8 +182,8 @@ pub async fn generate_clip_thumbnail(
     state: State<'_, AppState>,
     clip_file_path: String,
 ) -> AppResult<String> {
-    // Require authentication (available to both FREE and PRO)
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "generate_clip_thumbnail")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     // Security validation
     let validated_input = security::validate_video_input_path(&clip_file_path)
@@ -176,8 +222,8 @@ pub async fn generate_clip_thumbnail(
 /// Get video duration in seconds
 #[tauri::command]
 pub async fn get_video_duration(state: State<'_, AppState>, input_path: String) -> AppResult<f64> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "get_video_duration")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     // Security validation
     let validated_input = security::validate_video_input_path(&input_path)
@@ -200,8 +246,8 @@ pub async fn delete_clip(
     clip_file_path: String,
     game_id: String,
 ) -> AppResult<()> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "delete_clip")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     // Security validation
     let validated_game_id =
@@ -244,13 +290,17 @@ pub async fn delete_clip(
 /// Create a long-form montage video (16:9) from selected clips
 #[tauri::command]
 pub async fn create_longform_video(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     clip_paths: Vec<String>,
     output_path: String,
 ) -> AppResult<String> {
-    // Require PRO tier? Maybe allow for free users with watermark later.
-    // For now, basic merge is a core utility. Let's allow it for authenticated users.
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    // Montage export is a paid (PRO) feature: it produces an un-watermarked
+    // multi-clip composite, so it is gated identically to compose_shorts.
+    require_command_access(&state.auth, "create_longform_video")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
+
+    emit_export_progress(&app, 5.0);
 
     let validated_clips: Result<Vec<PathBuf>, AppError> = clip_paths
         .iter()
@@ -267,12 +317,149 @@ pub async fn create_longform_video(
     // Note: compose_montage is newly added to Processor
     let processor = VideoProcessor::new_with_fallback();
 
-    let result_path = processor
+    emit_export_progress(&app, 30.0);
+
+    let result_path = match processor
         .compose_montage(&validated_clips, validated_output, false)
         .await
-        .map_err(|e| AppError::Video(e.to_string()))?;
+    {
+        Ok(path) => path,
+        Err(e) => {
+            let msg = e.to_string();
+            emit_export_error(&app, &msg);
+            return Err(AppError::Video(msg));
+        }
+    };
 
-    Ok(result_path.to_string_lossy().to_string())
+    let output_str = result_path.to_string_lossy().to_string();
+    emit_export_complete(&app, &output_str);
+    Ok(output_str)
+}
+
+/// A single clip from the editor timeline for `compose_shorts_v2`.
+///
+/// `trim_end` is the number of seconds to cut from the **end** of the clip
+/// (backend converts it to an absolute duration via ffprobe).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ClipSpecInput {
+    pub path: String,
+    #[serde(default)]
+    pub trim_start: Option<f64>,
+    #[serde(default)]
+    pub trim_end: Option<f64>,
+}
+
+/// Compose editor clips into a Short honoring per-clip trim, aspect ratio, and
+/// transitions in a single re-encode pass (PRO feature). Backward-compatible
+/// `compose_shorts` remains for the legacy path.
+#[tauri::command]
+pub async fn compose_shorts_v2(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    clips: Vec<ClipSpecInput>,
+    aspect_ratio: String,
+    transition_type: String,
+    transition_duration: f64,
+    output_path: String,
+) -> Result<String, String> {
+    require_command_access(&state.auth, "compose_shorts_v2")
+        .map_err(|e| AppError::Auth(e.to_string()).to_string())?;
+
+    emit_export_progress(&app, 5.0);
+
+    if clips.is_empty() {
+        let msg = "No clips provided".to_string();
+        emit_export_error(&app, &msg);
+        return Err(msg);
+    }
+
+    // Aspect ratio -> output resolution.
+    let (width, height) = match aspect_ratio.as_str() {
+        "16:9" => (1920u32, 1080u32),
+        "1:1" => (1080u32, 1080u32),
+        _ => (1080u32, 1920u32), // default 9:16
+    };
+
+    // Transition kind. "none" -> hard cut.
+    let transition = match transition_type.as_str() {
+        "none" | "" => None,
+        "slide" => Some(("slide".to_string(), transition_duration.max(0.1))),
+        _ => Some(("fade".to_string(), transition_duration.max(0.1))),
+    };
+
+    let processor = VideoProcessor::new_with_fallback();
+
+    // Build ClipSpecs, converting `trim_end` (cut-from-end) -> absolute duration.
+    let mut specs: Vec<ClipSpec> = Vec::with_capacity(clips.len());
+    for clip in &clips {
+        let path = security::validate_video_input_path(&clip.path).map_err(|e| {
+            let msg = format!("Invalid clip path: {}", e);
+            emit_export_error(&app, &msg);
+            msg
+        })?;
+
+        let trim_start = clip.trim_start.filter(|s| *s > 0.0);
+        let trim_duration = if let Some(end_cut) = clip.trim_end.filter(|e| *e > 0.0) {
+            let full = processor.get_duration(&path).await.map_err(|e| {
+                let msg = format!("Failed to probe clip duration: {}", e);
+                emit_export_error(&app, &msg);
+                msg
+            })?;
+            let dur = full - trim_start.unwrap_or(0.0) - end_cut;
+            if dur <= 0.0 {
+                let msg = format!(
+                    "Trim removes the entire clip {}: full={:.2}s start={:.2}s end_cut={:.2}s",
+                    clip.path,
+                    full,
+                    trim_start.unwrap_or(0.0),
+                    end_cut
+                );
+                emit_export_error(&app, &msg);
+                return Err(msg);
+            }
+            Some(dur)
+        } else {
+            None
+        };
+
+        specs.push(ClipSpec {
+            path,
+            trim_start,
+            trim_duration,
+        });
+    }
+
+    let validated_output = security::validate_video_output_path(&output_path).map_err(|e| {
+        let msg = format!("Invalid output path: {}", e);
+        emit_export_error(&app, &msg);
+        msg
+    })?;
+
+    emit_export_progress(&app, 30.0);
+
+    let opts = ComposeOptions {
+        width,
+        height,
+        transition,
+        event_times: None,
+        fps: Some(60),
+        normalize_audio: export_normalize_lufs(&state).await,
+    };
+
+    emit_export_progress(&app, 45.0);
+
+    if let Err(e) = processor
+        .compose_with_options(&specs, &validated_output, &opts)
+        .await
+    {
+        let msg = e.to_string();
+        emit_export_error(&app, &msg);
+        return Err(msg);
+    }
+
+    let output_str = validated_output.to_string_lossy().to_string();
+    emit_export_complete(&app, &output_str);
+    Ok(output_str)
 }
 
 /// Start auto-edit composition for YouTube Shorts
@@ -281,8 +468,15 @@ pub async fn start_auto_edit(
     state: State<'_, AppState>,
     config: AutoEditConfig,
 ) -> AppResult<AutoEditResult> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    // Auth-gated here; the FREE monthly quota vs PRO-unlimited split is enforced below.
+    let policy_user = require_command_access(&state.auth, "start_auto_edit")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
+    // Quota is scoped per-user (see storage::Storage auto_edit_usage_by_user doc);
+    // "anonymous" is a defensive fallback and should be unreachable since this
+    // command is AuthRequired, but avoids a hard failure if that ever changes.
+    let user_id = policy_user
+        .map(|u| u.id)
+        .unwrap_or_else(|| "anonymous".to_string());
 
     // Check tier and quota
     let tier = state
@@ -291,21 +485,43 @@ pub async fn start_auto_edit(
         .map_err(|e| AppError::Auth(e.to_string()))?;
     let is_pro = matches!(tier, SubscriptionTier::Pro);
 
-    // Check quota before starting
-    let remaining = state
-        .storage
-        .check_auto_edit_quota(is_pro)
-        .map_err(|e| AppError::Validation(format!("Quota check failed: {}", e)))?;
-
-    tracing::info!(
-        "Auto-edit quota check passed: tier={:?}, remaining={}",
-        tier,
-        if is_pro {
-            "unlimited".to_string()
-        } else {
-            remaining.to_string()
+    // Quota gate (FREE only; PRO is unlimited on both server and local).
+    //
+    // Authority is the server-side `quota` edge function; the local SQLite
+    // counter is only a cache / offline fallback. POLICY: a server outage
+    // (offline/timeout) must NOT block a legitimate user, so when the server is
+    // unreachable we fall back to the local counter rather than failing closed.
+    if !is_pro {
+        let server = server_quota_check(&state.auth).await;
+        if matches!(server, ServerQuotaVerdict::Unavailable) {
+            tracing::warn!(
+                "Server quota check unavailable for user {}; falling back to local counter",
+                user_id
+            );
         }
-    );
+
+        // `resolve_quota_gate` only consults the local counter when the server
+        // is Unavailable (lazy closure), keeping the offline-fallback policy in
+        // one testable place.
+        resolve_quota_gate(&server, || {
+            state
+                .storage
+                .check_auto_edit_quota(&user_id, is_pro)
+                .map_err(|e| e.to_string())
+        })
+        .map_err(|msg| AppError::Validation(format!("Quota check failed: {}", msg)))?;
+
+        tracing::info!(
+            "Auto-edit quota gate passed: tier={:?}, authority={}",
+            tier,
+            match server {
+                ServerQuotaVerdict::Allowed | ServerQuotaVerdict::Denied { .. } => "server",
+                ServerQuotaVerdict::Unavailable => "local",
+            }
+        );
+    } else {
+        tracing::info!("Auto-edit quota check skipped: tier={:?} (unlimited)", tier);
+    }
 
     // Generate unique job ID
     let job_id = format!("auto_edit_{}", chrono::Local::now().format("%Y%m%d_%H%M%S"));
@@ -326,37 +542,20 @@ pub async fn start_auto_edit(
             AppError::Video(format!("Auto-edit failed: {}", e))
         })?;
 
-    // Save result metadata to storage for the Results tab
-    let file_size = std::fs::metadata(&result.output_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    // 결과 메타데이터(썸네일 포함)는 AutoComposer::compose가 이미 저장한다 —
+    // 여기서 다시 저장하면 thumbnail_path가 None으로 덮여 사라지므로 중복 저장 금지.
 
-    let metadata = crate::storage::models::AutoEditResultMetadata {
-        result_id: job_id.clone(),
-        job_id: job_id.clone(),
-        output_path: result.output_path.clone(),
-        thumbnail_path: None, // Thumbnail can be generated later or on demand
-        created_at: chrono::Utc::now(),
-        duration: result.total_duration,
-        clip_count: result.clip_count,
-        game_ids: config.game_ids.clone(),
-        target_duration: config.target_duration,
-        canvas_template_name: config.canvas_template.as_ref().map(|t| t.name.clone()),
-        has_background_music: config.background_music.is_some(),
-        youtube_status: None,
-        file_size_bytes: file_size,
-    };
-
-    if let Err(e) = state.storage.save_auto_edit_result(&metadata) {
-        tracing::error!("Failed to save auto-edit result metadata: {}", e);
-        // We don't fail the whole operation if metadata save fails, as the video is already created
-    }
-
-    // Increment usage counter on success
+    // Increment usage counter on success (FREE only).
     if !is_pro {
+        // Authoritative consume on the server. Best effort: the compose already
+        // succeeded, so a server outage must not fail the user's export -- the
+        // local cache counter below still advances to keep the offline fallback
+        // warm and approximately correct.
+        server_quota_consume(&state.auth).await;
+
         state
             .storage
-            .increment_auto_edit_usage()
+            .increment_auto_edit_usage(&user_id)
             .map_err(|e| {
                 tracing::error!("Failed to increment usage: {}", e);
                 // Just log warning, don't fail operation
@@ -371,13 +570,123 @@ pub async fn start_auto_edit(
     Ok(result)
 }
 
+/// Verdict from the authoritative server-side auto-edit quota.
+#[derive(Debug, PartialEq, Eq)]
+enum ServerQuotaVerdict {
+    /// Server permits another auto-edit this month.
+    Allowed,
+    /// Server rejects: the FREE monthly quota is exhausted.
+    Denied { used: u32, limit: u32 },
+    /// Server could not be consulted (no session, offline, timeout, or a
+    /// malformed response). The caller must fall back to the local counter.
+    Unavailable,
+}
+
+/// Map a successful `quota` edge-function JSON body to a [`ServerQuotaVerdict`].
+///
+/// A body without a boolean `allowed` field is treated as `Unavailable` so the
+/// caller fails open to the local fallback rather than mis-reading an error
+/// envelope as a denial.
+fn parse_quota_verdict(value: &serde_json::Value) -> ServerQuotaVerdict {
+    let Some(allowed) = value.get("allowed").and_then(|v| v.as_bool()) else {
+        return ServerQuotaVerdict::Unavailable;
+    };
+    if allowed {
+        ServerQuotaVerdict::Allowed
+    } else {
+        let used = value.get("used").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let limit = value.get("limit").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        ServerQuotaVerdict::Denied { used, limit }
+    }
+}
+
+/// Decide the FREE-tier auto-edit gate from the server verdict, consulting the
+/// local counter (`local`) **only** when the server is `Unavailable`.
+///
+/// This is the single source of the offline-fallback policy: server is
+/// authoritative when reachable; otherwise the local cache decides so an
+/// offline user is not blocked. `local` is a closure so the local counter is
+/// touched only on the fallback path.
+fn resolve_quota_gate(
+    server: &ServerQuotaVerdict,
+    local: impl FnOnce() -> std::result::Result<u32, String>,
+) -> std::result::Result<(), String> {
+    match server {
+        ServerQuotaVerdict::Allowed => Ok(()),
+        ServerQuotaVerdict::Denied { used, limit } => Err(format!(
+            "Monthly auto-edit quota exceeded ({}/{}). Upgrade to PRO for unlimited usage.",
+            used, limit
+        )),
+        ServerQuotaVerdict::Unavailable => local().map(|_| ()),
+    }
+}
+
+/// Invoke the `quota` edge function for the given `action` using the current
+/// session's access token. Returns `None` (treated as server-unavailable) when
+/// there is no authenticated session/token, no Supabase client, or the call
+/// fails for any reason (offline, timeout, non-2xx).
+async fn call_quota_action(auth: &AuthManager, action: &str) -> Option<serde_json::Value> {
+    let user = auth.get_current_user().ok().flatten()?;
+    if user.access_token.is_empty() {
+        return None;
+    }
+    let client = auth.get_supabase_client().ok()?;
+    match client
+        .call_edge_function(
+            "quota",
+            &user.access_token,
+            &serde_json::json!({ "action": action }),
+        )
+        .await
+    {
+        Ok(value) => Some(value),
+        Err(e) => {
+            tracing::warn!("quota edge function '{}' call failed: {}", action, e);
+            None
+        }
+    }
+}
+
+/// Consult the authoritative server quota before composing.
+async fn server_quota_check(auth: &AuthManager) -> ServerQuotaVerdict {
+    match call_quota_action(auth, "check").await {
+        Some(value) => parse_quota_verdict(&value),
+        None => ServerQuotaVerdict::Unavailable,
+    }
+}
+
+/// Record one authoritative consume after a successful compose. Best effort:
+/// any failure is logged and swallowed because the export already succeeded.
+async fn server_quota_consume(auth: &AuthManager) {
+    match call_quota_action(auth, "consume").await {
+        Some(value) => match parse_quota_verdict(&value) {
+            ServerQuotaVerdict::Allowed => {
+                tracing::info!("Server auto-edit quota consume recorded");
+            }
+            ServerQuotaVerdict::Denied { used, limit } => {
+                tracing::warn!(
+                    "Server quota consume reported over-limit ({}/{}) after a successful compose",
+                    used,
+                    limit
+                );
+            }
+            ServerQuotaVerdict::Unavailable => {}
+        },
+        None => {
+            tracing::warn!(
+                "Server auto-edit quota consume unavailable; relying on the local counter cache"
+            );
+        }
+    }
+}
+
 /// Get progress of an auto-edit job
 #[tauri::command]
 pub async fn get_auto_edit_progress(
     state: State<'_, AppState>,
 ) -> AppResult<Option<AutoEditProgress>> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "get_auto_edit_progress")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     let progress = state.auto_composer.get_progress().await;
     Ok(progress)
@@ -393,8 +702,8 @@ pub async fn save_canvas_template(
     state: State<'_, AppState>,
     template: crate::video::CanvasTemplate,
 ) -> AppResult<()> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "save_canvas_template")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     state
         .storage
@@ -410,8 +719,8 @@ pub async fn load_canvas_template(
     state: State<'_, AppState>,
     template_id: String,
 ) -> AppResult<crate::video::CanvasTemplate> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "load_canvas_template")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     // Security validation
     let validated_template_id = security::validate_template_id(&template_id)
@@ -430,8 +739,8 @@ pub async fn load_canvas_template(
 pub async fn list_canvas_templates(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<CanvasTemplateInfo>> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "list_canvas_templates")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     let templates = state
         .storage
@@ -447,8 +756,8 @@ pub async fn delete_canvas_template(
     state: State<'_, AppState>,
     template_id: String,
 ) -> AppResult<()> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "delete_canvas_template")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     // Security validation
     let validated_template_id = security::validate_template_id(&template_id)
@@ -469,8 +778,8 @@ pub async fn delete_canvas_template(
 /// Get simple clip statistics
 #[tauri::command]
 pub async fn get_clip_statistics(state: State<'_, AppState>) -> AppResult<(u64, u64, u64, f64)> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "get_clip_statistics")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     let stats = crate::video::get_global_stats();
     let (total, successful, failed) = stats.get_counts();
@@ -482,8 +791,8 @@ pub async fn get_clip_statistics(state: State<'_, AppState>) -> AppResult<(u64, 
 /// Reset all statistics
 #[tauri::command]
 pub async fn reset_clip_statistics(state: State<'_, AppState>) -> AppResult<()> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    require_command_access(&state.auth, "reset_clip_statistics")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
 
     crate::video::get_global_stats().reset();
     Ok(())
@@ -498,6 +807,7 @@ pub async fn reset_clip_statistics(state: State<'_, AppState>) -> AppResult<()> 
 /// Supports mp4 (H.264), webm (VP9), and mov (ProRes) output formats.
 #[tauri::command]
 pub async fn export_video(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     input: String,
     output: String,
@@ -507,8 +817,10 @@ pub async fn export_video(
 ) -> Result<String, String> {
     use tokio::process::Command as TokioCommand;
 
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()).to_string())?;
+    require_command_access(&state.auth, "export_video")
+        .map_err(|e| AppError::Auth(e.to_string()).to_string())?;
+
+    emit_export_progress(&app, 5.0);
 
     // Validate input path
     let validated_input = security::validate_video_input_path(&input)
@@ -567,9 +879,16 @@ pub async fn export_video(
             } else {
                 validated_output
             };
+            // Quality lives in the encoder args (libx264 -crf / nvenc -cq /
+            // amf -qp / qsv -global_quality); appending a blanket -crf here
+            // would hard-fail hardware encoders. Add the compatibility pixel
+            // format and a 1080p bitrate ceiling instead.
             let encoder = VideoProcessor::detect_optimal_encoder();
             let mut args: Vec<&str> = encoder.get_ffmpeg_args().to_vec();
-            args.extend_from_slice(&["-crf", "23", "-c:a", "aac", "-b:a", "192k"]);
+            args.extend_from_slice(&[
+                "-pix_fmt", "yuv420p", "-maxrate", "16M", "-bufsize", "32M", "-c:a", "aac", "-b:a",
+                "192k",
+            ]);
             (args, out)
         }
     };
@@ -582,6 +901,16 @@ pub async fn export_video(
         "scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2",
         width, height, width, height
     );
+
+    // Bound concurrent offline FFmpeg processes (hardware encoders limit sessions).
+    let _pool_permit = crate::utils::ffmpeg_pool::global_ffmpeg_pool()
+        .acquire()
+        .await
+        .map_err(|e| {
+            let msg = format!("FFmpeg pool acquire failed: {}", e);
+            emit_export_error(&app, &msg);
+            msg
+        })?;
 
     let mut command = TokioCommand::new(&ffmpeg_path);
     command.args(["-y", "-i"]);
@@ -605,25 +934,66 @@ pub async fn export_video(
         output_path
     );
 
-    let child = command
-        .spawn()
-        .map_err(|e| format!("Failed to start FFmpeg: {}", e))?;
-    let result = child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("FFmpeg process error: {}", e))?;
+    emit_export_progress(&app, 40.0);
+
+    let child = command.spawn().map_err(|e| {
+        let msg = format!("Failed to start FFmpeg: {}", e);
+        emit_export_error(&app, &msg);
+        msg
+    })?;
+    let result = child.wait_with_output().await.map_err(|e| {
+        let msg = format!("FFmpeg process error: {}", e);
+        emit_export_error(&app, &msg);
+        msg
+    })?;
 
     if !result.status.success() {
         let stderr = String::from_utf8_lossy(&result.stderr);
         tracing::error!("Export failed: {}", stderr);
-        return Err(format!(
+        let msg = format!(
             "Export failed: {}",
             stderr.chars().take(500).collect::<String>()
-        ));
+        );
+        emit_export_error(&app, &msg);
+        return Err(msg);
     }
 
+    // Release the pool slot before the normalization pass, which acquires its
+    // own slot via the shared execute path (avoids a self-deadlock).
+    drop(_pool_permit);
+
+    emit_export_progress(&app, 85.0);
+
+    // Optional final LUFS normalization (2-pass loudnorm; copies video so no
+    // re-encode). Only for the H.264/MP4 path — loudnorm re-muxes to AAC/MP4,
+    // which would be wrong for VP9/webm or ProRes/mov.
+    let is_mp4 = !matches!(format.as_str(), "webm" | "mov");
+    if is_mp4 {
+        if let Some(target_lufs) = export_normalize_lufs(&state).await {
+            let processor = VideoProcessor::new_with_fallback();
+            let normalized = output_path.with_extension("loudnorm.mp4");
+            match processor
+                .normalize_audio(&output_path, &normalized, target_lufs)
+                .await
+            {
+                Ok(_) => {
+                    if let Err(e) = std::fs::rename(&normalized, &output_path) {
+                        tracing::warn!("Failed to swap in normalized audio: {}", e);
+                        let _ = std::fs::remove_file(&normalized);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Audio normalization skipped (non-fatal): {}", e);
+                    let _ = std::fs::remove_file(&normalized);
+                }
+            }
+        }
+    }
+
+    let output_str = output_path.to_string_lossy().to_string();
     tracing::info!("Video export completed: {:?}", output_path);
-    Ok(output_path.to_string_lossy().to_string())
+    emit_export_complete(&app, &output_str);
+    Ok(output_str)
 }
 
 // ============================================================================
@@ -638,7 +1008,7 @@ pub async fn apply_slow_motion_cmd(
     output: String,
     speed_factor: f64,
 ) -> Result<String, String> {
-    require_auth(&state.auth).map_err(|e| e.to_string())?;
+    require_command_access(&state.auth, "apply_slow_motion_cmd").map_err(|e| e.to_string())?;
 
     if speed_factor >= 1.0 {
         return Err("Speed factor must be less than 1.0 for slow motion".to_string());
@@ -671,16 +1041,16 @@ pub async fn apply_color_grading_cmd(
     contrast: f64,
     saturation: f64,
 ) -> Result<String, String> {
-    require_auth(&state.auth).map_err(|e| e.to_string())?;
+    require_command_access(&state.auth, "apply_color_grading_cmd").map_err(|e| e.to_string())?;
 
     // Validate color grading ranges
-    if !brightness.is_finite() || brightness < -1.0 || brightness > 1.0 {
+    if !brightness.is_finite() || !(-1.0..=1.0).contains(&brightness) {
         return Err(format!("brightness {} out of range -1.0..1.0", brightness));
     }
-    if !contrast.is_finite() || contrast < 0.0 || contrast > 3.0 {
+    if !contrast.is_finite() || !(0.0..=3.0).contains(&contrast) {
         return Err(format!("contrast {} out of range 0.0..3.0", contrast));
     }
-    if !saturation.is_finite() || saturation < 0.0 || saturation > 3.0 {
+    if !saturation.is_finite() || !(0.0..=3.0).contains(&saturation) {
         return Err(format!("saturation {} out of range 0.0..3.0", saturation));
     }
 
@@ -716,7 +1086,7 @@ pub async fn apply_text_overlay_cmd(
     size: u32,
     color: String,
 ) -> Result<String, String> {
-    require_auth(&state.auth).map_err(|e| e.to_string())?;
+    require_command_access(&state.auth, "apply_text_overlay_cmd").map_err(|e| e.to_string())?;
 
     let validated_input = security::validate_video_input_path(&input)
         .map_err(|e| format!("Invalid input path: {}", e))?;
@@ -762,7 +1132,7 @@ pub async fn apply_chained_effects_cmd(
     output: String,
     effects: ChainedEffects,
 ) -> Result<String, String> {
-    require_auth(&state.auth).map_err(|e| e.to_string())?;
+    require_command_access(&state.auth, "apply_chained_effects_cmd").map_err(|e| e.to_string())?;
 
     let validated_input = security::validate_video_input_path(&input)
         .map_err(|e| format!("Invalid input path: {}", e))?;
@@ -823,7 +1193,7 @@ pub async fn export_as_gif(
     output: String,
     max_duration: f64,
 ) -> Result<String, String> {
-    require_auth(&state.auth).map_err(|e| e.to_string())?;
+    require_command_access(&state.auth, "export_as_gif").map_err(|e| e.to_string())?;
 
     let validated_input = security::validate_video_input_path(&input)
         .map_err(|e| format!("Invalid input path: {}", e))?;
@@ -882,5 +1252,108 @@ pub async fn export_as_gif(
         Ok(output_path.to_string_lossy().to_string())
     } else {
         Err("GIF export failed. The input video may be corrupted or unsupported.".to_string())
+    }
+}
+
+#[cfg(test)]
+mod quota_gate_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn parse_verdict_allowed() {
+        let value = serde_json::json!({ "allowed": true, "used": 0, "limit": 5 });
+        assert_eq!(parse_quota_verdict(&value), ServerQuotaVerdict::Allowed);
+    }
+
+    #[test]
+    fn parse_verdict_denied_reads_used_and_limit() {
+        let value = serde_json::json!({ "allowed": false, "used": 5, "limit": 5 });
+        assert_eq!(
+            parse_quota_verdict(&value),
+            ServerQuotaVerdict::Denied { used: 5, limit: 5 }
+        );
+    }
+
+    #[test]
+    fn parse_verdict_denied_defaults_missing_counts_to_zero() {
+        let value = serde_json::json!({ "allowed": false });
+        assert_eq!(
+            parse_quota_verdict(&value),
+            ServerQuotaVerdict::Denied { used: 0, limit: 0 }
+        );
+    }
+
+    #[test]
+    fn parse_verdict_pro_unlimited_body_is_allowed() {
+        // PRO responses carry `limit: null`; `allowed` still governs.
+        let value = serde_json::json!({ "allowed": true, "limit": null, "unlimited": true });
+        assert_eq!(parse_quota_verdict(&value), ServerQuotaVerdict::Allowed);
+    }
+
+    #[test]
+    fn parse_verdict_malformed_body_is_unavailable() {
+        // An error envelope (no boolean `allowed`) must fail open to local.
+        let value = serde_json::json!({ "error": "AUTH_INVALID", "message": "nope" });
+        assert_eq!(parse_quota_verdict(&value), ServerQuotaVerdict::Unavailable);
+    }
+
+    #[test]
+    fn gate_allowed_does_not_touch_local() {
+        let called = Cell::new(false);
+        let result = resolve_quota_gate(&ServerQuotaVerdict::Allowed, || {
+            called.set(true);
+            Ok(3)
+        });
+        assert!(result.is_ok());
+        assert!(
+            !called.get(),
+            "server Allowed must not consult local counter"
+        );
+    }
+
+    #[test]
+    fn gate_denied_errors_without_touching_local() {
+        let called = Cell::new(false);
+        let result = resolve_quota_gate(&ServerQuotaVerdict::Denied { used: 5, limit: 5 }, || {
+            called.set(true);
+            Ok(3)
+        });
+        let err = result.unwrap_err();
+        assert!(err.contains("quota exceeded"), "got: {}", err);
+        assert!(err.contains("5/5"), "got: {}", err);
+        assert!(
+            !called.get(),
+            "server Denied must not consult local counter"
+        );
+    }
+
+    #[test]
+    fn gate_unavailable_falls_back_to_local_allow() {
+        // Server offline but the local counter has room => allow.
+        let called = Cell::new(false);
+        let result = resolve_quota_gate(&ServerQuotaVerdict::Unavailable, || {
+            called.set(true);
+            Ok(2)
+        });
+        assert!(result.is_ok());
+        assert!(
+            called.get(),
+            "server Unavailable must consult local counter"
+        );
+    }
+
+    #[test]
+    fn gate_unavailable_falls_back_to_local_deny() {
+        // Server offline and the local counter is exhausted => deny with the
+        // local error surfaced verbatim.
+        let result = resolve_quota_gate(&ServerQuotaVerdict::Unavailable, || {
+            Err(
+                "Monthly auto-edit quota exceeded (5/5). Upgrade to PRO for unlimited usage."
+                    .to_string(),
+            )
+        });
+        let err = result.unwrap_err();
+        assert!(err.contains("quota exceeded"), "got: {}", err);
     }
 }

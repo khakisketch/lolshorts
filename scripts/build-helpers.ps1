@@ -118,7 +118,7 @@ function Run-Tests {
     # Backend tests
     Write-ColorOutput "Running backend tests..." "Yellow"
     Set-Location "src-tauri"
-    cargo test --all-features
+    cargo test
     Set-Location ".."
 
     # Frontend tests

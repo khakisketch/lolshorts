@@ -27,23 +27,53 @@ $ffprobeTargetName = "ffprobe-x86_64-pc-windows-msvc.exe"
 # Check if FFmpeg already exists
 $ffmpegPath = Join-Path $BIN_DIR $ffmpegTargetName
 $ffprobePath = Join-Path $BIN_DIR $ffprobeTargetName
+$forceDownload = ($env:LOLSHORTS_FORCE_FFMPEG_DOWNLOAD -eq "1") -or ($env:FORCE_FFMPEG_DOWNLOAD -eq "1")
 
-if ((Test-Path $ffmpegPath)) {
-    Write-Host "✅ FFmpeg binaries already exist in binaries directory" -ForegroundColor Green
+function Test-ToolVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ToolName
+    )
 
-    # Verify versions
-    $ffmpegVersion = & $ffmpegPath -version 2>&1 | Select-Object -First 1
-    Write-Host "📦 Current version: $ffmpegVersion" -ForegroundColor Cyan
-
-    if ($env:CI -eq "true") {
-        Write-Host "✅ CI Environment detected, skipping re-download" -ForegroundColor Green
-        exit 0
+    if (-not (Test-Path $Path)) {
+        return $false
     }
 
-    $response = Read-Host "Do you want to re-download FFmpeg? (y/N)"
-    if ($response -ne "y") {
-        Write-Host "✅ Using existing FFmpeg binaries" -ForegroundColor Green
-        exit 0
+    try {
+        $versionOutput = & $Path -version 2>&1
+        $firstLine = $versionOutput | Select-Object -First 1
+        if ($LASTEXITCODE -eq 0 -and "$firstLine".StartsWith("$ToolName version")) {
+            Write-Host "📦 Current $ToolName version: $firstLine" -ForegroundColor Cyan
+            return $true
+        }
+
+        Write-Host "⚠️ Existing $ToolName binary failed version validation: $firstLine" -ForegroundColor Yellow
+        return $false
+    } catch {
+        Write-Host "⚠️ Existing $ToolName binary could not be executed: $_" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+if ((Test-Path $ffmpegPath) -or (Test-Path $ffprobePath)) {
+    $ffmpegValid = Test-ToolVersion -Path $ffmpegPath -ToolName "ffmpeg"
+    $ffprobeValid = Test-ToolVersion -Path $ffprobePath -ToolName "ffprobe"
+
+    if ($ffmpegValid -and $ffprobeValid -and -not $forceDownload) {
+        Write-Host "✅ Valid FFmpeg binaries already exist in binaries directory" -ForegroundColor Green
+
+        if ($env:CI -eq "true") {
+            Write-Host "✅ CI Environment detected, skipping re-download" -ForegroundColor Green
+            exit 0
+        }
+
+        $response = Read-Host "Do you want to re-download FFmpeg? (y/N)"
+        if ($response -ne "y") {
+            Write-Host "✅ Using existing FFmpeg binaries" -ForegroundColor Green
+            exit 0
+        }
+    } else {
+        Write-Host "⚠️ Existing FFmpeg sidecars are missing, invalid, or force refresh was requested. Re-downloading." -ForegroundColor Yellow
     }
 }
 

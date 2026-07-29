@@ -1,3 +1,4 @@
+use crate::auth::command_policy::require_command_access;
 use crate::auth::middleware::require_auth;
 use crate::auth::SubscriptionTier;
 use crate::error::{AppError, AppResult};
@@ -38,8 +39,14 @@ pub async fn save_game_metadata(
     game_id: String,
     metadata: GameMetadata,
 ) -> AppResult<()> {
-    // FREE tier feature - no authentication required
+    require_command_access(&state.auth, "save_game_metadata")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
     security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
+    if metadata.game_id != game_id {
+        return Err(AppError::Validation(
+            "metadata.game_id must match the command game_id".to_string(),
+        ));
+    }
     state
         .storage
         .save_game_metadata(&game_id, &metadata)
@@ -67,7 +74,8 @@ pub async fn save_game_events(
     game_id: String,
     events: Vec<EventData>,
 ) -> AppResult<()> {
-    // FREE tier feature - no authentication required
+    require_command_access(&state.auth, "save_game_events")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
     security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
     state
         .storage
@@ -82,7 +90,8 @@ pub async fn save_clip_metadata(
     game_id: String,
     clip: ClipMetadata,
 ) -> AppResult<()> {
-    // FREE tier feature - no authentication required
+    require_command_access(&state.auth, "save_clip_metadata")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
     security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
     state
         .storage
@@ -93,6 +102,8 @@ pub async fn save_clip_metadata(
 /// Delete a game and all its data (including video files)
 #[tauri::command]
 pub async fn delete_game(state: State<'_, AppState>, game_id: String) -> AppResult<()> {
+    require_command_access(&state.auth, "delete_game")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
     security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
     // 1. Load all clip metadata for this game to find physical files
     let clips = state
@@ -200,7 +211,7 @@ pub async fn list_clips(
 #[tauri::command]
 pub async fn get_auto_edit_quota(state: State<'_, AppState>) -> AppResult<AutoEditQuotaInfo> {
     // Require authentication to check tier
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
+    let user = require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
 
     let tier = state
         .auth
@@ -208,10 +219,11 @@ pub async fn get_auto_edit_quota(state: State<'_, AppState>) -> AppResult<AutoEd
         .map_err(|e| AppError::Auth(e.to_string()))?;
     let is_pro = matches!(tier, SubscriptionTier::Pro);
 
-    // Load current usage
+    // Load current usage (scoped to this user; see storage::Storage doc on
+    // auto_edit_usage_by_user for why this is local-only, non-authoritative)
     let usage = state
         .storage
-        .load_auto_edit_usage()
+        .load_auto_edit_usage(&user.id)
         .map_err(|e| AppError::Database(e.to_string()))?;
 
     // Calculate remaining quota
@@ -322,8 +334,14 @@ pub async fn update_auto_edit_youtube_status(
 #[tauri::command]
 pub async fn get_dashboard_stats(state: State<'_, AppState>) -> AppResult<StorageStats> {
     // FREE tier feature - no authentication required
-    state
-        .storage
-        .get_stats()
+    //
+    // `Storage::get_stats` recursively walks the recordings/exports
+    // directory trees on disk (`dir_size_bytes`) synchronously; on a large
+    // library that can take long enough to stall the async runtime worker
+    // thread it runs on. Move it to a blocking-pool thread instead.
+    let storage = state.storage.clone();
+    tokio::task::spawn_blocking(move || storage.get_stats())
+        .await
+        .map_err(|e| AppError::Internal(format!("Dashboard stats task panicked: {}", e)))?
         .map_err(|e| AppError::Database(e.to_string()))
 }

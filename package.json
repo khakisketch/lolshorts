@@ -22,6 +22,7 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "typecheck": "tsc --noEmit",
     "verify:frontend": "npm run lint && npm run typecheck && npm run build && npm run test:unit",
+    "verify:release-preflight": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-field-qa-preflight.ps1",
     "audit:runtime": "npm audit --omit=dev",
     "audit:moderate": "npm audit --audit-level=moderate",
     "sbom": "npx @cyclonedx/cyclonedx-npm --output-file sbom.json",

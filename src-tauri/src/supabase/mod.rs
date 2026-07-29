@@ -86,6 +86,8 @@ pub enum LicenseStatus {
     Cancelled,
     #[serde(rename = "inactive", alias = "INACTIVE")]
     Inactive,
+    #[serde(rename = "past_due", alias = "PAST_DUE")]
+    PastDue,
     #[serde(rename = "none", alias = "NONE")]
     None,
 }

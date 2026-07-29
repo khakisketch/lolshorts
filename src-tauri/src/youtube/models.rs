@@ -29,7 +29,15 @@ impl ScheduledUploadStatus {
 /// Schedule information for a queued upload
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadSchedule {
-    /// ISO 8601 datetime string for when to publish (used as YouTube `publishAt`)
+    /// ISO 8601 datetime string for when this upload should actually execute.
+    ///
+    /// NOTE: this is **not** wired to YouTube's native `status.publishAt`
+    /// scheduled-publish feature. Instead, [`crate::youtube::commands::start_upload_scheduler`]
+    /// polls this queue every 60 seconds while the app is running and fires
+    /// the real upload API call once `scheduled_at` has passed. The video is
+    /// therefore only ever uploaded to YouTube once it is actually due, and
+    /// nothing happens if the app is closed at the scheduled time — the
+    /// upload runs the next time the app is open and polls past the due time.
     pub scheduled_at: Option<String>,
     /// Position in the upload queue (0-based)
     pub queue_position: Option<u32>,

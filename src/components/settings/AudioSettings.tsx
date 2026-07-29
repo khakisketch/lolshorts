@@ -11,18 +11,13 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Mic, Volume2, AlertTriangle } from "lucide-react";
+import { Mic, Volume2, AlertTriangle, Info } from "lucide-react";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from '@/lib/logger';
 
 type SampleRate = "hz44100" | "hz48000";
 type AudioBitrate = "kbps128" | "kbps192" | "kbps256" | "kbps320";
-
-interface AudioDevice {
-  name: string;
-  device_type: "Microphone" | "SystemAudio";
-}
 
 interface AudioSettings {
   record_microphone: boolean;
@@ -42,24 +37,47 @@ interface AudioSettingsProps {
 
 export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
   const { t } = useTranslation();
-  const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
-  const [devicesLoaded, setDevicesLoaded] = useState(false);
+  const [microphoneDevices, setMicrophoneDevices] = useState<string[]>([]);
+  const [systemAudioDevices, setSystemAudioDevices] = useState<string[]>([]);
+  const [micDevicesLoaded, setMicDevicesLoaded] = useState(false);
+  const [systemDevicesLoaded, setSystemDevicesLoaded] = useState(false);
 
-  // Fetch audio devices on component mount
+  // Fetch microphone (capture) devices on component mount.
   useEffect(() => {
-    const fetchAudioDevices = async () => {
+    const fetchMicrophoneDevices = async () => {
       try {
-        const devices = await invoke<AudioDevice[]>("list_audio_devices");
-        setAudioDevices(devices);
+        const devices = await invoke<string[]>("list_microphone_devices");
+        // 백엔드/모킹 환경이 null·비배열을 반환해도 렌더가 죽지 않게 정규화
+        setMicrophoneDevices(Array.isArray(devices) ? devices : []);
       } catch (error) {
-        logger.error("[AudioSettings] Failed to fetch audio devices:", error);
-        setAudioDevices([]);
+        logger.error("[AudioSettings] Failed to fetch microphone devices:", error);
+        setMicrophoneDevices([]);
       } finally {
-        setDevicesLoaded(true);
+        setMicDevicesLoaded(true);
       }
     };
 
-    fetchAudioDevices();
+    fetchMicrophoneDevices();
+  }, []);
+
+  // Fetch system audio (render/output) devices on component mount. This is
+  // the same cpal output-device enumeration the recorder actually captures
+  // from, so the names shown here match what will be used at recording time.
+  useEffect(() => {
+    const fetchSystemAudioDevices = async () => {
+      try {
+        const devices = await invoke<string[]>("list_system_audio_devices");
+        // 백엔드/모킹 환경이 null·비배열을 반환해도 렌더가 죽지 않게 정규화
+        setSystemAudioDevices(Array.isArray(devices) ? devices : []);
+      } catch (error) {
+        logger.error("[AudioSettings] Failed to fetch system audio devices:", error);
+        setSystemAudioDevices([]);
+      } finally {
+        setSystemDevicesLoaded(true);
+      }
+    };
+
+    fetchSystemAudioDevices();
   }, []);
 
   const updateSetting = <K extends keyof AudioSettings>(
@@ -68,10 +86,6 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
   ) => {
     onChange({ ...settings, [key]: value });
   };
-
-  // Filter devices by type
-  const microphoneDevices = audioDevices.filter(device => device.device_type === "Microphone");
-  const systemAudioDevices = audioDevices.filter(device => device.device_type === "SystemAudio");
 
   const getSampleRateLabel = (rate: SampleRate): string => {
     const labels: Record<SampleRate, string> = {
@@ -91,7 +105,9 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
     return labels[bitrate];
   };
 
-  const hasNoDevices = devicesLoaded && audioDevices.length === 0;
+  const devicesLoaded = micDevicesLoaded && systemDevicesLoaded;
+  const hasNoDevices =
+    devicesLoaded && microphoneDevices.length === 0 && systemAudioDevices.length === 0;
 
   return (
     <div data-testid="audio-settings" className="space-y-6">
@@ -106,7 +122,7 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
       )}
 
       {/* No system audio devices warning when system audio enabled */}
-      {devicesLoaded && settings.record_system_audio && systemAudioDevices.length === 0 && !hasNoDevices && (
+      {systemDevicesLoaded && settings.record_system_audio && systemAudioDevices.length === 0 && !hasNoDevices && (
         <Alert>
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
@@ -126,6 +142,14 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
             {t('settings.recordingConfig.audioSettings.microphoneRecording.description')}
           </p>
         </div>
+
+        <Alert className="mb-4">
+          <Info className="h-4 w-4" />
+          <AlertDescription>
+            {t('settings.recordingConfig.audioSettings.microphoneRecording.mixingNotice')}
+          </AlertDescription>
+        </Alert>
+
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <Label htmlFor="record_microphone" className="flex-1 cursor-pointer">
@@ -138,51 +162,51 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
             />
           </div>
 
-          {settings.record_microphone && (
-            <>
-              <div className="space-y-2">
-                <Label>{t('settings.recordingConfig.audioSettings.microphoneRecording.microphoneDevice')}</Label>
-                <Select
-                  value={settings.microphone_device || "default"}
-                  onValueChange={(value) =>
-                    updateSetting("microphone_device", value === "default" ? null : value)
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={t('settings.recordingConfig.audioSettings.microphoneRecording.selectDevice')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">{t('settings.recordingConfig.audioSettings.microphoneRecording.defaultDevice')}</SelectItem>
-                    {microphoneDevices.map((device, index) => (
-                      <SelectItem key={`mic-${index}`} value={device.name}>
-                        {device.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+          <div className="space-y-2">
+            <Label>
+              {t('settings.recordingConfig.audioSettings.microphoneRecording.microphoneDevice')}
+            </Label>
+            <Select
+              value={settings.microphone_device || "default"}
+              onValueChange={(value) =>
+                updateSetting("microphone_device", value === "default" ? null : value)
+              }
+            >
+              <SelectTrigger aria-label={t('settings.recordingConfig.audioSettings.microphoneRecording.microphoneDevice')}>
+                <SelectValue placeholder={t('settings.recordingConfig.audioSettings.microphoneRecording.selectDevice')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">{t('settings.recordingConfig.audioSettings.microphoneRecording.defaultDevice')}</SelectItem>
+                {microphoneDevices.map((name, index) => (
+                  <SelectItem key={`mic-${index}`} value={name}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <Label>{t('settings.recordingConfig.audioSettings.microphoneRecording.microphoneVolume')}</Label>
-                  <Badge variant="secondary">{settings.microphone_volume}%</Badge>
-                </div>
-                <Slider
-                  value={[settings.microphone_volume]}
-                  onValueChange={([value]) => updateSetting("microphone_volume", value)}
-                  min={0}
-                  max={200}
-                  step={5}
-                  className="w-full"
-                />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>{t('settings.recordingConfig.audioSettings.microphoneRecording.muted')}</span>
-                  <span>100%</span>
-                  <span>{t('settings.recordingConfig.audioSettings.microphoneRecording.boost')}</span>
-                </div>
-              </div>
-            </>
-          )}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label>
+                {t('settings.recordingConfig.audioSettings.microphoneRecording.microphoneVolume')}
+              </Label>
+              <Badge variant="secondary">{settings.microphone_volume}%</Badge>
+            </div>
+            <Slider
+              value={[settings.microphone_volume]}
+              onValueChange={([value]) => updateSetting("microphone_volume", value)}
+              min={0}
+              max={200}
+              step={5}
+              className="w-full"
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>{t('settings.recordingConfig.audioSettings.microphoneRecording.muted')}</span>
+              <span>100%</span>
+              <span>{t('settings.recordingConfig.audioSettings.microphoneRecording.boost')}</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -224,13 +248,16 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="default">{t('settings.recordingConfig.audioSettings.systemAudioRecording.defaultDevice')}</SelectItem>
-                    {systemAudioDevices.map((device, index) => (
-                      <SelectItem key={`sys-${index}`} value={device.name}>
-                        {device.name}
+                    {systemAudioDevices.map((name, index) => (
+                      <SelectItem key={`sys-${index}`} value={name}>
+                        {name}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">
+                  {t('settings.recordingConfig.audioSettings.systemAudioRecording.deviceListHint')}
+                </p>
               </div>
 
               <div className="space-y-3">

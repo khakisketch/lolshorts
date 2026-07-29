@@ -7,9 +7,9 @@ This plan defines the remaining work required to move LoLShorts from a validated
 ### Confirmed Local Evidence
 
 - Frontend lint, typecheck, production build, Jest, browser E2E, runtime audit, moderate-or-higher audit, `cargo check`, and `cargo test` have passed locally.
-- Browser E2E now runs against `127.0.0.1:5181` with two workers and passed across Desktop Chrome, Firefox, and Edge.
+- Browser E2E now runs against `127.0.0.1:5181` with two workers and the latest full run passed: 342 passed / 27 skipped / 0 failed across Desktop Chrome, Firefox, and Edge.
 - Browser UI smoke on Dashboard found and fixed translation-key exposure, status badge overflow, title focus outline, and LCU header wrapping.
-- Payment and Toss remain deferred. No live payment or client-side success path grants PRO.
+- Payment and Toss remain disabled by default. A server-authoritative Supabase billing scaffold exists for review, but no live payment key should be configured before E5 and paid QA pass.
 - Supabase Auth and `user_licenses` remain the entitlement authority; local SQLite is app-data storage only.
 
 ### Not Yet Proven
@@ -114,9 +114,9 @@ Payment is blocked until the non-payment Windows RC passes. When it starts, it n
 
 | Required Work             | Evidence                                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------------------- |
-| Server-side Toss approval | Sandbox and live approval logs, no client-only grant path                                   |
-| Webhook idempotency       | Replay tests for duplicate, out-of-order, failed, refund, cancel events                     |
-| Canonical DB mutation     | `payments`, `subscriptions`, and `user_licenses` updated only by server-authoritative paths |
+| Server-side Toss approval | Sandbox and live approval logs, no client-only grant path through Tauri, browser routes, Zustand, localStorage, or SQLite |
+| Webhook idempotency       | Replay tests for duplicate, out-of-order, failed, refund, cancel events against the Supabase `billing` Edge Function       |
+| Canonical DB mutation     | `payments`, `subscriptions`, and `user_licenses` updated only by the server-authoritative billing function or equivalent central server |
 | Legal/support readiness   | Terms, refund flow, support routing, tax/account owner, rollback plan                       |
 | Paid launch rollback      | Disable payment, revoke/restore licenses safely, communicate user impact                    |
 
@@ -130,7 +130,8 @@ Exit condition: paid access is proven separately from non-payment product readin
 4. Expand Playwright screenshots beyond Dashboard to Settings, YouTube, AutoEdit, Replays, and degraded/payment-deferred states.
 5. Prepare and execute [E5 Field QA Packet](./E5_FIELD_QA_PACKET.md): tester instructions, evidence folders, log bundle procedure, sample issue template, and pass/fail criteria.
 6. Execute E5 on real Windows hardware and record evidence in the checklist.
-7. Only after E5 passes, promote a non-payment Windows RC. Keep payment deferred.
+7. Only after E5 passes, promote a non-payment Windows RC. Keep payment disabled unless the separate paid QA plan also passes.
+8. For paid launch, deploy the Supabase billing function with service-role/Toss secrets server-side only, run Toss sandbox QA, webhook replay QA, refund/cancel QA, and one controlled live small-amount test with rollback evidence.
 
 ## Standard Verification Set
 
@@ -152,7 +153,7 @@ cargo test
 ## Non-Negotiable Release Rules
 
 - Do not call the product production-ready until E5 field evidence exists.
-- Do not enable live Toss/payment keys before non-payment Field QA passes.
+- Do not enable `LOLSHORTS_PAYMENT_ENABLED` or live Toss/payment keys before non-payment Field QA and separate paid QA pass.
 - Do not trust SQLite, Zustand, localStorage, or UI state for auth, payment, or PRO entitlement authority.
 - Do not ship direct TikTok or Instagram upload claims; keep export/manual guidance only.
 - Do not publish updater or signing readiness claims without clean-machine install/update evidence.

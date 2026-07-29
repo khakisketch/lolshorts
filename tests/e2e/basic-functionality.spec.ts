@@ -32,14 +32,10 @@ test.describe("LoLShorts Basic Functionality", () => {
     await page.click('[data-testid="nav-settings"]');
     await page.waitForLoadState("networkidle");
     await expect(page.locator('[data-testid="settings"]')).toBeVisible();
-    // Click the audio tab to reveal AudioSettings
-    const audioTab = page.locator('[value="audio"]');
-    if (await audioTab.isVisible()) {
-      await audioTab.click();
-      await expect(
-        page.locator('[data-testid="audio-settings"]'),
-      ).toBeVisible();
-    }
+    // 오디오 상세는 "고급 설정" 안의 탭으로 내려갔다.
+    await page.getByTestId("advanced-settings-toggle").click();
+    await page.getByRole("tab", { name: "Audio" }).click();
+    await expect(page.locator('[data-testid="audio-settings"]')).toBeVisible();
   });
 
   test("navigation between sections works", async ({ page }) => {

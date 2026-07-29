@@ -35,9 +35,11 @@ interface SimpleSettings {
 
 export function RecordingControls() {
   const { t } = useTranslation();
-  const { 
-    status: { isRecording }, 
-    readiness 
+  const {
+    status: { isRecording },
+    readiness,
+    audioActive,
+    micActive,
   } = useRecordingStore();
   const [isLoading, setIsLoading] = useState(false);
   const [replayDuration, setReplayDuration] = useState(60);
@@ -224,7 +226,14 @@ export function RecordingControls() {
             <AlertDescription className="text-xs">
               <ul className="list-disc list-inside space-y-1">
                 {[...(criticalBlockers), ...(warnings)].map((b, i) => (
-                  <li key={i}>{b.message}</li>
+                  // The backend ships these messages in English. Translate by the
+                  // stable `id` (its `code`), falling back to the raw message so a
+                  // new backend code shows something real instead of a bare key.
+                  <li key={i}>
+                    {t(`recordingControls.readiness.codes.${b.id}`, {
+                      defaultValue: b.message,
+                    })}
+                  </li>
                 ))}
               </ul>
             </AlertDescription>
@@ -262,6 +271,24 @@ export function RecordingControls() {
               ? `✓ ${t('recordingControls.autoCapture.active')}`
               : t('recordingControls.autoCapture.inactive')}
           </div>
+
+          {isRecording && audioActive === false && (
+            <Alert variant="destructive" className="bg-black/40 border-white/10">
+              <AlertCircle className="h-4 w-4 text-red-500" />
+              <AlertDescription className="text-xs">
+                {t('recordingControls.audioNotCaptured')}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {isRecording && micActive === false && fullSettings?.audio.record_microphone && (
+            <Alert variant="destructive" className="bg-black/40 border-white/10">
+              <AlertCircle className="h-4 w-4 text-red-500" />
+              <AlertDescription className="text-xs">
+                {t('recordingControls.micNotCaptured')}
+              </AlertDescription>
+            </Alert>
+          )}
         </div>
       </div>
 

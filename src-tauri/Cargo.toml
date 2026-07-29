@@ -17,7 +17,9 @@ tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
 # Tauri Core
-tauri = { version = "2.0", features = ["tray-icon"] }
+# protocol-asset: required by tauri.conf.json's `assetProtocol.enable` so the
+# editor's convertFileSrc() thumbnails/previews resolve (build fails otherwise).
+tauri = { version = "2.0", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-shell = "2.0"
 tauri-plugin-notification = "2.0"
 tauri-plugin-updater = "2"
@@ -90,6 +92,9 @@ urlencoding = "2.1"
 # WASAPI loopback audio capture
 cpal = "0.15"
 hound = "3.5"
+
+# OS credential store for OAuth token storage (Windows Credential Manager / macOS Keychain)
+keyring = { version = "3", features = ["windows-native", "apple-native"] }
 
 # Windows-specific
 [target.'cfg(windows)'.dependencies]

@@ -115,12 +115,12 @@ describe('YouTube', () => {
   });
 
   describe('Protected Feature', () => {
-    it('wraps content in a PRO-only ProtectedFeature', () => {
+    it('requires an account but no PRO entitlement — uploading is free', () => {
       render(<YouTube />);
 
       expect(mockProtectedFeature).toHaveBeenCalledWith(
         expect.objectContaining({
-          requiresPro: true,
+          requiresPro: false,
           featureName: 'youtube.title',
         })
       );

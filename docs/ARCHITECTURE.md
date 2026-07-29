@@ -252,8 +252,14 @@ Live Client API polling (every 500ms) detects:
 
 - **`oauth.rs`** - OAuth2 flow
   - Implements authorization code flow
-  - Handles callback server on localhost:8080
   - Stores refresh tokens for automated uploads
+
+- **`callback_server.rs`** - Local OAuth callback listener
+  - Binds to the host/port/path parsed from `YOUTUBE_REDIRECT_URI`
+    (`CallbackServer::from_redirect_uri` — single source of truth, so the
+    redirect URI handed to Google and the listener that receives it can
+    never drift apart)
+  - Default (no `YOUTUBE_REDIRECT_URI` set): `http://localhost:9090/oauth/callback`
 
 - **`upload.rs`** - Video upload
   - Implements resumable upload (handles network interruptions)

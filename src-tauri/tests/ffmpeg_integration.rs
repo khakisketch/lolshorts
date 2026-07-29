@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
+    use lolshorts::utils::ffmpeg::get_ffmpeg_path;
     use lolshorts::video::VideoProcessor;
-    use std::path::PathBuf;
     use std::process::Command;
     use tokio::fs;
 
@@ -23,26 +23,8 @@ mod tests {
         let thumbnail = temp_dir.join("thumbnail.jpg");
 
         // 2. Generate Test Video
-        // Find ffmpeg binary relative to project root or use PATH
-        let possible_paths = vec![
-            "src-tauri/binaries/ffmpeg.exe", // Run from project root
-            "binaries/ffmpeg.exe",           // Run from src-tauri
-            "ffmpeg.exe",                    // Current dir
-            "ffmpeg",                        // PATH
-        ];
-
-        let _ffmpeg_path = "ffmpeg";
-        let mut absolute_ffmpeg_path = PathBuf::from("ffmpeg");
-
-        for path in &possible_paths {
-            if std::path::Path::new(path).exists() {
-                // _ffmpeg_path = path;
-                if let Ok(p) = std::fs::canonicalize(path) {
-                    absolute_ffmpeg_path = p;
-                }
-                break;
-            }
-        }
+        let absolute_ffmpeg_path =
+            get_ffmpeg_path().expect("A usable FFmpeg binary is required for ffmpeg_integration");
 
         println!("Using FFmpeg at: {:?}", absolute_ffmpeg_path);
 

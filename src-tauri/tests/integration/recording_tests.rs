@@ -159,6 +159,7 @@ async fn test_game_detection_flow() {
         game_time: None,
         is_monitoring: false,
         is_recording: false,
+        session_clip_count: 0,
     };
 
     assert!(!status.in_game);

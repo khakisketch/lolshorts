@@ -24,28 +24,39 @@ function RecordingIndicator() {
 }
 
 function ClipSavedToast() {
-  const [show, setShow] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'saved' | 'failed'>('idle');
 
   useEffect(() => {
-    const unlisten = listen('clip-saved', () => {
-      setShow(true);
-      const timer = setTimeout(() => setShow(false), 3000);
-      return () => clearTimeout(timer);
-    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const showToast = (next: 'saved' | 'failed') => {
+      setStatus(next);
+      clearTimeout(timer);
+      timer = setTimeout(() => setStatus('idle'), 3000);
+    };
+
+    const unlistenSaved = listen('clip-saved', () => showToast('saved'));
+    const unlistenFailed = listen('clip-save-failed', () => showToast('failed'));
+
     return () => {
-      unlisten.then((fn) => fn());
+      clearTimeout(timer);
+      unlistenSaved.then((fn) => fn());
+      unlistenFailed.then((fn) => fn());
     };
   }, []);
 
-  if (!show) return null;
+  if (status === 'idle') return null;
 
   return (
     <div
-      className="p-2 bg-green-500/80 rounded text-white text-sm animate-fade-in"
+      className={
+        status === 'saved'
+          ? 'p-2 bg-green-500/80 rounded text-white text-sm animate-fade-in'
+          : 'p-2 bg-red-500/80 rounded text-white text-sm animate-fade-in'
+      }
       role="alert"
       aria-live="assertive"
     >
-      클립 저장됨!
+      {status === 'saved' ? '클립 저장됨!' : '클립 저장 실패'}
     </div>
   );
 }

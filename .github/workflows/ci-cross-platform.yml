@@ -74,13 +74,13 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Run backend tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --all-features
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Run integration tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test integration --all-features
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test integration
 
   # Frontend tests
   frontend-test:
@@ -94,14 +94,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
 
       - name: Install dependencies
         run: npm ci
 
       - name: Run type checking
-        run: npm run build || true # Fallback if type-check script doesn't exist
+        run: npm run typecheck
 
       - name: Run linter
         run: npm run lint
@@ -134,8 +134,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -174,8 +174,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -218,7 +218,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Run npm security audit
         run: npm ci && npm audit --audit-level=moderate
@@ -255,8 +255,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
 
       - name: Install system dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -271,11 +271,18 @@ jobs:
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cd src-tauri/build_scripts
             ./prepare_ffmpeg.ps1
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            brew install ffmpeg
+            mkdir -p src-tauri/binaries
+            cp "$(which ffmpeg)" src-tauri/binaries/ffmpeg
+            cp "$(which ffprobe)" src-tauri/binaries/ffprobe
+            chmod +x src-tauri/binaries/ffmpeg src-tauri/binaries/ffprobe
           else
             mkdir -p src-tauri/binaries
             curl -L "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" | tar -xJ
             cp ffmpeg-master-latest-linux64-gpl/bin/ffmpeg src-tauri/binaries/
-            chmod +x src-tauri/binaries/ffmpeg
+            cp ffmpeg-master-latest-linux64-gpl/bin/ffprobe src-tauri/binaries/
+            chmod +x src-tauri/binaries/ffmpeg src-tauri/binaries/ffprobe
           fi
 
       - name: Build application (Release)
@@ -350,7 +357,7 @@ jobs:
       - name: Run benchmarks
         run: |
           cd src-tauri
-          cargo bench --all-features
+          cargo bench
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
@@ -363,7 +370,15 @@ jobs:
   all-checks-passed:
     name: All Checks Passed
     runs-on: ubuntu-latest
-    needs: [backend-test, frontend-test, e2e-test-windows, e2e-test-macos, security-audit, build-check]
+    needs:
+      [
+        backend-test,
+        frontend-test,
+        e2e-test-windows,
+        e2e-test-macos,
+        security-audit,
+        build-check,
+      ]
     if: success()
 
     steps:

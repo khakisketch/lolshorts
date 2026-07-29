@@ -61,7 +61,14 @@ impl Default for RecordingSettings {
             show_notifications: true,
             show_replay_popup: true,
             crash_reporting_enabled: false,
-            overlay_enabled: false,
+            // B4 fix: was `false` here while `#[serde(default = "default_true")]` on the
+            // field above defaulted deserialized (missing-field) settings to `true` — a
+            // fresh install (no settings.json yet, uses this Default impl) got the
+            // overlay off while an existing user's settings.json missing this new field
+            // got it on. docs/superpowers/specs/2026-03-13-commercial-release-design.md
+            // §"Overlay Feature Flag" specifies `overlay_enabled: bool (default: true)`,
+            // so align this impl to `true` to match serde's default and the spec.
+            overlay_enabled: true,
         }
     }
 }
@@ -125,7 +132,9 @@ impl StorageSettings {
 // Event Filter Settings
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// PartialEq: `HighlightPreset::from_filters` compares a live toggle set against
+// each preset's canonical set to decide which preset (if any) is selected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventFilterSettings {
     // 킬 관련
     pub record_kills: bool,
@@ -181,6 +190,76 @@ pub struct EventFilterSettings {
     pub contest_window_secs: u32, // 5-30, default 10
 }
 
+/// 하이라이트 프리셋 — 개별 이벤트 토글 24개의 상위 개념.
+///
+/// 토글을 없애지 않는다. 기본 설정 화면에는 프리셋 하나만 보이고, 고급을 펼치면
+/// 종전처럼 개별 토글이 나온다. 프리셋과 다른 조합을 만들면 `Custom`이 된다.
+///
+/// 이 계층이 필요한 이유는 실기기 테스트에서 드러났다: `record_deaths`/`record_assists`가
+/// 기본 off라 KDA 4/4/13인 게임에서 어시스트 클립이 하나도 생기지 않았는데, 앱은 아무
+/// 말도 하지 않았다. 24개 불리언은 "무엇을 담을지"라는 하나의 질문을 24조각으로 쪼개
+/// 사용자에게 떠넘긴 것이고, 그 조각 중 하나만 틀려도 조용히 실패한다.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HighlightPreset {
+    /// 많이 담기 — 죽는 장면까지 포함해 폭넓게.
+    Everything,
+    /// 균형 (기본) — 내 활약 위주. 킬·멀티킬·어시스트·주요 오브젝트.
+    #[default]
+    Balanced,
+    /// 확실한 것만 — 멀티킬·스틸·역전 같은 장면만.
+    BestOnly,
+    /// 고급에서 개별 토글을 직접 조합한 상태.
+    Custom,
+}
+
+impl HighlightPreset {
+    /// 프리셋이 규정하는 이벤트 토글 조합. `Custom` 은 규정하지 않는다(None).
+    pub fn to_filters(self) -> Option<EventFilterSettings> {
+        let base = EventFilterSettings::default();
+        Some(match self {
+            Self::Custom => return None,
+            Self::Everything => EventFilterSettings {
+                record_deaths: true,
+                record_shutdown: true,
+                record_assists: true,
+                record_turret: true,
+                ..base
+            },
+            // 기본값. `record_assists: true` 가 종전 기본과 다른 지점 —
+            // 어시스트는 "내가 한 일"이고, 한타 위주인 칼바람에서는 킬보다 흔하다.
+            // 죽는 장면은 기본에서 제외한다(원하면 '많이 담기').
+            Self::Balanced => EventFilterSettings {
+                record_assists: true,
+                ..base
+            },
+            Self::BestOnly => EventFilterSettings {
+                record_kills: false,
+                record_assists: false,
+                record_deaths: false,
+                record_first_blood: false,
+                record_dragon: false,
+                record_herald: false,
+                record_inhibitor: false,
+                record_voidgrubs: false,
+                record_ace: false,
+                min_priority: 3,
+                ..base
+            },
+        })
+    }
+
+    /// 현재 토글 조합에 해당하는 프리셋. 어느 것과도 맞지 않으면 `Custom`.
+    pub fn from_filters(filters: &EventFilterSettings) -> Self {
+        for preset in [Self::Balanced, Self::Everything, Self::BestOnly] {
+            if preset.to_filters().as_ref() == Some(filters) {
+                return preset;
+            }
+        }
+        Self::Custom
+    }
+}
+
 impl Default for EventFilterSettings {
     fn default() -> Self {
         Self {
@@ -192,7 +271,18 @@ impl Default for EventFilterSettings {
             record_deaths: false, // 데스는 기본적으로 OFF
             record_shutdown: false,
 
-            record_assists: false, // 어시스트는 기본적으로 OFF
+            // `HighlightPreset::Balanced`(= `#[default]`) 와 같은 값이어야 한다.
+            //
+            // 이 한 줄이 `false` 이던 동안, 아무것도 건드리지 않은 새 설치의 필터
+            // 조합은 **어떤 프리셋과도 일치하지 않았다**. 그래서 기본 설정 화면은
+            // 첫 실행부터 "직접 설정" 배지를 달고 카드가 하나도 선택되지 않은 채로
+            // 떴다 — 앱이 자기 기본값을 설명하지 못하는 상태였고, 실기기 렌더에서
+            // 그대로 확인됐다. 프리셋 판정은 구조체 전체를 `PartialEq` 로 비교하므로
+            // 필드 하나만 어긋나도 결과가 `Custom` 이 된다.
+            //
+            // 어시스트를 켜는 쪽으로 맞춘 것은 `Balanced` 의 정의가 그렇기 때문이다
+            // (실기기 테스트에서 어시스트 장면이 하이라이트 후보로 유효했다).
+            record_assists: true,
 
             record_dragon: true,
             record_baron: true,
@@ -347,7 +437,12 @@ impl Default for VideoSettings {
             resolution: Resolution::R1920x1080,
             frame_rate: FrameRate::Fps60,
             bitrate_preset: BitratePreset::Medium,
-            codec: VideoCodec::H265,
+            // H.264, not H.265: the editor preview plays clips through the webview's
+            // <video> element, and WebView2 only decodes HEVC when the OS has the
+            // (separately installed) HEVC extensions. With H.265 the preview is a
+            // black frame and nothing tells the user why. Compatibility beats the
+            // file-size win for a clip you are going to upload anyway.
+            codec: VideoCodec::H264,
             encoder: EncoderPreference::Auto,
             monitor_index: 0,
         }
@@ -421,7 +516,7 @@ pub struct AudioSettings {
     pub bitrate: AudioBitrate,
 
     /// Explicit WASAPI device ID for loopback capture (None = system default output device).
-    /// Populated from the list returned by `enumerate_audio_devices()`.
+    /// Populated from the list returned by `enumerate_system_audio_devices()`.
     #[serde(default)]
     pub audio_device_id: Option<String>,
 
@@ -453,7 +548,11 @@ pub enum AudioBitrate {
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
-            record_microphone: true,
+            // Microphone capture IS wired (cpal input -> mic_capture.wav ->
+            // save_clip amix; see segment_recorder), but stays opt-in by
+            // default: voice capture is privacy-sensitive, so the user must
+            // explicitly enable it in the audio settings.
+            record_microphone: false,
             microphone_device: None, // 기본 장치
             microphone_volume: 120,  // 120%
 
@@ -514,6 +613,7 @@ impl AudioSettings {
                 AudioBitrate::Kbps256 => 256,
                 AudioBitrate::Kbps320 => 320,
             },
+            audio_device_id: self.audio_device_id.clone(),
         }
     }
 }
@@ -638,10 +738,14 @@ mod tests {
         // Video defaults
         assert!(matches!(settings.video.resolution, Resolution::R1920x1080));
         assert!(matches!(settings.video.frame_rate, FrameRate::Fps60));
-        assert!(matches!(settings.video.codec, VideoCodec::H265));
+        // H.264 by default so the editor preview can actually decode the clip;
+        // see `highlight_preset_tests::default_codec_is_h264_...`.
+        assert!(matches!(settings.video.codec, VideoCodec::H264));
 
-        // Audio defaults
-        assert!(settings.audio.record_microphone);
+        // Audio defaults: microphone capture defaults to off (it isn't
+        // wired into the actual recording pipeline yet -- see
+        // `AudioSettings::default()`'s doc comment).
+        assert!(!settings.audio.record_microphone);
         assert_eq!(settings.audio.microphone_volume, 120);
         assert_eq!(settings.audio.system_audio_volume, 100);
 
@@ -689,52 +793,66 @@ mod tests {
 
     #[test]
     fn test_video_settings_custom_bitrate_valid() {
-        let mut s = VideoSettings::default();
-        s.bitrate_preset = BitratePreset::Custom(5000);
+        let s = VideoSettings {
+            bitrate_preset: BitratePreset::Custom(5000),
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
     }
 
     #[test]
     fn test_video_settings_custom_bitrate_too_low() {
-        let mut s = VideoSettings::default();
-        s.bitrate_preset = BitratePreset::Custom(50);
+        let s = VideoSettings {
+            bitrate_preset: BitratePreset::Custom(50),
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
     }
 
     #[test]
     fn test_video_settings_custom_bitrate_too_high() {
-        let mut s = VideoSettings::default();
-        s.bitrate_preset = BitratePreset::Custom(60000);
+        let s = VideoSettings {
+            bitrate_preset: BitratePreset::Custom(60000),
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
     }
 
     #[test]
     fn test_audio_volume_max_valid() {
-        let mut s = AudioSettings::default();
-        s.microphone_volume = 200;
-        s.system_audio_volume = 200;
+        let s = AudioSettings {
+            microphone_volume: 200,
+            system_audio_volume: 200,
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
     }
 
     #[test]
     fn test_storage_settings_valid() {
-        let mut s = StorageSettings::default();
-        s.auto_delete_days = 30;
-        s.max_storage_gb = 100;
+        let s = StorageSettings {
+            auto_delete_days: 30,
+            max_storage_gb: 100,
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
     }
 
     #[test]
     fn test_storage_auto_delete_days_zero_invalid() {
-        let mut s = StorageSettings::default();
-        s.auto_delete_days = 0;
+        let s = StorageSettings {
+            auto_delete_days: 0,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
     }
 
     #[test]
     fn test_event_min_priority_out_of_range() {
-        let mut s = EventFilterSettings::default();
-        s.min_priority = 10;
+        let s = EventFilterSettings {
+            min_priority: 10,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
     }
 
@@ -756,8 +874,10 @@ mod tests {
 
     #[test]
     fn test_video_settings_custom_bitrate_boundary_low() {
-        let mut s = VideoSettings::default();
-        s.bitrate_preset = BitratePreset::Custom(100);
+        let mut s = VideoSettings {
+            bitrate_preset: BitratePreset::Custom(100),
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
         s.bitrate_preset = BitratePreset::Custom(99);
         assert!(s.validate().is_err());
@@ -765,8 +885,10 @@ mod tests {
 
     #[test]
     fn test_video_settings_custom_bitrate_boundary_high() {
-        let mut s = VideoSettings::default();
-        s.bitrate_preset = BitratePreset::Custom(50_000);
+        let mut s = VideoSettings {
+            bitrate_preset: BitratePreset::Custom(50_000),
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
         s.bitrate_preset = BitratePreset::Custom(50_001);
         assert!(s.validate().is_err());
@@ -774,8 +896,10 @@ mod tests {
 
     #[test]
     fn test_video_settings_get_resolution() {
-        let mut s = VideoSettings::default();
-        s.resolution = Resolution::R1920x1080;
+        let mut s = VideoSettings {
+            resolution: Resolution::R1920x1080,
+            ..Default::default()
+        };
         assert_eq!(s.get_resolution(), (1920, 1080));
         s.resolution = Resolution::R2560x1440;
         assert_eq!(s.get_resolution(), (2560, 1440));
@@ -785,8 +909,10 @@ mod tests {
 
     #[test]
     fn test_video_settings_get_fps() {
-        let mut s = VideoSettings::default();
-        s.frame_rate = FrameRate::Fps30;
+        let mut s = VideoSettings {
+            frame_rate: FrameRate::Fps30,
+            ..Default::default()
+        };
         assert_eq!(s.get_fps(), 30);
         s.frame_rate = FrameRate::Fps60;
         assert_eq!(s.get_fps(), 60);
@@ -801,19 +927,25 @@ mod tests {
         let s = VideoSettings::default(); // Medium = 20 Mbps
         assert_eq!(s.get_bitrate(), 20_000_000);
 
-        let mut s2 = VideoSettings::default();
-        s2.bitrate_preset = BitratePreset::Low;
+        let s2 = VideoSettings {
+            bitrate_preset: BitratePreset::Low,
+            ..Default::default()
+        };
         assert_eq!(s2.get_bitrate(), 10_000_000);
 
-        let mut s3 = VideoSettings::default();
-        s3.bitrate_preset = BitratePreset::Custom(1000);
+        let s3 = VideoSettings {
+            bitrate_preset: BitratePreset::Custom(1000),
+            ..Default::default()
+        };
         assert_eq!(s3.get_bitrate(), 1_000_000); // 1000 kbps = 1Mbps
     }
 
     #[test]
     fn test_video_is_h265() {
-        let mut s = VideoSettings::default();
-        s.codec = VideoCodec::H265;
+        let mut s = VideoSettings {
+            codec: VideoCodec::H265,
+            ..Default::default()
+        };
         assert!(s.is_h265());
         s.codec = VideoCodec::H264;
         assert!(!s.is_h265());
@@ -823,8 +955,10 @@ mod tests {
 
     #[test]
     fn test_audio_microphone_volume_too_high() {
-        let mut s = AudioSettings::default();
-        s.microphone_volume = 201;
+        let s = AudioSettings {
+            microphone_volume: 201,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
         let err = s.validate().unwrap_err();
         assert!(err.contains("Microphone volume"));
@@ -832,8 +966,10 @@ mod tests {
 
     #[test]
     fn test_audio_system_volume_too_high() {
-        let mut s = AudioSettings::default();
-        s.system_audio_volume = 201;
+        let s = AudioSettings {
+            system_audio_volume: 201,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
         let err = s.validate().unwrap_err();
         assert!(err.contains("System audio volume"));
@@ -841,18 +977,48 @@ mod tests {
 
     #[test]
     fn test_audio_both_volumes_at_zero_valid() {
-        let mut s = AudioSettings::default();
-        s.microphone_volume = 0;
-        s.system_audio_volume = 0;
+        let s = AudioSettings {
+            microphone_volume: 0,
+            system_audio_volume: 0,
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn test_to_audio_config_carries_audio_device_id() {
+        // audio_device_id must reach recording::audio::AudioConfig so the
+        // WASAPI capture backend can honor an explicit device selection
+        // instead of always falling back to the OS default output device.
+        let s = AudioSettings {
+            audio_device_id: Some("Speakers (Realtek)".to_string()),
+            system_audio_device: Some("Stereo Mix".to_string()),
+            ..Default::default()
+        };
+        let config = s.to_audio_config();
+        assert_eq!(
+            config.audio_device_id,
+            Some("Speakers (Realtek)".to_string())
+        );
+        // system_audio_device still passes through independently (used as
+        // the DirectShow fallback / secondary WASAPI hint).
+        assert_eq!(config.system_audio_device, Some("Stereo Mix".to_string()));
+    }
+
+    #[test]
+    fn test_to_audio_config_audio_device_id_defaults_to_none() {
+        let s = AudioSettings::default();
+        assert_eq!(s.to_audio_config().audio_device_id, None);
     }
 
     // ---- StorageSettings validate() error paths ----
 
     #[test]
     fn test_storage_auto_delete_days_too_high() {
-        let mut s = StorageSettings::default();
-        s.auto_delete_days = 366;
+        let s = StorageSettings {
+            auto_delete_days: 366,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
         let err = s.validate().unwrap_err();
         assert!(err.contains("auto_delete_days"));
@@ -860,23 +1026,29 @@ mod tests {
 
     #[test]
     fn test_storage_max_storage_gb_zero_invalid() {
-        let mut s = StorageSettings::default();
-        s.max_storage_gb = 0;
+        let s = StorageSettings {
+            max_storage_gb: 0,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
     }
 
     #[test]
     fn test_storage_max_storage_gb_too_high() {
-        let mut s = StorageSettings::default();
-        s.max_storage_gb = 10_001;
+        let s = StorageSettings {
+            max_storage_gb: 10_001,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
     }
 
     #[test]
     fn test_storage_boundary_values_valid() {
-        let mut s = StorageSettings::default();
-        s.auto_delete_days = 1;
-        s.max_storage_gb = 1;
+        let mut s = StorageSettings {
+            auto_delete_days: 1,
+            max_storage_gb: 1,
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
         s.auto_delete_days = 365;
         s.max_storage_gb = 10_000;
@@ -887,15 +1059,19 @@ mod tests {
 
     #[test]
     fn test_event_min_priority_zero_invalid() {
-        let mut s = EventFilterSettings::default();
-        s.min_priority = 0;
+        let s = EventFilterSettings {
+            min_priority: 0,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
     }
 
     #[test]
     fn test_event_min_priority_boundary_valid() {
-        let mut s = EventFilterSettings::default();
-        s.min_priority = 1;
+        let mut s = EventFilterSettings {
+            min_priority: 1,
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
         s.min_priority = 5;
         assert!(s.validate().is_ok());
@@ -903,8 +1079,10 @@ mod tests {
 
     #[test]
     fn test_contest_window_secs_too_low() {
-        let mut s = EventFilterSettings::default();
-        s.contest_window_secs = 4;
+        let s = EventFilterSettings {
+            contest_window_secs: 4,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
         let err = s.validate().unwrap_err();
         assert!(err.contains("contest_window_secs"));
@@ -912,15 +1090,19 @@ mod tests {
 
     #[test]
     fn test_contest_window_secs_too_high() {
-        let mut s = EventFilterSettings::default();
-        s.contest_window_secs = 31;
+        let s = EventFilterSettings {
+            contest_window_secs: 31,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
     }
 
     #[test]
     fn test_contest_window_secs_boundary_valid() {
-        let mut s = EventFilterSettings::default();
-        s.contest_window_secs = 5;
+        let mut s = EventFilterSettings {
+            contest_window_secs: 5,
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
         s.contest_window_secs = 30;
         assert!(s.validate().is_ok());
@@ -928,8 +1110,10 @@ mod tests {
 
     #[test]
     fn test_min_game_duration_secs_too_high() {
-        let mut s = EventFilterSettings::default();
-        s.min_game_duration_secs = 3601;
+        let s = EventFilterSettings {
+            min_game_duration_secs: 3601,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
         let err = s.validate().unwrap_err();
         assert!(err.contains("min_game_duration_secs"));
@@ -937,15 +1121,19 @@ mod tests {
 
     #[test]
     fn test_min_game_duration_secs_zero_valid() {
-        let mut s = EventFilterSettings::default();
-        s.min_game_duration_secs = 0;
+        let s = EventFilterSettings {
+            min_game_duration_secs: 0,
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
     }
 
     #[test]
     fn test_min_game_duration_secs_max_valid() {
-        let mut s = EventFilterSettings::default();
-        s.min_game_duration_secs = 3600;
+        let s = EventFilterSettings {
+            min_game_duration_secs: 3600,
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
     }
 
@@ -953,9 +1141,11 @@ mod tests {
 
     #[test]
     fn test_event_filter_serialization_round_trip_with_new_fields() {
-        let mut s = EventFilterSettings::default();
-        s.min_game_duration_secs = 600;
-        s.contest_window_secs = 15;
+        let s = EventFilterSettings {
+            min_game_duration_secs: 600,
+            contest_window_secs: 15,
+            ..Default::default()
+        };
         let json = serde_json::to_string(&s).unwrap();
         let deserialized: EventFilterSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.min_game_duration_secs, 600);
@@ -1035,5 +1225,120 @@ mod tests {
         let mut s = RecordingSettings::default();
         s.event_filter.contest_window_secs = 0;
         assert!(s.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod highlight_preset_tests {
+    use super::{EventFilterSettings, HighlightPreset, VideoCodec, VideoSettings};
+
+    #[test]
+    fn default_preset_is_balanced() {
+        assert_eq!(HighlightPreset::default(), HighlightPreset::Balanced);
+    }
+
+    #[test]
+    fn balanced_records_assists() {
+        // The field test lost every one of 13 assists because this was off and
+        // nothing said so. Balanced is the default, so this is the guarantee that
+        // an untouched install captures the player's own plays.
+        let f = HighlightPreset::Balanced.to_filters().unwrap();
+        assert!(f.record_assists, "assists must be on in the default preset");
+        assert!(f.record_kills);
+        assert!(f.record_multikills);
+    }
+
+    #[test]
+    fn balanced_leaves_deaths_out_but_everything_includes_them() {
+        assert!(
+            !HighlightPreset::Balanced
+                .to_filters()
+                .unwrap()
+                .record_deaths
+        );
+        assert!(
+            HighlightPreset::Everything
+                .to_filters()
+                .unwrap()
+                .record_deaths
+        );
+    }
+
+    #[test]
+    fn best_only_raises_the_priority_floor() {
+        let f = HighlightPreset::BestOnly.to_filters().unwrap();
+        assert!(f.min_priority >= 3);
+        assert!(!f.record_kills, "a plain kill is not a 'best' moment");
+        assert!(f.record_multikills);
+    }
+
+    #[test]
+    fn custom_defines_no_filter_set() {
+        assert!(HighlightPreset::Custom.to_filters().is_none());
+    }
+
+    #[test]
+    fn every_preset_round_trips_through_from_filters() {
+        for preset in [
+            HighlightPreset::Everything,
+            HighlightPreset::Balanced,
+            HighlightPreset::BestOnly,
+        ] {
+            let filters = preset.to_filters().expect("preset defines filters");
+            assert_eq!(
+                HighlightPreset::from_filters(&filters),
+                preset,
+                "{preset:?} must be recognised from its own filter set"
+            );
+        }
+    }
+
+    #[test]
+    fn hand_edited_toggles_read_back_as_custom() {
+        let mut f = HighlightPreset::Balanced.to_filters().unwrap();
+        f.record_turret = !f.record_turret;
+        assert_eq!(HighlightPreset::from_filters(&f), HighlightPreset::Custom);
+    }
+
+    #[test]
+    fn default_codec_is_h264_so_the_editor_preview_can_play_it() {
+        // H.265 clips render as a black frame in the WebView2 <video> element
+        // unless the OS has HEVC extensions installed, with no error surfaced.
+        assert_eq!(VideoSettings::default().codec, VideoCodec::H264);
+    }
+
+    #[test]
+    fn presets_are_distinct_from_each_other() {
+        let a = HighlightPreset::Everything.to_filters().unwrap();
+        let b = HighlightPreset::Balanced.to_filters().unwrap();
+        let c = HighlightPreset::BestOnly.to_filters().unwrap();
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn stock_defaults_are_exactly_the_default_preset() {
+        // A fresh install must be describable by the preset the settings screen
+        // marks as default. While `record_assists` differed, the stock filter set
+        // matched NO preset, so `from_filters` returned `Custom` and the basic
+        // settings screen opened with a "직접 설정" badge and no card selected --
+        // the app could not describe its own out-of-the-box state. Confirmed by
+        // rendering the real screen, not by reading code.
+        let stock = EventFilterSettings::default();
+        let default_preset = HighlightPreset::default().to_filters().unwrap();
+        assert_eq!(stock, default_preset);
+        assert_eq!(
+            HighlightPreset::from_filters(&stock),
+            HighlightPreset::default(),
+            "새 설치의 필터 조합은 기본 프리셋으로 되읽혀야 한다"
+        );
+    }
+
+    #[test]
+    fn default_preset_records_assists() {
+        // The field test that motivated `Balanced` found assist plays to be
+        // usable highlight material; the stock default follows it.
+        assert!(EventFilterSettings::default().record_assists);
     }
 }

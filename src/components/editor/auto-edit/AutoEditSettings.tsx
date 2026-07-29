@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
   Video,
   Clock,
@@ -21,6 +22,7 @@ import {
   Type,
   AlignLeft,
   Tag,
+  ZoomIn,
 } from 'lucide-react';
 import { DurationOption, GameSelection, CanvasTemplate, AudioLevels, BackgroundMusic, AutoEditMetadata } from '@/types/autoEdit';
 
@@ -28,6 +30,7 @@ interface AutoEditSettingsProps {
   availableGames: GameSelection[];
   selectedGameIds: string[];
   targetDuration: DurationOption;
+  enableEventZoom: boolean;
   currentTemplate: CanvasTemplate | null;
   backgroundMusic: BackgroundMusic | null;
   audioLevels: AudioLevels;
@@ -37,6 +40,7 @@ interface AutoEditSettingsProps {
   isFreeTier: boolean;
   onToggleGame: (gameId: string) => void;
   onSetDuration: (duration: DurationOption) => void;
+  onToggleEventZoom: (enabled: boolean) => void;
   onTemplateChange: (template: CanvasTemplate) => void;
   onBackgroundMusicChange: (music: BackgroundMusic | null) => void;
   onAudioLevelsChange: (levels: Partial<AudioLevels>) => void;
@@ -48,6 +52,7 @@ export function AutoEditSettings({
   availableGames,
   selectedGameIds,
   targetDuration,
+  enableEventZoom,
   currentTemplate,
   backgroundMusic,
   audioLevels,
@@ -57,6 +62,7 @@ export function AutoEditSettings({
   isFreeTier,
   onToggleGame,
   onSetDuration,
+  onToggleEventZoom,
   onTemplateChange,
   onBackgroundMusicChange,
   onAudioLevelsChange,
@@ -221,6 +227,32 @@ export function AutoEditSettings({
               </div>
             </div>
           ))}
+        </div>
+
+        {/* Experimental: event zoom */}
+        <div className="mt-4 flex items-center justify-between p-3 bg-black/40 rounded-lg border border-white/5">
+          <div className="flex items-start gap-2">
+            <ZoomIn className="w-4 h-4 mt-0.5 text-muted-foreground" />
+            <div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="enable-event-zoom" className="text-sm font-medium cursor-pointer">
+                  {t('autoEdit.eventZoom.label', 'Auto zoom on kill events')}
+                </Label>
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                  {t('autoEdit.eventZoom.experimental', 'Experimental')}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {t('autoEdit.eventZoom.description', 'Automatically zooms in at kill/event timestamps.')}
+              </p>
+            </div>
+          </div>
+          <Switch
+            id="enable-event-zoom"
+            checked={enableEventZoom}
+            onCheckedChange={onToggleEventZoom}
+            data-testid="enable-event-zoom-toggle"
+          />
         </div>
       </div>
 

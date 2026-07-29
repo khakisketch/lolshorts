@@ -23,6 +23,7 @@ export function useYouTube() {
   const [uploadHistory, setUploadHistory] = useState<UploadHistoryEntry[]>([]);
   const [uploadQueue, setUploadQueue] = useState<ScheduledUpload[]>([]);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [authEventError, setAuthEventError] = useState<string | null>(null);
 
   const pollingInterval = useRef<NodeJS.Timeout | null>(null);
 
@@ -74,6 +75,8 @@ export function useYouTube() {
   useEffect(() => {
     let unlistenCompleted: (() => void) | null = null;
     let unlistenFailed: (() => void) | null = null;
+    let unlistenAuthCompleted: (() => void) | null = null;
+    let unlistenAuthFailed: (() => void) | null = null;
 
     const setupListeners = async () => {
       unlistenCompleted = await listenToEvent<unknown>('scheduled-upload-completed', async () => {
@@ -86,6 +89,15 @@ export function useYouTube() {
         await loadHistory();
         await getQuotaInfo();
       });
+      // youtube_start_auth_with_server's background OAuth callback task emits
+      // these once the browser flow finishes (no payload on success).
+      unlistenAuthCompleted = await listenToEvent<unknown>('youtube-auth-completed', async () => {
+        setAuthEventError(null);
+        await checkAuthStatus();
+      });
+      unlistenAuthFailed = await listenToEvent<{ error: string }>('youtube-auth-failed', (payload) => {
+        setAuthEventError(payload?.error || 'YouTube authentication failed.');
+      });
     };
 
     setupListeners();
@@ -93,8 +105,10 @@ export function useYouTube() {
     return () => {
       if (unlistenCompleted) unlistenCompleted();
       if (unlistenFailed) unlistenFailed();
+      if (unlistenAuthCompleted) unlistenAuthCompleted();
+      if (unlistenAuthFailed) unlistenAuthFailed();
     };
-  }, [loadQueue, loadHistory, getQuotaInfo]);
+  }, [loadQueue, loadHistory, getQuotaInfo, checkAuthStatus]);
 
   const startAuthWithServer = useCallback(async () => {
 
@@ -235,6 +249,9 @@ export function useYouTube() {
     getUploadHistory,
     loadQueue,
     startProgressPolling,
-    stopProgressPolling
+    stopProgressPolling,
+    /** Error from the 'youtube-auth-failed' background event, if any. */
+    authEventError,
+    clearAuthEventError: () => setAuthEventError(null),
   };
 }

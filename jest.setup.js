@@ -102,7 +102,14 @@ process.env = {
 // Mock react-i18next to prevent initialization warnings
 jest.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key) => key,
+    // Mirror i18next's `defaultValue` handling. Returning the key unconditionally
+    // made every `t(key, { defaultValue })` call site render the key in tests while
+    // the real app renders the fallback — a green test proving the opposite of what
+    // the user sees.
+    t: (key, opts) =>
+      opts && Object.prototype.hasOwnProperty.call(opts, 'defaultValue')
+        ? opts.defaultValue
+        : key,
     i18n: {
       language: 'en',
       changeLanguage: jest.fn(),

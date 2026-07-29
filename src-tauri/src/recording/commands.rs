@@ -4,7 +4,7 @@ use crate::auth::middleware::require_auth;
 use crate::error::{AppError, AppResult};
 use crate::lcu::PlayerInfo;
 use crate::recording::live_client::check_live_client_basic;
-use crate::utils::ffmpeg::get_ffmpeg_path;
+use crate::utils::ffmpeg::{get_ffmpeg_path, get_ffprobe_path};
 use crate::utils::process::{command_output_with_timeout, command_status_success_with_timeout};
 use crate::utils::security;
 use crate::AppState;
@@ -48,6 +48,28 @@ pub struct ReplayTargetCandidates {
 
 const MIN_RECORDING_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const RECORDING_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Show the overlay window when a recording actually starts, if the user has it
+/// enabled (B4 fix). Previously `overlay::show_overlay` was only called from the
+/// auto-detect `game_start_callback` in main.rs, so the F8 hotkey and the
+/// `start_recording`/`start_auto_capture` commands emitted `recording-status` to
+/// a webview nobody was showing. Settings are re-read on every call (rather than
+/// cached at startup) so a toggle in Settings takes effect on the very next
+/// recording without an app restart.
+async fn apply_overlay_for_recording_start(app_handle: &tauri::AppHandle, state: &AppState) {
+    let overlay_enabled = state.recording_settings.read().await.overlay_enabled;
+    if overlay_enabled {
+        crate::overlay::show_overlay(app_handle);
+    }
+}
+
+/// Hide the overlay window when a recording actually stops (symmetric counterpart
+/// to `apply_overlay_for_recording_start`, B4 fix). Unconditional like
+/// `game_end_callback`'s existing hide call — `hide_overlay` no-ops harmlessly if
+/// the window was never shown.
+fn apply_overlay_for_recording_stop(app_handle: &tauri::AppHandle) {
+    crate::overlay::hide_overlay(app_handle);
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -460,32 +482,6 @@ fn validate_replay_target_selection(
     }
 }
 
-fn find_ffprobe_for_ffmpeg(ffmpeg_path: &Path) -> bool {
-    let ffprobe_name = if cfg!(target_os = "windows") {
-        "ffprobe.exe"
-    } else {
-        "ffprobe"
-    };
-
-    if ffmpeg_path
-        .parent()
-        .map(|parent| parent.join(ffprobe_name).exists())
-        .unwrap_or(false)
-    {
-        return true;
-    }
-
-    let path_cmd = if cfg!(target_os = "windows") {
-        "where"
-    } else {
-        "which"
-    };
-    let mut command = std::process::Command::new(path_cmd);
-    command.arg("ffprobe");
-    command_status_success_with_timeout(command, RECORDING_PROBE_TIMEOUT, "ffprobe PATH lookup")
-        .unwrap_or(false)
-}
-
 fn ffmpeg_encoder_available(ffmpeg_path: &Path, encoder_name: &str) -> Option<bool> {
     let mut command = std::process::Command::new(ffmpeg_path);
     command.args(["-hide_banner", "-encoders"]);
@@ -519,10 +515,7 @@ pub(crate) async fn collect_recording_readiness(state: &AppState) -> RecordingRe
     let ffmpeg_lookup = get_ffmpeg_path();
     let ffmpeg_path = ffmpeg_lookup.as_ref().ok().cloned();
     let ffmpeg_error = ffmpeg_lookup.err().map(|error| error.to_string());
-    let ffprobe_available = ffmpeg_path
-        .as_deref()
-        .map(find_ffprobe_for_ffmpeg)
-        .unwrap_or(false);
+    let ffprobe_available = get_ffprobe_path().is_ok();
     let encoder_name = config
         .encoder
         .to_ffmpeg_name_with_hw(config.hw_accel)
@@ -655,6 +648,9 @@ pub async fn get_unified_game_status(state: State<'_, AppState>) -> AppResult<Un
         super::RecordingStatus::Recording | super::RecordingStatus::Buffering
     );
 
+    // Expose the real per-session clip count for the game-end notification.
+    status.session_clip_count = state.clip_manager.saved_clip_count();
+
     Ok(status)
 }
 
@@ -765,6 +761,16 @@ pub async fn start_recording(
         .await
         .map_err(|e| AppError::Recording(e.to_string()))?;
 
+    {
+        use tauri::Emitter;
+        if let Err(e) =
+            app_handle.emit("recording-status", serde_json::json!({ "recording": true }))
+        {
+            tracing::warn!("Failed to emit recording-status event: {}", e);
+        }
+    }
+    apply_overlay_for_recording_start(&app_handle, &state).await;
+
     let output_dir = state
         .recording_manager
         .read()
@@ -777,7 +783,12 @@ pub async fn start_recording(
 }
 
 #[tauri::command]
-pub async fn stop_recording(state: State<'_, AppState>) -> AppResult<()> {
+pub async fn stop_recording(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    use tauri::Emitter;
+
     let current_status = state.recording_manager.read().await.get_status().await;
     if matches!(current_status, RecordingStatus::Idle) {
         tracing::warn!(
@@ -785,18 +796,45 @@ pub async fn stop_recording(state: State<'_, AppState>) -> AppResult<()> {
             current_status
         );
         stop_recording_disk_monitor(&state).await;
+        if let Err(e) = app_handle.emit(
+            "recording-status",
+            serde_json::json!({ "recording": false }),
+        ) {
+            tracing::warn!("Failed to emit recording-status event: {}", e);
+        }
+        apply_overlay_for_recording_stop(&app_handle);
         return Ok(());
     }
-    let stop_result = state
-        .recording_manager
-        .write()
-        .await
-        .stop_recording()
-        .await
-        .map(|_| ())
-        .map_err(|e| AppError::Recording(e.to_string()));
+    let stop_call_result = state.recording_manager.write().await.stop_recording().await;
     stop_recording_disk_monitor(&state).await;
-    stop_result
+
+    // B6 fix: `stop_recording()` failing does not guarantee the recorder actually
+    // stopped (e.g. the FFmpeg child ignored the stop signal within its internal
+    // timeout). Previously this unconditionally emitted `recording: false`, which
+    // could turn off the overlay's REC indicator while capture was still running.
+    // Re-query the real status on failure instead of assuming success.
+    let still_recording = if stop_call_result.is_err() {
+        matches!(
+            state.recording_manager.read().await.get_status().await,
+            RecordingStatus::Recording | RecordingStatus::Buffering
+        )
+    } else {
+        false
+    };
+
+    if let Err(e) = app_handle.emit(
+        "recording-status",
+        serde_json::json!({ "recording": still_recording }),
+    ) {
+        tracing::warn!("Failed to emit recording-status event: {}", e);
+    }
+    if !still_recording {
+        apply_overlay_for_recording_stop(&app_handle);
+    }
+
+    stop_call_result
+        .map(|_| ())
+        .map_err(|e| AppError::Recording(e.to_string()))
 }
 
 #[tauri::command]
@@ -827,19 +865,22 @@ pub async fn start_auto_capture(
         )));
     }
 
-    state
-        .recording_manager
-        .write()
-        .await
-        .start_recording()
-        .await
-        .map_err(|e| AppError::Recording(e.to_string()))?;
-
-    state
-        .clip_manager
-        .start_event_monitoring()
-        .await
-        .map_err(|e| AppError::Recording(e.to_string()))?;
+    // Delegate the begin → start recording → start event monitoring sequence
+    // (with rollback) to the single shared pipeline. Manual mode owns event
+    // monitoring here.
+    let session_context = super::game_lifecycle::GameSessionContext::from_live_client(
+        check_live_client_basic().await,
+    );
+    super::game_lifecycle::start_capture_pipeline(
+        state.storage.as_ref(),
+        &state.recording_manager,
+        &state.clip_manager,
+        session_context,
+        super::game_lifecycle::CaptureStartMode::Manual,
+    )
+    .await
+    .map_err(AppError::Recording)?;
+    apply_overlay_for_recording_start(&app_handle, &state).await;
 
     let output_dir = state
         .recording_manager
@@ -853,24 +894,65 @@ pub async fn start_auto_capture(
 }
 
 #[tauri::command]
-pub async fn stop_auto_capture(state: State<'_, AppState>) -> AppResult<()> {
-    let clip_stop_result = state
-        .clip_manager
-        .stop_event_monitoring()
-        .await
-        .map_err(|e| AppError::Recording(e.to_string()));
-
-    let recording_stop_result = state
-        .recording_manager
-        .write()
-        .await
-        .stop_recording()
-        .await
-        .map_err(|e| AppError::Recording(e.to_string()));
+pub async fn stop_auto_capture(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    // Delegate the stop_event_monitoring (flush) → stop_recording → finalize
+    // sequence to the single shared pipeline, which pins the load-bearing order.
+    let outcome = super::game_lifecycle::stop_capture_pipeline(
+        state.storage.as_ref(),
+        &state.recording_manager,
+        &state.clip_manager,
+    )
+    .await;
 
     stop_recording_disk_monitor(&state).await;
-    clip_stop_result?;
-    recording_stop_result.map(|_| ())
+    // B4 fix: hide the overlay symmetrically with the manual-start show above.
+    // Unconditional (mirrors `game_end_callback`'s hide in main.rs) rather than
+    // gated on outcome success, since a partially-failed stop still means capture
+    // is no longer the manual-capture session the overlay was showing for.
+    apply_overlay_for_recording_stop(&app_handle);
+
+    // Preserve the original propagation order: event-monitoring stop first, then
+    // recording stop, then finalize.
+    outcome.event_monitoring.map_err(AppError::Recording)?;
+    outcome.recording_stopped.map_err(AppError::Recording)?;
+    outcome.finalized.map_err(AppError::Recording).map(|_| ())
+}
+
+/// List system audio output (render) devices available for WASAPI loopback
+/// capture (contract 2). Returns cpal output-device names.
+///
+/// Follows the same access policy as `list_audio_devices` — no `require_auth`, so
+/// the settings UI can populate the device dropdown before sign-in. On non-Windows
+/// platforms WASAPI loopback does not apply, so an empty list is returned.
+#[tauri::command]
+pub async fn list_system_audio_devices() -> AppResult<Vec<String>> {
+    #[cfg(target_os = "windows")]
+    {
+        Ok(crate::recording::wasapi_audio::enumerate_system_audio_devices())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+/// List microphone input (capture) devices (contract 2 sibling). Returns cpal
+/// input-device names. Same access policy as `list_system_audio_devices`.
+#[tauri::command]
+pub async fn list_microphone_devices() -> AppResult<Vec<String>> {
+    #[cfg(target_os = "windows")]
+    {
+        Ok(crate::recording::wasapi_audio::enumerate_microphone_devices())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(Vec::new())
+    }
 }
 
 #[tauri::command]
@@ -894,19 +976,137 @@ pub async fn save_replay(state: State<'_, AppState>, duration_secs: u32) -> AppR
     }
 
     // Actually save the last N seconds from the replay buffer
-    let recorder = state.recording_manager.read().await;
-
-    let clip_path = recorder
-        .save_last_seconds(duration_secs)
-        .await
-        .map_err(|e| AppError::Recording(format!("Failed to save replay: {}", e)))?;
+    // `actual_duration` is measured from the produced file — the buffer can hold
+    // less than requested, and storing the request value would misreport the clip.
+    let (clip_path, actual_duration) = {
+        let recorder = state.recording_manager.read().await;
+        recorder
+            .save_last_seconds(duration_secs as u64)
+            .await
+            .map_err(|e| AppError::Recording(format!("Failed to save replay: {}", e)))?
+    };
 
     tracing::info!(
         "Replay saved: {} ({} seconds)",
         clip_path.display(),
         duration_secs
     );
+
+    // FIX: persist ClipMetadata so manual replays enter the library / editor /
+    // auto-edit / upload pipeline instead of becoming orphan files on disk.
+    // Attach to the active auto-capture session when one exists; otherwise use a
+    // per-day manual bucket so the clip is still discoverable.
+    if let Err(e) = persist_manual_replay_metadata(
+        state.storage.as_ref(),
+        state.clip_manager.as_ref(),
+        &clip_path,
+        actual_duration,
+    )
+    .await
+    {
+        tracing::warn!("Failed to persist manual replay metadata: {}", e);
+    }
+
     Ok(clip_path)
+}
+
+/// Persist metadata for a manually captured replay clip so it is discoverable by
+/// the rest of the app (library / editor / auto-edit / upload).
+///
+/// Takes `storage`/`clip_manager` directly (rather than a full
+/// `State<'_, AppState>`) so it can also be called from non-command call
+/// sites that don't have a `State` extractor available -- e.g. a global
+/// hotkey handler wired up in `main.rs`, which only has an `AppHandle` and
+/// pulls individual managed pieces out of it.
+pub async fn persist_manual_replay_metadata(
+    storage: &crate::storage::Storage,
+    clip_manager: &crate::recording::auto_clip_manager::AutoClipManager,
+    clip_path: &Path,
+    // Measured length of the produced clip, not the requested one: the rolling
+    // buffer may hold less than was asked for, and recording the request value
+    // would make auto-edit plan around footage that does not exist.
+    measured_duration_secs: f64,
+) -> Result<(), String> {
+    use crate::storage::models::{ClipMetadata, EventType};
+
+    let game_id = match clip_manager.current_game_id().await {
+        Some(id) => id,
+        None => {
+            // No active auto-capture session — use/create a per-day manual bucket.
+            let manual_id = format!("manual_{}", chrono::Utc::now().format("%Y%m%d"));
+            if storage.load_game_metadata(&manual_id).is_err() {
+                let metadata = crate::storage::GameMetadata {
+                    game_id: manual_id.clone(),
+                    champion: "Manual".to_string(),
+                    game_mode: "MANUAL".to_string(),
+                    start_time: chrono::Utc::now(),
+                    end_time: None,
+                    result: None,
+                    kda: None,
+                };
+                storage
+                    .create_game(&manual_id, &metadata)
+                    .map_err(|e| format!("Failed to create manual game bucket: {}", e))?;
+            }
+            manual_id
+        }
+    };
+
+    let clip_id = format!("manual_{}", chrono::Utc::now().timestamp_millis());
+    let clip_meta = ClipMetadata {
+        file_path: clip_path.to_string_lossy().to_string(),
+        thumbnail_path: None,
+        event_type: EventType::Custom("ManualReplay".to_string()),
+        event_time: 0.0,
+        priority: 3,
+        duration: measured_duration_secs,
+        created_at: chrono::Utc::now(),
+        usage_count: 0,
+    };
+
+    // B5 fix: this used to call `storage.save_clip_metadata` directly, bypassing
+    // every emit in `AutoClipManager::save_clip_metadata` — so `save_replay`
+    // (and the F8/F9 hotkeys, both of which route through this function) never
+    // produced a `clip-saved`/`clip-save-failed` toast. Emit the same events here
+    // via `clip_manager.emit_event` (`pub(crate)`, meant for exactly this kind of
+    // reuse) with the same payload shape as the auto-capture path, and count the
+    // clip through `record_externally_saved_clip` so the end-of-game notification
+    // stops under-reporting manual saves.
+    if let Err(e) = storage.save_clip_metadata(&game_id, &clip_meta) {
+        let reason = format!("Failed to save manual replay metadata: {}", e);
+        clip_manager
+            .emit_event(
+                "clip-save-failed",
+                serde_json::json!({
+                    "event_name": "ManualReplay",
+                    "reason": reason.clone(),
+                }),
+            )
+            .await;
+        return Err(reason);
+    }
+
+    tracing::info!("Manual replay metadata saved under game {}", game_id);
+
+    clip_manager.record_externally_saved_clip();
+
+    clip_manager
+        .emit_event(
+            "clip-saved",
+            serde_json::json!({
+                "clip_id": clip_id,
+                "game_id": game_id,
+                "event_type": "ManualReplay",
+                "event_time": clip_meta.event_time,
+                "priority": clip_meta.priority,
+                "duration": clip_meta.duration,
+                "file_path": clip_meta.file_path,
+                "created_at": clip_meta.created_at,
+            }),
+        )
+        .await;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -988,8 +1188,10 @@ pub async fn list_audio_devices() -> AppResult<Vec<crate::recording::audio::Audi
 
     #[cfg(not(target_os = "macos"))]
     {
-        // Use Windows audio enumeration with fallbacks
-        match list_audio_devices() {
+        // `list_audio_devices()` now refreshes the cache itself (via
+        // `AudioDeviceManager::refresh_if_needed`) before returning, so a
+        // cold cache no longer silently reports an empty device list here.
+        match list_audio_devices().await {
             Ok(devices) => Ok(devices),
             Err(e) => {
                 // If primary enumeration fails, try FFmpeg fallback
@@ -1063,7 +1265,8 @@ pub async fn get_detailed_recording_status(
     let manager = state.recording_manager.read().await;
     let status = manager.get_status().await;
 
-    let is_monitoring = state.clip_manager.is_monitoring().await;
+    let is_monitoring =
+        state.clip_manager.is_monitoring().await || manager.get_current_game().await.is_some();
     let buffer_duration = manager.get_config().buffer_duration_secs as u32;
 
     let status_str = match status {
@@ -1079,6 +1282,29 @@ pub async fn get_detailed_recording_status(
         is_monitoring,
         buffer_duration_secs: buffer_duration,
     })
+}
+
+/// Label the *actual* capture resolution for `get_recording_quality_info`.
+///
+/// On Windows, the gdigrab capture command (see
+/// `integration_backend::segment_recorder`) never passes `config.resolution`
+/// as `-video_size` -- it captures at the real HWND window rect, the target
+/// monitor's actual bounds, or (with neither set) the native desktop size,
+/// unconditionally. Echoing `config.resolution` there would misreport a
+/// configured-but-unused settings value as if it were the measured capture
+/// resolution, so report it honestly as native instead. Other platforms
+/// (Linux's x11grab) do apply `config.resolution` to the actual capture, so
+/// echoing it remains honest there.
+fn recording_quality_resolution_label(resolution: (u32, u32)) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = resolution; // unused on this platform, kept for signature parity
+        "native (game window)".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        format!("{}x{}", resolution.0, resolution.1)
+    }
 }
 
 /// Get recording quality info (encoder, bitrate, resolution)
@@ -1104,7 +1330,7 @@ pub async fn get_recording_quality_info(
     Ok(json!({
         "encoder": encoder_name,
         "codec": codec_name,
-        "resolution": format!("{}x{}", config.resolution.0, config.resolution.1),
+        "resolution": recording_quality_resolution_label(config.resolution),
         "fps": config.fps,
         "bitrate_mbps": config.bitrate as f64 / 1_000_000.0,
         "audio_enabled": config.audio_config.is_some(),
@@ -1240,7 +1466,10 @@ pub async fn get_disk_usage_info() -> AppResult<serde_json::Value> {
         .join("lolshorts");
 
     let recordings_dir = app_data.join("recordings");
-    let temp_dir = app_data.join("recordings").join("temp_segments");
+    // The rolling-buffer segments (the actual temp footage + loopback WAV) live in
+    // recordings/segments, not the non-existent recordings/temp_segments the UI used
+    // to scan (which always reported ~0 bytes).
+    let temp_dir = app_data.join("recordings").join("segments");
     let logs_dir = app_data.join("logs");
 
     // Calculate directory sizes
@@ -1291,47 +1520,67 @@ pub async fn get_disk_usage_info() -> AppResult<serde_json::Value> {
 
 #[tauri::command]
 pub async fn cleanup_temp_files(state: State<'_, AppState>) -> AppResult<u64> {
-    let temp_dir = dirs::data_dir()
+    // Actual rolling-buffer footage lives in recordings/segments (not temp_segments).
+    let segments_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("lolshorts")
         .join("recordings")
-        .join("temp_segments");
+        .join("segments");
 
-    let size_before = if temp_dir.exists() {
-        std::fs::read_dir(&temp_dir)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter_map(|e| e.metadata().ok())
-                    .map(|m| m.len())
-                    .sum::<u64>()
-            })
-            .unwrap_or(0)
-    } else {
-        0
-    };
-
+    // Always run the standard startup cleanup (logs + legacy temp dirs).
     state
         .cleanup_manager
         .cleanup_on_startup()
         .await
         .map_err(|e| AppError::Io(format!("Cleanup failed: {}", e)))?;
 
-    let size_after = if temp_dir.exists() {
-        std::fs::read_dir(&temp_dir)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter_map(|e| e.metadata().ok())
-                    .map(|m| m.len())
-                    .sum::<u64>()
-            })
-            .unwrap_or(0)
-    } else {
-        0
-    };
+    // Never delete the live rolling buffer while a recording is in progress — those
+    // segments are the active replay window.
+    let rec_status = state.recording_manager.read().await.get_status().await;
+    if matches!(
+        rec_status,
+        RecordingStatus::Recording | RecordingStatus::Buffering
+    ) {
+        tracing::info!("cleanup_temp_files: recording active, leaving segment buffer intact");
+        return Ok(0);
+    }
 
-    Ok(size_before.saturating_sub(size_after))
+    if !segments_dir.exists() {
+        return Ok(0);
+    }
+
+    // Remove stale rolling-buffer segments and the loopback WAV left over from the
+    // last finished session (safe when idle; mirrors cleanup_on_shutdown).
+    let mut freed: u64 = 0;
+    if let Ok(entries) = std::fs::read_dir(&segments_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let is_segment_artifact = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| {
+                    matches!(
+                        ext.to_ascii_lowercase().as_str(),
+                        "mp4" | "ts" | "wav" | "txt"
+                    )
+                })
+                .unwrap_or(false);
+            if !is_segment_artifact {
+                continue;
+            }
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            match std::fs::remove_file(&path) {
+                Ok(()) => freed += size,
+                Err(e) => tracing::warn!("Failed to remove segment file {:?}: {}", path, e),
+            }
+        }
+    }
+
+    tracing::info!(
+        "cleanup_temp_files: freed {} bytes from segment buffer",
+        freed
+    );
+    Ok(freed)
 }
 
 fn get_total_disk_space(path: &Path) -> Option<u64> {
@@ -1497,7 +1746,9 @@ pub async fn get_performance_stats(state: State<'_, AppState>) -> AppResult<serd
         "recording": {
             "total_frames": stats.total_frames,
             "uptime_seconds": stats.uptime_seconds,
-            "current_fps": stats.current_fps
+            "current_fps": stats.current_fps,
+            "audio_active": stats.audio_active,
+            "mic_active": stats.mic_active
         },
         "system": {
             "status": format!("{:?}", manager.get_status().await)
@@ -1618,5 +1869,112 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.code == "capture_hardware_unverified"));
+    }
+
+    // ---- recording_quality_resolution_label ----
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn recording_quality_resolution_label_reports_native_on_windows() {
+        // Regression: Windows capture (gdigrab) never actually applies
+        // `config.resolution` to the capture command -- it must not be
+        // echoed back as if it were the measured resolution.
+        assert_eq!(
+            recording_quality_resolution_label((1920, 1080)),
+            "native (game window)"
+        );
+        assert_eq!(
+            recording_quality_resolution_label((2560, 1440)),
+            "native (game window)"
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn recording_quality_resolution_label_echoes_configured_value_elsewhere() {
+        // Linux's x11grab does apply `config.resolution` to the actual
+        // capture command, so echoing it there remains honest.
+        assert_eq!(
+            recording_quality_resolution_label((1920, 1080)),
+            "1920x1080"
+        );
+    }
+
+    // ---- persist_manual_replay_metadata ----
+    //
+    // These construct `AutoClipManager` directly (mirroring the helper in
+    // `auto_clip_manager.rs`'s own tests) rather than going through
+    // `AppState`/`State`, exercising the exact call shape a non-command
+    // caller (e.g. a global hotkey handler) would use.
+
+    async fn test_clip_manager(
+        storage: std::sync::Arc<crate::storage::Storage>,
+        output_dir: &std::path::Path,
+    ) -> crate::recording::auto_clip_manager::AutoClipManager {
+        use crate::recording::integration_backend::{RecordingConfig, WindowsCaptureRecorder};
+        use crate::settings::models::RecordingSettings;
+        use tokio::sync::RwLock as TokioRwLock;
+
+        let recorder_config = RecordingConfig {
+            output_dir: output_dir.to_path_buf(),
+            ..Default::default()
+        };
+        let recorder = WindowsCaptureRecorder::new(recorder_config).await.unwrap();
+        let recorder_arc = std::sync::Arc::new(TokioRwLock::new(recorder));
+        let settings = std::sync::Arc::new(TokioRwLock::new(RecordingSettings::default()));
+
+        crate::recording::auto_clip_manager::AutoClipManager::new(recorder_arc, storage, settings)
+    }
+
+    #[tokio::test]
+    async fn persist_manual_replay_metadata_creates_manual_bucket_when_no_active_game() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = std::sync::Arc::new(crate::storage::Storage::new(temp_dir.path()).unwrap());
+        let clip_manager = test_clip_manager(storage.clone(), temp_dir.path()).await;
+
+        let clip_path = temp_dir.path().join("manual-replay.mp4");
+
+        persist_manual_replay_metadata(&storage, &clip_manager, &clip_path, 30.0)
+            .await
+            .expect("should persist metadata under a manual bucket");
+
+        let expected_game_id = format!("manual_{}", chrono::Utc::now().format("%Y%m%d"));
+        let games = storage.list_games().unwrap();
+        assert!(
+            games.contains(&expected_game_id),
+            "expected manual bucket {} to be created, got {:?}",
+            expected_game_id,
+            games
+        );
+
+        let clips = storage.load_clip_metadata(&expected_game_id).unwrap();
+        assert_eq!(clips.len(), 1);
+        assert_eq!(clips[0].duration, 30.0);
+        assert_eq!(clips[0].file_path, clip_path.to_string_lossy().to_string());
+    }
+
+    #[tokio::test]
+    async fn persist_manual_replay_metadata_attaches_to_active_auto_capture_session() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = std::sync::Arc::new(crate::storage::Storage::new(temp_dir.path()).unwrap());
+        let clip_manager = test_clip_manager(storage.clone(), temp_dir.path()).await;
+
+        clip_manager
+            .set_current_game(Some("active-game".to_string()))
+            .await;
+
+        let clip_path = temp_dir.path().join("manual-replay-2.mp4");
+
+        persist_manual_replay_metadata(&storage, &clip_manager, &clip_path, 45.0)
+            .await
+            .expect("should persist metadata under the active game session");
+
+        let clips = storage.load_clip_metadata("active-game").unwrap();
+        assert_eq!(clips.len(), 1);
+        assert_eq!(clips[0].duration, 45.0);
+
+        // No manual bucket should have been created when a session is active.
+        let expected_manual_id = format!("manual_{}", chrono::Utc::now().format("%Y%m%d"));
+        assert!(!storage.list_games().unwrap().contains(&expected_manual_id));
     }
 }

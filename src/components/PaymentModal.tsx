@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-shell";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -11,7 +12,8 @@ import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Crown, Check, AlertCircle } from "lucide-react";
+import { Crown, Check, AlertCircle, Loader2 } from "lucide-react";
+import { paymentApi, type SubscriptionDetails } from "@/api/payment";
 
 interface PaymentModalProps {
   isOpen: boolean;
@@ -21,9 +23,64 @@ interface PaymentModalProps {
 export function PaymentModal({ isOpen, onClose }: PaymentModalProps) {
   const { t } = useTranslation();
   const [period, setPeriod] = useState<"MONTHLY" | "YEARLY">("MONTHLY");
+  const [subscription, setSubscription] = useState<SubscriptionDetails | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let cancelled = false;
+    setIsLoading(true);
+    setCheckoutError(null);
+
+    paymentApi
+      .getSubscriptionDetails()
+      .then((details) => {
+        if (!cancelled) {
+          setSubscription(details);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setCheckoutError(error instanceof Error ? error.message : "Unable to load billing status.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
+  const paymentAvailable = subscription?.payment_available === true;
+  const statusMessage =
+    checkoutError ??
+    subscription?.payment_message ??
+    subscription?.reason ??
+    "Payment and PRO upgrades are deferred until non-payment field readiness is verified. Local export and current app workflows remain available without starting checkout.";
+
+  const handleCheckout = async () => {
+    if (!paymentAvailable) return;
+
+    setIsLoading(true);
+    setCheckoutError(null);
+    try {
+      const checkoutUrl = await paymentApi.openPaymentPage(period);
+      await open(checkoutUrl);
+    } catch (error) {
+      setCheckoutError(error instanceof Error ? error.message : "Unable to open payment checkout.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -39,7 +96,7 @@ export function PaymentModal({ isOpen, onClose }: PaymentModalProps) {
           <Alert>
             <AlertCircle className="w-4 h-4" />
             <AlertDescription>
-              Payment and PRO upgrades are deferred until non-payment field readiness is verified. Local export and current app workflows remain available without starting checkout.
+              {statusMessage}
             </AlertDescription>
           </Alert>
 
@@ -158,15 +215,19 @@ export function PaymentModal({ isOpen, onClose }: PaymentModalProps) {
             </Button>
             <Button
               type="button"
-              disabled
+              disabled={!paymentAvailable || isLoading}
+              onClick={handleCheckout}
               className="flex-1"
             >
+              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {t('payment.selectPlan')}
             </Button>
           </div>
 
           <p className="text-xs text-center text-muted-foreground">
-            Payment checkout is intentionally unavailable in this readiness build.
+            {paymentAvailable
+              ? "Checkout opens in Toss. PRO activates only after Supabase entitlement refresh confirms active user_licenses."
+              : "Payment checkout is intentionally unavailable in this readiness build."}
           </p>
         </div>
       </DialogContent>

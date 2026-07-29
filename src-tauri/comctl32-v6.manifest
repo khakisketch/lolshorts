@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Requests ComCtl32 version 6 (the side-by-side assembly).
+
+  The app binary gets this from tauri_build, but Cargo's test/bench binaries are
+  linked without it. The dialog plugin's dependency chain statically imports
+  comctl32!TaskDialogIndirect / SetWindowSubclass / RemoveWindowSubclass /
+  DefSubclassProc, and those symbols exist only in ComCtl32 v6 — the v5.82 copy in
+  System32 does not export them. Without this manifest the test harness dies at
+  load time with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139) before a single test runs.
+
+  build.rs embeds this into test and bench binaries via /MANIFESTINPUT.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*" />
+    </dependentAssembly>
+  </dependency>
+</assembly>

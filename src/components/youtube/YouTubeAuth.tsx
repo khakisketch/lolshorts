@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useYouTube } from '@/hooks/useYouTube';
 import { Button } from '@/components/ui/button';
@@ -7,6 +7,12 @@ import { Badge } from '@/components/ui/badge';
 import { Youtube, LogOut, CheckCircle, AlertCircle } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-shell';
 import { logger } from '@/lib/logger';
+
+// The backend's local OAuth callback server times out after 120s
+// (callback_server.rs); give the UI a matching fallback so it never waits
+// forever if the 'youtube-auth-completed'/'youtube-auth-failed' events are
+// somehow missed.
+const AUTH_WAIT_TIMEOUT_MS = 2 * 60 * 1000;
 
 export function YouTubeAuth() {
   const { t } = useTranslation();
@@ -17,31 +23,69 @@ export function YouTubeAuth() {
     startAuthWithServer,
     logout,
     checkAuthStatus,
+    authEventError,
+    clearAuthEventError,
   } = useYouTube();
 
   const [authInProgress, setAuthInProgress] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const authTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearAuthTimeout = () => {
+    if (authTimeoutRef.current) {
+      clearTimeout(authTimeoutRef.current);
+      authTimeoutRef.current = null;
+    }
+  };
 
   useEffect(() => {
     checkAuthStatus();
+    return () => clearAuthTimeout();
   }, [checkAuthStatus]);
+
+  // 'youtube-auth-completed' triggers checkAuthStatus() inside useYouTube,
+  // so authStatus.authenticated flipping to true while we're waiting is our
+  // completion signal.
+  useEffect(() => {
+    if (authInProgress && authStatus.authenticated) {
+      setAuthInProgress(false);
+      clearAuthTimeout();
+    }
+  }, [authInProgress, authStatus.authenticated]);
+
+  // 'youtube-auth-failed' surfaces here as authEventError.
+  useEffect(() => {
+    if (authInProgress && authEventError) {
+      setAuthInProgress(false);
+      setActionError(authEventError);
+      clearAuthEventError();
+      clearAuthTimeout();
+    }
+  }, [authInProgress, authEventError, clearAuthEventError]);
 
   const handleStartAuth = async () => {
     try {
       setAuthInProgress(true);
       setActionError(null);
+      clearAuthEventError();
       const authUrl = await startAuthWithServer();
 
       // Open auth URL in system browser
       await open(authUrl);
 
-      // Authentication will complete automatically when user authorizes in browser
-      // The callback server (port 9090) will handle the redirect and save credentials
+      // Keep authInProgress true - resolved by the 'youtube-auth-completed'/
+      // 'youtube-auth-failed' effects above once the background callback
+      // server (port 9090) finishes. Fall back to a timeout so the UI never
+      // waits forever if the event is missed.
+      clearAuthTimeout();
+      authTimeoutRef.current = setTimeout(() => {
+        setAuthInProgress(false);
+        setActionError(t('youtube.auth.authTimeout', 'Authorization timed out. Please try again.'));
+      }, AUTH_WAIT_TIMEOUT_MS);
     } catch (err) {
       logger.error('Auth error:', err);
-      setActionError(err instanceof Error ? err.message : t('youtube.auth.authStartFailed', 'Failed to start YouTube authentication.'));
-    } finally {
       setAuthInProgress(false);
+      setActionError(err instanceof Error ? err.message : t('youtube.auth.authStartFailed', 'Failed to start YouTube authentication.'));
     }
   };
 

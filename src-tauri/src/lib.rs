@@ -1,6 +1,5 @@
 pub mod auth;
 pub mod error;
-pub mod feature_gate;
 pub mod hotkey;
 pub mod lcu;
 pub mod overlay;
@@ -24,7 +23,6 @@ pub use error::{AppError, AppResult};
 pub struct AppState {
     pub storage: Arc<storage::Storage>,
     pub auth: Arc<auth::AuthManager>,
-    pub feature_gate: Arc<feature_gate::FeatureGate>,
     pub recording_manager: Arc<RwLock<recording::RecordingManager>>,
     pub clip_manager: Arc<recording::auto_clip_manager::AutoClipManager>,
     pub game_monitor: Arc<recording::game_monitor::GameStateMonitor>,

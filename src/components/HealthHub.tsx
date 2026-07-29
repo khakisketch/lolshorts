@@ -10,6 +10,7 @@ import {
   HardDrive,
   Activity,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 interface HealthStatus {
@@ -33,24 +34,24 @@ const statusConfig = {
   ok: {
     color: "text-green-400 bg-green-500/20 border-green-500/50",
     icon: <CheckCircle2 className="w-3 h-3" />,
-    label: "Ready",
+    labelKey: "dashboard.services.status.ready",
   },
   warning: {
     color: "text-yellow-400 bg-yellow-500/20 border-yellow-500/50",
     icon: <AlertTriangle className="w-3 h-3" />,
-    label: "Needs Setup",
+    labelKey: "dashboard.services.status.needsSetup",
   },
   blocked: {
     color: "text-red-400 bg-red-500/20 border-red-500/50",
     icon: <XCircle className="w-3 h-3" />,
-    label: "Blocked",
+    labelKey: "dashboard.services.status.blocked",
   },
   checking: {
     color: "text-muted-foreground bg-white/5 border-white/10",
     icon: <Loader2 className="w-3 h-3 animate-spin" />,
-    label: "Checking",
+    labelKey: "dashboard.services.status.checking",
   },
-};
+} as const;
 
 const categoryIcons = {
   capture: <Video className="w-4 h-4" />,
@@ -62,6 +63,7 @@ const categoryIcons = {
 };
 
 export function HealthHub({ healthData }: HealthHubProps) {
+  const { t } = useTranslation();
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
       {Object.entries(healthData).map(([key, data]) => {
@@ -88,11 +90,17 @@ export function HealthHub({ healthData }: HealthHubProps) {
                 )}
               >
                 {config.icon}
-                <span className="whitespace-normal break-words">
-                  {config.label}
+                <span
+                  className="whitespace-normal break-words"
+                  style={{ wordBreak: "keep-all" }}
+                >
+                  {t(config.labelKey)}
                 </span>
               </div>
-              <p className="text-[11px] text-muted-foreground leading-tight">
+              <p
+                className="text-[11px] text-muted-foreground leading-tight"
+                style={{ wordBreak: "keep-all" }}
+              >
                 {data.message}
               </p>
             </div>

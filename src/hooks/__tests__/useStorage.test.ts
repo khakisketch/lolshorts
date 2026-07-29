@@ -81,6 +81,23 @@ describe('useStorage - listGames', () => {
 
     expect(result.current.isLoading).toBe(false);
   });
+
+  it('clears a stale error once a retried call succeeds', async () => {
+    mockListGames.mockRejectedValueOnce(new Error('network error'));
+    const { result } = renderHook(() => useStorage());
+
+    await act(async () => {
+      await expect(result.current.listGames()).rejects.toThrow('network error');
+    });
+    expect(result.current.error).toBe('network error');
+
+    mockListGames.mockResolvedValueOnce(['game-1']);
+    await act(async () => {
+      await result.current.listGames();
+    });
+
+    expect(result.current.error).toBeNull();
+  });
 });
 
 describe('useStorage - getGameMetadata', () => {

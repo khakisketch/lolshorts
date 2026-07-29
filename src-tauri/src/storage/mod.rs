@@ -37,12 +37,20 @@ const SAFE_DELETE_MEDIA_EXTENSIONS: &[&str] = &[
     "mp4", "avi", "mkv", "mov", "flv", "webm", "m4v", "jpg", "jpeg", "png", "gif", "webp",
 ];
 const JSON_TO_SQLITE_MIGRATION: &str = "json_to_sqlite_v1";
+const AUTO_EDIT_USAGE_USER_SCOPED_MIGRATION: &str = "auto_edit_usage_user_scoped_v1";
 
 /// SQLite-backed local storage for app-owned metadata.
 ///
 /// This database stores only local app data such as games, clips, app settings,
 /// and auto-edit results. Authentication, billing, and PRO entitlement remain
 /// authoritative in Supabase and must not be trusted from this local database.
+///
+/// Storage location note: this SQLite DB (and the `recordings/`, `clips/`,
+/// `replays/`, `exports/` media directories) live under `dirs::data_dir()`
+/// (`base_path`, set by `main.rs`). `RecordingSettings` (recording/audio/UI
+/// preferences) is a *separate* JSON file under `dirs::config_dir()` --
+/// see `settings::storage` module doc for why these two roots are kept
+/// distinct rather than merged.
 pub struct Storage {
     base_path: PathBuf,
     conn: Mutex<Connection>,
@@ -117,8 +125,28 @@ impl Storage {
                 updated_at TEXT NOT NULL
             );
 
+            -- Legacy single-row (id=1) quota counter, shared by every local
+            -- user of the app. Superseded by auto_edit_usage_by_user below;
+            -- kept only as a one-time migration read source (see
+            -- migrate_auto_edit_usage_to_user_scoped). No code writes to this
+            -- table anymore.
             CREATE TABLE IF NOT EXISTS auto_edit_usage (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                usage_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            -- Per-user auto-edit quota counters. user_id is the Supabase
+            -- auth user id, or "anonymous"/"legacy" for unauthenticated /
+            -- pre-migration usage. NOTE: this is a local CACHE / OFFLINE
+            -- FALLBACK only and is NOT authoritative -- it can be reset by
+            -- deleting/editing the local DB file. The authoritative counter
+            -- lives server-side in Supabase (the `quota` edge function +
+            -- public.auto_edit_usage); video::commands::start_auto_edit
+            -- consults the server first and only falls back to this table when
+            -- the server is unreachable (offline/timeout).
+            CREATE TABLE IF NOT EXISTS auto_edit_usage_by_user (
+                user_id TEXT PRIMARY KEY,
                 usage_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -146,6 +174,26 @@ impl Storage {
                 "SQLite storage initialized but JSON migration was incomplete; legacy files were preserved: {}",
                 err
             );
+        }
+
+        if let Err(err) = storage.migrate_auto_edit_usage_to_user_scoped() {
+            tracing::warn!(
+                "Failed to migrate legacy single-row auto-edit usage counter to the per-user table: {}",
+                err
+            );
+        }
+
+        // Clear rows left behind by older builds that persisted a `pending/<id>.mp4`
+        // placeholder whenever clip extraction failed (see `is_ghost_clip_path`). The
+        // retention sweep cannot reach them, so they would otherwise haunt the library
+        // forever as unplayable entries.
+        match storage.sweep_ghost_clip_metadata() {
+            Ok(0) => {}
+            Ok(count) => tracing::info!(
+                "Startup sweep removed {} clip row(s) with an unusable placeholder path",
+                count
+            ),
+            Err(err) => tracing::warn!("Startup ghost-clip sweep failed: {}", err),
         }
 
         tracing::info!(
@@ -210,9 +258,40 @@ impl Storage {
             .collect())
     }
 
-    /// Get path for a specific game.
+    /// Legacy per-game directory (`base_path/clips/<game_id>`).
+    ///
+    /// NOTE: despite the name, this is **not** where clip media files live.
+    /// It exists solely so `load_game_metadata`/`load_events`/
+    /// `load_clip_metadata` can still read old `metadata.json`/`events.json`/
+    /// `clips.json` sidecars from installs that predate the SQLite store.
+    /// Real clip video files live in a flat layout at
+    /// [`Self::recordings_clips_dir`]. This method must stay read-only-safe
+    /// (callers must not assume the directory exists) -- `create_game`/
+    /// `save_*` no longer eagerly create it.
     pub fn game_path(&self, game_id: &str) -> PathBuf {
         self.base_path.join("clips").join(game_id)
+    }
+
+    /// Directory holding extracted highlight-clip media files (flat, one
+    /// level, not per-game). This is the real location `ClipMetadata::file_path`
+    /// points into for clips created by the recording pipeline -- distinct
+    /// from the legacy per-game [`Self::game_path`] directory.
+    pub fn recordings_clips_dir(&self) -> PathBuf {
+        self.base_path.join("recordings").join("clips")
+    }
+
+    /// Directory holding the rolling-buffer recording segments: segment
+    /// mp4s, the WASAPI loopback WAV, and the ffmpeg concat list. Rewritten
+    /// continuously while recording; safe to clear when idle.
+    pub fn recordings_segments_dir(&self) -> PathBuf {
+        self.base_path.join("recordings").join("segments")
+    }
+
+    /// Directory holding auto-edit render output (intermediate stages +
+    /// final rendered Shorts + thumbnails), when `AutoComposer::set_output_root`
+    /// has been wired to `base_path/exports/auto_edit` (see `main.rs`).
+    pub fn exports_dir(&self) -> PathBuf {
+        self.base_path.join("exports")
     }
 
     /// App-owned roots where media/result files may be deleted from metadata.
@@ -221,6 +300,9 @@ impl Storage {
             self.base_path.join("clips"),
             self.base_path.join("recordings"),
             self.base_path.join("replays"),
+            self.exports_dir(),
+            // Legacy auto-edit output location, kept for installs that still
+            // have results pointing at %TEMP% from before `exports/` existed.
             std::env::temp_dir().join("lolshorts_auto_edit"),
         ]
     }
@@ -236,9 +318,8 @@ impl Storage {
             .map_err(StorageError::from)
     }
 
-    /// Create a new game directory and metadata row.
+    /// Create a new game metadata row.
     pub fn create_game(&self, game_id: &str, metadata: &GameMetadata) -> Result<()> {
-        fs::create_dir_all(self.game_path(game_id))?;
         self.save_game_metadata(game_id, metadata)?;
         tracing::info!("Created game storage entry: {}", game_id);
         Ok(())
@@ -246,8 +327,6 @@ impl Storage {
 
     /// Save game metadata.
     pub fn save_game_metadata(&self, game_id: &str, metadata: &GameMetadata) -> Result<()> {
-        fs::create_dir_all(self.game_path(game_id))?;
-
         let json = serde_json::to_string(metadata)?;
         let now = chrono::Utc::now().to_rfc3339();
         self.conn()?.execute(
@@ -314,7 +393,6 @@ impl Storage {
 
     /// Save events for a game.
     pub fn save_events(&self, game_id: &str, events: &[EventData]) -> Result<()> {
-        fs::create_dir_all(self.game_path(game_id))?;
         let json = serde_json::to_string(events)?;
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -360,8 +438,6 @@ impl Storage {
 
     /// Save clip metadata.
     pub fn save_clip_metadata(&self, game_id: &str, clip: &ClipMetadata) -> Result<()> {
-        fs::create_dir_all(self.game_path(game_id))?;
-
         let json = serde_json::to_string(clip)?;
         let now = chrono::Utc::now().to_rfc3339();
         self.conn()?.execute(
@@ -420,6 +496,76 @@ impl Storage {
         Ok(Vec::new())
     }
 
+    /// Load clip metadata for a game the way the editor should: like
+    /// [`Storage::load_clip_metadata`], but any legacy row whose `duration`
+    /// was never recorded (`duration <= 0.0`) is measured with ffprobe
+    /// (reusing [`crate::video::processor::pipeline::VideoProcessor::get_duration`])
+    /// and the result is written back to storage, once, so future loads
+    /// don't need to re-probe.
+    ///
+    /// A `duration <= 0.0` made the editor's trim UI silently treat every
+    /// trim on such a clip as a no-op (trim range clamped against a
+    /// zero-length clip). This is best-effort: a clip whose file can no
+    /// longer be probed (missing/corrupt) keeps its existing duration and
+    /// is skipped rather than failing the whole list.
+    pub async fn load_clip_metadata_with_duration_backfill(
+        &self,
+        game_id: &str,
+    ) -> Result<Vec<ClipMetadata>> {
+        let mut clips = self.load_clip_metadata(game_id)?;
+
+        let needs_backfill: Vec<usize> = clips
+            .iter()
+            .enumerate()
+            .filter(|(_, clip)| clip.duration <= 0.0)
+            .map(|(index, _)| index)
+            .collect();
+
+        if needs_backfill.is_empty() {
+            return Ok(clips);
+        }
+
+        let processor = crate::video::processor::pipeline::VideoProcessor::new_with_fallback();
+
+        for index in needs_backfill {
+            let file_path = clips[index].file_path.clone();
+            match processor.get_duration(&file_path).await {
+                Ok(measured) if measured > 0.0 => {
+                    clips[index].duration = measured;
+                    if let Err(e) = self.save_clip_metadata(game_id, &clips[index]) {
+                        tracing::warn!(
+                            "Failed to persist backfilled duration for clip {}: {}",
+                            file_path,
+                            e
+                        );
+                    } else {
+                        tracing::info!(
+                            "Backfilled duration for clip {}: {:.3}s",
+                            file_path,
+                            measured
+                        );
+                    }
+                }
+                Ok(non_positive) => {
+                    tracing::debug!(
+                        "ffprobe reported non-positive duration ({}) for clip {}, leaving as-is",
+                        non_positive,
+                        file_path
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to backfill duration for clip {} (file missing/corrupt?): {}",
+                        file_path,
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(clips)
+    }
+
     /// Get all games, sorted by most recent.
     pub fn list_games(&self) -> Result<Vec<String>> {
         let conn = self.conn()?;
@@ -455,6 +601,36 @@ impl Storage {
         Ok(())
     }
 
+    /// Remove clip rows whose recorded path can never be backed by a real file.
+    ///
+    /// Complements the retention sweep in `utils::cleanup`: that one only removes rows
+    /// whose file is *confirmed* missing, and its unmounted-volume guard (parent
+    /// directory must exist) permanently skips a relative `pending/` path, so the ghost
+    /// rows written by the old failed-extraction placeholder survived every cycle.
+    ///
+    /// Returns the number of rows removed.
+    pub fn sweep_ghost_clip_metadata(&self) -> Result<usize> {
+        let mut removed = 0usize;
+
+        for (game_id, clip) in self.all_clip_metadata_with_game_id()? {
+            if !is_ghost_clip_path(&clip.file_path) {
+                continue;
+            }
+
+            match self.delete_clip_metadata(&game_id, &clip.file_path) {
+                Ok(()) => removed += 1,
+                Err(err) => tracing::warn!(
+                    "Failed to remove ghost clip row {} (game {}): {}",
+                    clip.file_path,
+                    game_id,
+                    err
+                ),
+            }
+        }
+
+        Ok(removed)
+    }
+
     /// Delete a specific clip's metadata from storage.
     pub fn delete_clip_metadata(&self, game_id: &str, file_path: &str) -> Result<()> {
         let affected = self.conn()?.execute(
@@ -469,6 +645,43 @@ impl Storage {
         }
 
         Ok(())
+    }
+
+    /// Delete the most recently saved clip (media file + metadata row).
+    ///
+    /// Used by the "delete last clip" hotkey. Returns the deleted file path, or
+    /// `None` if there were no clips to delete.
+    pub fn delete_last_clip(&self) -> Result<Option<String>> {
+        let row: Option<(String, String)> = {
+            let conn = self.conn()?;
+            conn.query_row(
+                "SELECT game_id, file_path FROM clips ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+        };
+
+        let (game_id, file_path) = match row {
+            Some(row) => row,
+            None => {
+                tracing::info!("delete_last_clip: no clips to delete");
+                return Ok(None);
+            }
+        };
+
+        // Best-effort media deletion; a missing file should not block metadata cleanup.
+        if let Err(e) = self.safe_delete_media_file(&file_path) {
+            tracing::warn!(
+                "delete_last_clip: failed to delete media file {}: {}",
+                file_path,
+                e
+            );
+        }
+
+        self.delete_clip_metadata(&game_id, &file_path)?;
+        tracing::info!("Deleted last clip: {} (game {})", file_path, game_id);
+        Ok(Some(file_path))
     }
 
     /// Get storage statistics.
@@ -489,10 +702,16 @@ impl Storage {
             }
         }
 
+        let recordings_dir_size_bytes = dir_size_bytes(&self.base_path.join("recordings"));
+        let exports_dir_size_bytes = dir_size_bytes(&self.exports_dir());
+
         Ok(StorageStats {
             total_games,
             total_clips,
             total_size_bytes: total_size,
+            recordings_dir_size_bytes,
+            exports_dir_size_bytes,
+            total_disk_usage_bytes: recordings_dir_size_bytes + exports_dir_size_bytes,
         })
     }
 
@@ -626,78 +845,87 @@ impl Storage {
     // ========================================================================
     // Auto-Edit Usage Tracking (Quota System)
     // ========================================================================
+    //
+    // NOTE: this is a *local cache / offline fallback* counter scoped by
+    // `user_id` (the Supabase auth user id, or "anonymous" for unauthenticated
+    // callers -- see video::commands::start_auto_edit). It is NOT authoritative:
+    // a user who edits or deletes the local SQLite file can reset it. The
+    // authority for the FREE-tier monthly quota is the server-side `quota` edge
+    // function backed by public.auto_edit_usage. start_auto_edit checks/consumes
+    // the server first and only uses these functions when the server is
+    // unreachable (offline/timeout), keeping the on-device counter warm as a
+    // cache so offline users are not blocked.
 
-    /// Load auto-edit usage for current month.
-    pub fn load_auto_edit_usage(&self) -> Result<AutoEditUsage> {
+    /// Load auto-edit usage for current month, scoped to `user_id`.
+    pub fn load_auto_edit_usage(&self, user_id: &str) -> Result<AutoEditUsage> {
         let json: Option<String> = self
             .conn()?
             .query_row(
-                "SELECT usage_json FROM auto_edit_usage WHERE id = 1",
-                [],
+                "SELECT usage_json FROM auto_edit_usage_by_user WHERE user_id = ?1",
+                params![user_id],
                 |row| row.get(0),
             )
             .optional()?;
 
-        let mut usage = if let Some(json) = json {
-            serde_json::from_str(&json)?
-        } else {
-            let legacy = self.base_path.join("auto_edit_usage.json");
-            if legacy.exists() {
-                let usage: AutoEditUsage = read_json_file(&legacy)?;
-                self.save_auto_edit_usage(&usage)?;
-                usage
-            } else {
-                AutoEditUsage::default()
-            }
+        let mut usage = match json {
+            Some(json) => serde_json::from_str(&json)?,
+            None => AutoEditUsage::default(),
         };
 
         if !usage.is_current_month() {
             tracing::info!(
-                "Resetting auto-edit usage for new month: {} -> {}",
+                "Resetting auto-edit usage for new month: {} -> {} (user: {})",
                 usage.month,
-                AutoEditUsage::current_month()
+                AutoEditUsage::current_month(),
+                user_id
             );
             usage = AutoEditUsage::reset_for_month(AutoEditUsage::current_month());
-            self.save_auto_edit_usage(&usage)?;
+            self.save_auto_edit_usage(user_id, &usage)?;
         }
 
         Ok(usage)
     }
 
-    /// Save auto-edit usage.
-    fn save_auto_edit_usage(&self, usage: &AutoEditUsage) -> Result<()> {
+    /// Save auto-edit usage for `user_id`.
+    fn save_auto_edit_usage(&self, user_id: &str, usage: &AutoEditUsage) -> Result<()> {
         let json = serde_json::to_string(usage)?;
         let now = chrono::Utc::now().to_rfc3339();
         self.conn()?.execute(
             r#"
-            INSERT INTO auto_edit_usage (id, usage_json, updated_at)
-            VALUES (1, ?1, ?2)
-            ON CONFLICT(id) DO UPDATE SET
+            INSERT INTO auto_edit_usage_by_user (user_id, usage_json, updated_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(user_id) DO UPDATE SET
                 usage_json = excluded.usage_json,
                 updated_at = excluded.updated_at
             "#,
-            params![json, now],
+            params![user_id, json, now],
         )?;
 
         tracing::debug!(
-            "Saved auto-edit usage: month={}, count={}",
+            "Saved auto-edit usage: user={}, month={}, count={}",
+            user_id,
             usage.month,
             usage.usage_count
         );
         Ok(())
     }
 
-    /// Increment auto-edit usage counter.
-    pub fn increment_auto_edit_usage(&self) -> Result<u32> {
-        let mut usage = self.load_auto_edit_usage()?;
+    /// Increment the local cache auto-edit usage counter for `user_id`.
+    ///
+    /// The authoritative consume happens server-side (`quota` edge function);
+    /// this keeps the on-device cache in step so the offline fallback stays
+    /// approximately correct.
+    pub fn increment_auto_edit_usage(&self, user_id: &str) -> Result<u32> {
+        let mut usage = self.load_auto_edit_usage(user_id)?;
 
         usage.usage_count += 1;
         usage.last_updated = chrono::Utc::now();
 
-        self.save_auto_edit_usage(&usage)?;
+        self.save_auto_edit_usage(user_id, &usage)?;
 
         tracing::info!(
-            "Auto-edit usage incremented: {}/{} (month: {})",
+            "Auto-edit usage incremented: user={}, {}/{} (month: {})",
+            user_id,
             usage.usage_count,
             "∞",
             usage.month
@@ -706,15 +934,20 @@ impl Storage {
         Ok(usage.usage_count)
     }
 
-    /// Check if user can perform auto-edit based on quota.
-    pub fn check_auto_edit_quota(&self, is_pro: bool) -> Result<u32> {
+    /// Check if `user_id` can perform auto-edit based on the local cache quota.
+    ///
+    /// This is the OFFLINE FALLBACK path only: the authoritative check is the
+    /// server `quota` edge function (see the module note above and
+    /// video::commands::start_auto_edit). Returns the remaining count, or an
+    /// error when the local counter says the FREE monthly limit is reached.
+    pub fn check_auto_edit_quota(&self, user_id: &str, is_pro: bool) -> Result<u32> {
         if is_pro {
             return Ok(u32::MAX);
         }
 
         const FREE_TIER_LIMIT: u32 = 5;
 
-        let usage = self.load_auto_edit_usage()?;
+        let usage = self.load_auto_edit_usage(user_id)?;
 
         if usage.usage_count >= FREE_TIER_LIMIT {
             return Err(StorageError::Io(std::io::Error::new(
@@ -884,6 +1117,30 @@ impl Storage {
 
         rows.into_iter()
             .map(|json| serde_json::from_str(&json).map_err(StorageError::from))
+            .collect()
+    }
+
+    /// All clip metadata rows across every game, paired with their owning
+    /// `game_id`. Used by maintenance/retention tooling (see
+    /// `utils::cleanup::CleanupManager::run_retention_cycle`) that needs the
+    /// `game_id` to call [`Self::delete_clip_metadata`] on a specific row.
+    pub fn all_clip_metadata_with_game_id(&self) -> Result<Vec<(String, ClipMetadata)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT game_id, metadata_json FROM clips")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        drop(conn);
+
+        rows.into_iter()
+            .map(|(game_id, json)| {
+                serde_json::from_str::<ClipMetadata>(&json)
+                    .map(|clip| (game_id, clip))
+                    .map_err(StorageError::from)
+            })
             .collect()
     }
 
@@ -1058,7 +1315,9 @@ impl Storage {
         }
 
         match read_json_file::<AutoEditUsage>(&usage_path) {
-            Ok(usage) => self.save_auto_edit_usage(&usage)?,
+            // Pre-multi-user JSON file predates any user_id concept; attribute
+            // it to the "legacy" pseudo-user (see migrate_auto_edit_usage_to_user_scoped).
+            Ok(usage) => self.save_auto_edit_usage("legacy", &usage)?,
             Err(err) => tracing::warn!(
                 "Failed to migrate legacy auto-edit usage {}: {}",
                 usage_path.display(),
@@ -1066,6 +1325,44 @@ impl Storage {
             ),
         }
 
+        Ok(())
+    }
+
+    /// One-time migration: copy the old single-row (`id=1`) `auto_edit_usage`
+    /// counter -- shared by every local user on installs from before
+    /// per-user quota scoping existed -- into `auto_edit_usage_by_user` under
+    /// the "legacy" pseudo-user. Idempotent via the `local_migrations` marker;
+    /// safe to call on every startup.
+    fn migrate_auto_edit_usage_to_user_scoped(&self) -> Result<()> {
+        if self.migration_applied(AUTO_EDIT_USAGE_USER_SCOPED_MIGRATION)? {
+            return Ok(());
+        }
+
+        let legacy_json: Option<String> = self
+            .conn()?
+            .query_row(
+                "SELECT usage_json FROM auto_edit_usage WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(json) = legacy_json {
+            let now = chrono::Utc::now().to_rfc3339();
+            self.conn()?.execute(
+                r#"
+                INSERT INTO auto_edit_usage_by_user (user_id, usage_json, updated_at)
+                VALUES ('legacy', ?1, ?2)
+                ON CONFLICT(user_id) DO NOTHING
+                "#,
+                params![json, now],
+            )?;
+            tracing::info!(
+                "Migrated legacy single-row auto-edit usage counter into per-user table (user_id=\"legacy\")"
+            );
+        }
+
+        self.mark_migration_applied(AUTO_EDIT_USAGE_USER_SCOPED_MIGRATION)?;
         Ok(())
     }
 
@@ -1125,6 +1422,63 @@ fn validate_safe_delete_media_extension(file_path: &Path) -> Result<()> {
 fn read_json_file<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let json = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&json)?)
+}
+
+/// Whether a recorded clip path can never resolve to a real file.
+///
+/// `AutoClipManager` used to persist a placeholder row (`pending/<clip_id>.mp4`) every
+/// time clip extraction failed. Those rows are pure ghosts: the path is relative, so it
+/// does not even denote a stable location, and nothing ever creates the file. Real clips
+/// are always written to an absolute path under the recorder's output directory, so a
+/// missing relative path (or a missing `pending/` placeholder) is unambiguously a ghost.
+///
+/// An existing file is never a ghost, whatever its shape — this must not delete rows for
+/// clips a user can still open.
+fn is_ghost_clip_path(file_path: &str) -> bool {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let path = Path::new(trimmed);
+    if path.exists() {
+        return false;
+    }
+
+    if !path.is_absolute() {
+        return true;
+    }
+
+    path.components()
+        .any(|component| component.as_os_str() == "pending")
+}
+
+/// Recursively sum file sizes under `root`. Missing directories and
+/// unreadable entries are treated as zero rather than an error -- this is a
+/// best-effort disk-usage figure for dashboard display, not a correctness
+/// boundary.
+fn dir_size_bytes(root: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(file_type) if file_type.is_dir() => stack.push(path),
+                Ok(file_type) if file_type.is_file() => {
+                    total += fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    total
 }
 
 /// Canvas template metadata for listing.
@@ -1408,5 +1762,393 @@ mod tests {
         ));
         assert!(outside_file.exists());
         assert!(storage.load_auto_edit_result("result_2").is_ok());
+    }
+
+    #[test]
+    fn save_game_metadata_does_not_eagerly_create_legacy_game_directory() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+
+        let metadata = GameMetadata {
+            game_id: "no-dir-game".to_string(),
+            champion: "Zed".to_string(),
+            game_mode: "Ranked".to_string(),
+            start_time: Utc::now(),
+            end_time: None,
+            result: None,
+            kda: None,
+        };
+
+        storage.create_game("no-dir-game", &metadata).unwrap();
+        storage.save_events("no-dir-game", &[]).unwrap();
+        storage
+            .save_clip_metadata(
+                "no-dir-game",
+                &ClipMetadata {
+                    file_path: storage
+                        .recordings_clips_dir()
+                        .join("clip.mp4")
+                        .to_string_lossy()
+                        .to_string(),
+                    thumbnail_path: None,
+                    event_type: models::EventType::ChampionKill,
+                    event_time: 1.0,
+                    priority: 1,
+                    duration: 10.0,
+                    created_at: Utc::now(),
+                    usage_count: 0,
+                },
+            )
+            .unwrap();
+
+        assert!(
+            !storage.game_path("no-dir-game").exists(),
+            "legacy per-game directory should not be eagerly created by create_game/save_*"
+        );
+
+        // Reads still work fully via SQLite despite the directory never existing.
+        assert_eq!(
+            storage.load_game_metadata("no-dir-game").unwrap().champion,
+            "Zed"
+        );
+        assert_eq!(storage.load_clip_metadata("no-dir-game").unwrap().len(), 1);
+    }
+
+    // ---- load_clip_metadata_with_duration_backfill ----
+
+    #[tokio::test]
+    async fn duration_backfill_skips_clips_that_already_have_a_positive_duration() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+
+        let clip = ClipMetadata {
+            file_path: storage
+                .recordings_clips_dir()
+                .join("already-measured.mp4")
+                .to_string_lossy()
+                .to_string(),
+            thumbnail_path: None,
+            event_type: models::EventType::ChampionKill,
+            event_time: 1.0,
+            priority: 1,
+            duration: 12.5,
+            created_at: Utc::now(),
+            usage_count: 0,
+        };
+        storage.save_clip_metadata("dur-game", &clip).unwrap();
+
+        let clips = storage
+            .load_clip_metadata_with_duration_backfill("dur-game")
+            .await
+            .unwrap();
+
+        assert_eq!(clips.len(), 1);
+        // Unchanged: no ffprobe should even be attempted for a clip that
+        // already has a recorded duration.
+        assert_eq!(clips[0].duration, 12.5);
+    }
+
+    #[tokio::test]
+    async fn duration_backfill_leaves_legacy_zero_duration_clips_unchanged_when_file_is_missing() {
+        // Regression guard for the "editor trim silently ignored on legacy
+        // clips" bug: a `duration <= 0.0` row must be *probed*, not just
+        // passed through -- but when the backing file can't be probed
+        // (missing here), the clip must survive with its existing duration
+        // rather than the whole list load failing.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+
+        let clip = ClipMetadata {
+            file_path: storage
+                .recordings_clips_dir()
+                .join("legacy-missing-file.mp4")
+                .to_string_lossy()
+                .to_string(),
+            thumbnail_path: None,
+            event_type: models::EventType::ChampionKill,
+            event_time: 1.0,
+            priority: 1,
+            duration: 0.0, // legacy row: duration was never recorded
+            created_at: Utc::now(),
+            usage_count: 0,
+        };
+        storage
+            .save_clip_metadata("dur-game-missing", &clip)
+            .unwrap();
+
+        let clips = storage
+            .load_clip_metadata_with_duration_backfill("dur-game-missing")
+            .await
+            .unwrap();
+
+        assert_eq!(clips.len(), 1);
+        assert_eq!(clips[0].duration, 0.0);
+
+        // The (unchanged) duration was not rewritten to storage either.
+        let reloaded = storage.load_clip_metadata("dur-game-missing").unwrap();
+        assert_eq!(reloaded[0].duration, 0.0);
+    }
+
+    #[tokio::test]
+    async fn duration_backfill_measures_and_persists_duration_for_a_real_file() {
+        // End-to-end happy path: requires a real `ffprobe` on PATH (or
+        // bundled), so skip gracefully in environments without one instead
+        // of failing the build.
+        if crate::utils::ffmpeg::get_ffprobe_path().is_err() {
+            eprintln!("skipping: ffprobe not available in this environment");
+            return;
+        }
+        let Ok(ffmpeg_path) = crate::utils::ffmpeg::get_ffmpeg_path() else {
+            eprintln!("skipping: ffmpeg not available in this environment");
+            return;
+        };
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+
+        let clip_path = storage.recordings_clips_dir().join("real-clip.mp4");
+        std::fs::create_dir_all(clip_path.parent().unwrap()).unwrap();
+
+        // Synthesize a tiny 1-second test video with real ffmpeg.
+        let status = std::process::Command::new(&ffmpeg_path)
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=64x64:d=1",
+                "-t",
+                "1",
+                clip_path.to_str().unwrap(),
+            ])
+            .status();
+        let Ok(status) = status else {
+            eprintln!("skipping: failed to invoke ffmpeg to synthesize test clip");
+            return;
+        };
+        if !status.success() {
+            eprintln!("skipping: ffmpeg failed to synthesize test clip");
+            return;
+        }
+
+        let clip = ClipMetadata {
+            file_path: clip_path.to_string_lossy().to_string(),
+            thumbnail_path: None,
+            event_type: models::EventType::ChampionKill,
+            event_time: 1.0,
+            priority: 1,
+            duration: 0.0, // legacy row: duration was never recorded
+            created_at: Utc::now(),
+            usage_count: 0,
+        };
+        storage.save_clip_metadata("dur-game-real", &clip).unwrap();
+
+        let clips = storage
+            .load_clip_metadata_with_duration_backfill("dur-game-real")
+            .await
+            .unwrap();
+
+        assert_eq!(clips.len(), 1);
+        assert!(
+            clips[0].duration > 0.0,
+            "expected ffprobe to measure a positive duration, got {}",
+            clips[0].duration
+        );
+
+        // Persisted (write-back), so a plain reload sees it too.
+        let reloaded = storage.load_clip_metadata("dur-game-real").unwrap();
+        assert!(reloaded[0].duration > 0.0);
+    }
+
+    #[test]
+    fn get_stats_reports_recordings_and_exports_disk_usage() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+
+        let segments_dir = storage.recordings_segments_dir();
+        fs::create_dir_all(&segments_dir).unwrap();
+        fs::write(segments_dir.join("segment_000.mp4"), vec![0u8; 1024]).unwrap();
+
+        let exports_dir = storage.exports_dir().join("auto_edit");
+        fs::create_dir_all(&exports_dir).unwrap();
+        fs::write(exports_dir.join("final.mp4"), vec![0u8; 2048]).unwrap();
+
+        let stats = storage.get_stats().unwrap();
+
+        assert_eq!(stats.recordings_dir_size_bytes, 1024);
+        assert_eq!(stats.exports_dir_size_bytes, 2048);
+        assert_eq!(stats.total_disk_usage_bytes, 1024 + 2048);
+        // Pre-existing field semantics unchanged: no clips in the DB, so 0.
+        assert_eq!(stats.total_size_bytes, 0);
+    }
+
+    #[test]
+    fn auto_edit_usage_is_scoped_per_user() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+
+        storage.increment_auto_edit_usage("user-a").unwrap();
+        storage.increment_auto_edit_usage("user-a").unwrap();
+        storage.increment_auto_edit_usage("user-b").unwrap();
+
+        assert_eq!(
+            storage.load_auto_edit_usage("user-a").unwrap().usage_count,
+            2
+        );
+        assert_eq!(
+            storage.load_auto_edit_usage("user-b").unwrap().usage_count,
+            1
+        );
+        assert_eq!(
+            storage.load_auto_edit_usage("user-c").unwrap().usage_count,
+            0
+        );
+
+        // Exhausting user-a's FREE-tier quota (5) must not affect user-b.
+        for _ in 0..3 {
+            storage.increment_auto_edit_usage("user-a").unwrap();
+        }
+        assert!(storage.check_auto_edit_quota("user-a", false).is_err());
+        assert!(storage.check_auto_edit_quota("user-b", false).is_ok());
+        // PRO is always unlimited regardless of accumulated usage.
+        assert_eq!(
+            storage.check_auto_edit_quota("user-a", true).unwrap(),
+            u32::MAX
+        );
+    }
+
+    #[test]
+    fn legacy_single_row_auto_edit_usage_migrates_to_user_scoped_table() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("lolshorts.db");
+
+        // Simulate an install that predates per-user quota scoping: seed the
+        // legacy single-row auto_edit_usage table directly, before Storage
+        // ever opens this path.
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS auto_edit_usage (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    usage_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                "#,
+            )
+            .unwrap();
+            let usage = AutoEditUsage {
+                month: AutoEditUsage::current_month(),
+                usage_count: 3,
+                last_updated: Utc::now(),
+                period_start: Utc::now(),
+            };
+            conn.execute(
+                "INSERT INTO auto_edit_usage (id, usage_json, updated_at) VALUES (1, ?1, ?2)",
+                params![
+                    serde_json::to_string(&usage).unwrap(),
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .unwrap();
+        }
+
+        let storage = Storage::new(temp_dir.path()).unwrap();
+
+        let migrated = storage.load_auto_edit_usage("legacy").unwrap();
+        assert_eq!(migrated.usage_count, 3);
+
+        // A brand-new user is unaffected by the migrated legacy counter.
+        let fresh = storage.load_auto_edit_usage("someone-else").unwrap();
+        assert_eq!(fresh.usage_count, 0);
+    }
+
+    // ---- Ghost clip rows (failed-extraction placeholders) ----
+
+    #[test]
+    fn relative_and_pending_paths_are_ghosts_but_real_files_are_not() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let real_clip = temp_dir.path().join("real.mp4");
+        fs::write(&real_clip, b"video").unwrap();
+
+        // The exact shape the old failed-extraction placeholder produced.
+        assert!(is_ghost_clip_path("pending/ChampionKill_412.mp4"));
+        assert!(is_ghost_clip_path("clips/whatever.mp4"));
+        assert!(is_ghost_clip_path("   "));
+        assert!(is_ghost_clip_path(""));
+        // Absolute, but under a `pending/` directory that was never created.
+        assert!(is_ghost_clip_path(
+            &temp_dir
+                .path()
+                .join("pending")
+                .join("merged_1_2.mp4")
+                .to_string_lossy()
+        ));
+
+        // A real file is never a ghost, and neither is a plain missing absolute path
+        // (that one belongs to the retention sweep's unmounted-volume logic).
+        assert!(!is_ghost_clip_path(&real_clip.to_string_lossy()));
+        assert!(!is_ghost_clip_path(
+            &temp_dir.path().join("gone.mp4").to_string_lossy()
+        ));
+    }
+
+    #[test]
+    fn sweep_ghost_clip_metadata_removes_only_placeholder_rows() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+
+        let game_id = "ghost-game";
+        storage
+            .create_game(
+                game_id,
+                &GameMetadata {
+                    game_id: game_id.to_string(),
+                    champion: "Ahri".to_string(),
+                    game_mode: "CLASSIC".to_string(),
+                    start_time: Utc::now(),
+                    end_time: None,
+                    result: None,
+                    kda: None,
+                },
+            )
+            .unwrap();
+
+        let real_clip = temp_dir.path().join("real.mp4");
+        fs::write(&real_clip, b"video").unwrap();
+
+        let make_clip = |path: String| ClipMetadata {
+            file_path: path,
+            thumbnail_path: None,
+            event_type: models::EventType::ChampionKill,
+            event_time: 42.0,
+            priority: 3,
+            duration: 12.0,
+            created_at: Utc::now(),
+            usage_count: 0,
+        };
+
+        storage
+            .save_clip_metadata(game_id, &make_clip(real_clip.to_string_lossy().to_string()))
+            .unwrap();
+        storage
+            .save_clip_metadata(
+                game_id,
+                &make_clip("pending/ChampionKill_412.mp4".to_string()),
+            )
+            .unwrap();
+        storage
+            .save_clip_metadata(game_id, &make_clip("pending/merged_10_18.mp4".to_string()))
+            .unwrap();
+        assert_eq!(storage.load_clip_metadata(game_id).unwrap().len(), 3);
+
+        assert_eq!(storage.sweep_ghost_clip_metadata().unwrap(), 2);
+
+        let remaining = storage.load_clip_metadata(game_id).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].file_path, real_clip.to_string_lossy());
+
+        // Idempotent: a second sweep has nothing left to remove.
+        assert_eq!(storage.sweep_ghost_clip_metadata().unwrap(), 0);
     }
 }

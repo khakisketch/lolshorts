@@ -41,19 +41,26 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://*.supabase.co wss://*.supabase.co"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https: asset: http://asset.localhost; media-src 'self' blob: asset: http://asset.localhost; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://*.supabase.co wss://*.supabase.co",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/**",
+          "$VIDEO/**",
+          "$DOWNLOAD/**",
+          "$DESKTOP/**",
+          "$DOCUMENT/**",
+          "$TEMP/**"
+        ]
+      }
     }
   },
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": ["nsis", "msi"],
-    "resources": [
-      "resources/*"
-    ],
-    "externalBin": [
-      "binaries/ffmpeg"
-    ],
+    "resources": ["resources/*"],
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",

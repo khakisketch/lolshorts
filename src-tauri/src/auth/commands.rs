@@ -1,6 +1,7 @@
 use super::{AuthManager, SubscriptionTier, User};
 use crate::error::{AppError, AppResult};
 use crate::AppState;
+use serde::de::DeserializeOwned;
 use tauri::State;
 use tracing::{error, info, warn};
 
@@ -86,6 +87,7 @@ fn status_string_for_license(license: &crate::supabase::License) -> String {
         crate::supabase::LicenseStatus::Expired => "expired",
         crate::supabase::LicenseStatus::Cancelled => "cancelled",
         crate::supabase::LicenseStatus::Inactive => "inactive",
+        crate::supabase::LicenseStatus::PastDue => "past_due",
         crate::supabase::LicenseStatus::None => "none",
     }
     .to_string()
@@ -540,33 +542,132 @@ pub async fn set_session(
 }
 
 // ============================================================================
-// Payment Commands - Deferred
-// Payment, Toss checkout, and subscription enforcement remain disabled until
-// non-payment readiness gates pass and a separate payment QA plan is approved.
+// Payment Commands
+// Default builds remain payment-deferred. Live billing is available only when
+// LOLSHORTS_PAYMENT_ENABLED=true and every request goes through the Supabase
+// billing Edge Function. The desktop client never grants PRO directly.
 // ============================================================================
 
 /// Subscription details structure for frontend compatibility
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubscriptionDetails {
     pub is_active: bool,
     pub tier: String,
     pub status: String,
     pub expires_at: Option<String>,
+    #[serde(default)]
     pub auto_renew: bool,
     pub payment_method: Option<String>,
     /// Indicates if payment system is available
+    #[serde(default)]
     pub payment_available: bool,
     /// Message about payment availability
     pub payment_message: Option<String>,
     pub reason: String,
     pub next_required_step: String,
+    #[serde(default)]
+    pub next_billing_date: Option<String>,
+    #[serde(default)]
+    pub cancel_at_period_end: bool,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub checkout_url: Option<String>,
+    #[serde(default)]
+    pub last_payment_error: Option<String>,
 }
 
-/// Get subscription details - Returns actual license status from database
-#[tauri::command]
-pub async fn get_subscription_details(
-    state: State<'_, AppState>,
-) -> Result<SubscriptionDetails, String> {
+#[derive(Debug, serde::Deserialize)]
+struct BillingErrorResponse {
+    message: Option<String>,
+    reason: Option<String>,
+    next_required_step: Option<String>,
+}
+
+fn parse_payment_enabled(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|value| value.trim().to_ascii_lowercase()),
+        Some(value) if matches!(value.as_str(), "1" | "true" | "yes" | "on")
+    )
+}
+
+fn payment_live_enabled() -> bool {
+    parse_payment_enabled(std::env::var("LOLSHORTS_PAYMENT_ENABLED").ok().as_deref())
+}
+
+fn billing_function_url(supabase_client: &crate::supabase::SupabaseClient) -> String {
+    std::env::var("LOLSHORTS_BILLING_FUNCTION_URL").unwrap_or_else(|_| {
+        format!(
+            "{}/functions/v1/billing",
+            supabase_client.project_url().trim_end_matches('/')
+        )
+    })
+}
+
+async fn call_billing_function<T: DeserializeOwned>(
+    state: &AppState,
+    method: reqwest::Method,
+    path: &str,
+    access_token: &str,
+    body: Option<serde_json::Value>,
+) -> Result<T, String> {
+    let supabase_client = state
+        .auth
+        .get_supabase_client()
+        .map_err(|e| format!("Billing backend configuration error: {}", e))?;
+    let url = format!(
+        "{}/{}",
+        billing_function_url(supabase_client).trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to create billing HTTP client: {}", e))?;
+    let mut request = http_client
+        .request(method, url)
+        .header("apikey", supabase_client.anon_key())
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", "application/json");
+
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Billing server request failed: {}", e))?;
+    let status = response.status();
+    let body_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read billing response: {}", e))?;
+
+    if !status.is_success() {
+        let parsed_error = serde_json::from_str::<BillingErrorResponse>(&body_text).ok();
+        let message = parsed_error
+            .as_ref()
+            .and_then(|error| error.message.clone().or(error.reason.clone()))
+            .unwrap_or_else(|| {
+                if body_text.trim().is_empty() {
+                    format!("Billing server returned {}", status)
+                } else {
+                    body_text.clone()
+                }
+            });
+        let next_step = parsed_error
+            .and_then(|error| error.next_required_step)
+            .unwrap_or_else(|| "Resolve the billing server error and retry.".to_string());
+        return Err(format!("{} Next step: {}", message, next_step));
+    }
+
+    serde_json::from_str::<T>(&body_text)
+        .map_err(|e| format!("Invalid billing server response: {}", e))
+}
+
+async fn deferred_subscription_details(state: &AppState) -> Result<SubscriptionDetails, String> {
     let user = state
         .auth
         .get_current_user()
@@ -574,7 +675,6 @@ pub async fn get_subscription_details(
 
     match user {
         Some(user) => {
-            // Fetch actual license from database
             let supabase_client = state
                 .auth
                 .get_supabase_client()
@@ -594,82 +694,198 @@ pub async fn get_subscription_details(
                 tier: entitlement.tier,
                 status: entitlement.status,
                 expires_at: entitlement.expires_at,
-                auto_renew: false,    // Auto-renew not yet implemented
-                payment_method: None, // Payment methods not yet stored
+                auto_renew: false,
+                payment_method: None,
                 payment_available: false,
                 payment_message: Some(PAYMENT_DEFERRED_REASON.to_string()),
                 reason: PAYMENT_DEFERRED_REASON.to_string(),
                 next_required_step: PAYMENT_DEFERRED_NEXT_STEP.to_string(),
+                next_billing_date: None,
+                cancel_at_period_end: false,
+                provider: Some("toss".to_string()),
+                checkout_url: None,
+                last_payment_error: None,
             })
         }
-        None => {
-            // Not logged in - return free tier
-            Ok(SubscriptionDetails {
-                is_active: false,
-                tier: "FREE".to_string(),
-                status: "none".to_string(),
-                expires_at: None,
-                auto_renew: false,
-                payment_method: None,
-                payment_available: false,
-                payment_message: Some("Log in to view subscription details".to_string()),
-                reason: "User is not authenticated.".to_string(),
-                next_required_step: "Log in before viewing subscription details.".to_string(),
-            })
-        }
+        None => Ok(SubscriptionDetails {
+            is_active: false,
+            tier: "FREE".to_string(),
+            status: "none".to_string(),
+            expires_at: None,
+            auto_renew: false,
+            payment_method: None,
+            payment_available: false,
+            payment_message: Some("Log in to view subscription details".to_string()),
+            reason: "User is not authenticated.".to_string(),
+            next_required_step: "Log in before viewing subscription details.".to_string(),
+            next_billing_date: None,
+            cancel_at_period_end: false,
+            provider: Some("toss".to_string()),
+            checkout_url: None,
+            last_payment_error: None,
+        }),
     }
 }
 
-/// Cancel subscription - Handles subscription cancellation requests
+async fn sync_entitlement_after_payment(state: &AppState, user: &User) {
+    let Ok(supabase_client) = state.auth.get_supabase_client() else {
+        warn!("Unable to refresh entitlement after payment: Supabase client unavailable");
+        return;
+    };
+
+    let entitlement = match supabase_client
+        .get_user_license(&user.id, &user.access_token)
+        .await
+    {
+        Ok(license) => entitlement_from_license(license),
+        Err(e) => {
+            warn!(
+                "Entitlement refresh after billing mutation failed; failing closed to FREE: {}",
+                e
+            );
+            entitlement_from_license(None)
+        }
+    };
+
+    sync_cached_user_tier(&state.auth, user, &entitlement);
+}
+
+/// Get subscription details from the authoritative billing server when live
+/// billing is enabled, otherwise return explicit deferred status.
 #[tauri::command]
-pub async fn cancel_subscription(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn get_subscription_details(
+    state: State<'_, AppState>,
+) -> Result<SubscriptionDetails, String> {
+    if !payment_live_enabled() {
+        return deferred_subscription_details(state.inner()).await;
+    }
+
+    let user = state
+        .auth
+        .get_current_user()
+        .map_err(|e| format!("Failed to get user: {}", e))?;
+    let Some(user) = user else {
+        return deferred_subscription_details(state.inner()).await;
+    };
+
+    call_billing_function(
+        state.inner(),
+        reqwest::Method::GET,
+        "subscription",
+        &user.access_token,
+        None,
+    )
+    .await
+}
+
+/// Cancel subscription through the authoritative billing server.
+#[tauri::command]
+pub async fn cancel_subscription(
+    state: State<'_, AppState>,
+) -> Result<SubscriptionDetails, String> {
+    if !payment_live_enabled() {
+        return Err(format!(
+            "{} No active subscription can be changed in this build.",
+            PAYMENT_DEFERRED_REASON
+        ));
+    }
+
     let user = state
         .auth
         .get_current_user()
         .map_err(|e| format!("Authentication required: {}", e))?;
-
     let Some(user) = user else {
         return Err("You must be logged in to manage your subscription.".to_string());
     };
 
-    let license = state
-        .auth
-        .get_supabase_client()
-        .map_err(|e| format!("Database connection error: {}", e))?
-        .get_user_license(&user.id, &user.access_token)
-        .await
-        .ok()
-        .flatten();
-    let entitlement = entitlement_from_license(license);
-
-    if entitlement.tier != "PRO" || entitlement.status != "active" {
-        return Err("You don't have an active subscription to cancel.".to_string());
-    }
-
-    tracing::info!("Deferred subscription cancellation requested for user");
-
-    Ok(format!(
-        "{} No active subscription can be changed in this build.",
-        PAYMENT_DEFERRED_REASON
-    ))
+    let details = call_billing_function(
+        state.inner(),
+        reqwest::Method::POST,
+        "cancel",
+        &user.access_token,
+        None,
+    )
+    .await?;
+    sync_entitlement_after_payment(state.inner(), &user).await;
+    Ok(details)
 }
 
-/// Open payment page - Navigates to the payment/upgrade page
+/// Open payment page by asking the trusted billing server to create checkout.
 #[tauri::command]
-pub async fn open_payment_page(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn open_payment_page(
+    state: State<'_, AppState>,
+    period: Option<String>,
+) -> Result<String, String> {
+    if !payment_live_enabled() {
+        return Err(format!(
+            "{} No checkout or paid upgrade is available in this build.",
+            PAYMENT_DEFERRED_REASON
+        ));
+    }
+
     let user = state
         .auth
         .get_current_user()
         .map_err(|e| format!("Authentication required: {}", e))?;
-
-    if user.is_none() {
+    let Some(user) = user else {
         return Err("Please log in first to upgrade to PRO.".to_string());
+    };
+
+    let details: SubscriptionDetails = call_billing_function(
+        state.inner(),
+        reqwest::Method::POST,
+        "checkout",
+        &user.access_token,
+        Some(serde_json::json!({
+            "period": period.unwrap_or_else(|| "MONTHLY".to_string())
+        })),
+    )
+    .await?;
+
+    details
+        .checkout_url
+        .ok_or_else(|| "Billing server did not return a checkout URL.".to_string())
+}
+
+/// Confirm a Toss redirect result through the trusted billing server. A success
+/// response only refreshes entitlement from Supabase; it does not grant PRO
+/// from client-provided payment data.
+#[tauri::command]
+pub async fn confirm_payment(
+    state: State<'_, AppState>,
+    payment_key: String,
+    order_id: String,
+    amount: i64,
+) -> Result<SubscriptionDetails, String> {
+    if !payment_live_enabled() {
+        return Err(format!(
+            "{} Payment confirmation is unavailable in this build.",
+            PAYMENT_DEFERRED_REASON
+        ));
     }
 
-    Ok(format!(
-        "{} No checkout or paid upgrade is available in this build.",
-        PAYMENT_DEFERRED_REASON
-    ))
+    let user = state
+        .auth
+        .get_current_user()
+        .map_err(|e| format!("Authentication required: {}", e))?;
+    let Some(user) = user else {
+        return Err("Please log in before confirming payment.".to_string());
+    };
+
+    let details = call_billing_function(
+        state.inner(),
+        reqwest::Method::POST,
+        "confirm",
+        &user.access_token,
+        Some(serde_json::json!({
+            "paymentKey": payment_key,
+            "orderId": order_id,
+            "amount": amount
+        })),
+    )
+    .await?;
+    sync_entitlement_after_payment(state.inner(), &user).await;
+    Ok(details)
 }
 
 #[cfg(test)]
@@ -757,5 +973,27 @@ mod tests {
         assert_eq!(entitlement.status, "expired");
         assert_eq!(entitlement.source, "supabase");
         assert!(!entitlement.payment_available);
+    }
+
+    #[test]
+    fn past_due_pro_license_fails_closed_to_free_entitlement() {
+        let license = test_license("PRO", crate::supabase::LicenseStatus::PastDue);
+
+        let entitlement = entitlement_from_license(Some(license));
+
+        assert_eq!(entitlement.tier, "FREE");
+        assert_eq!(entitlement.status, "past_due");
+        assert_eq!(entitlement.source, "supabase");
+        assert!(!entitlement.payment_available);
+    }
+
+    #[test]
+    fn parses_payment_enabled_flag_explicitly() {
+        assert!(parse_payment_enabled(Some("true")));
+        assert!(parse_payment_enabled(Some("1")));
+        assert!(parse_payment_enabled(Some("YES")));
+        assert!(!parse_payment_enabled(None));
+        assert!(!parse_payment_enabled(Some("false")));
+        assert!(!parse_payment_enabled(Some("enabled")));
     }
 }

@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -8,11 +9,18 @@ use super::super::{ClipInfo, Result, VideoError, VideoProcessor};
 use super::types::{AutoEditConfig, AutoEditProgress, AutoEditResult, AutoEditStatus};
 use crate::storage::Storage;
 
+/// YouTube Shorts 최대 길이(초). YouTube Shorts는 최대 3분(180초)까지 지원한다.
+pub(super) const MAX_TARGET_DURATION_SECS: u32 = 180;
+
 /// YouTube Shorts 생성을 위한 자동 편집기 (Auto-Composer)
 pub struct AutoComposer {
     pub(super) video_processor: Arc<VideoProcessor>,
     pub(super) storage: Arc<Storage>,
     pub(super) progress: Arc<RwLock<Option<AutoEditProgress>>>,
+    /// 최종 산출물(+썸네일)을 보존할 앱 관리 루트. None이면 %TEMP% 하위에 남긴다(하위호환).
+    pub(super) output_root: Option<PathBuf>,
+    /// Some(target_lufs)면 최종 단계에서 loudnorm 2-pass 정규화를 수행한다.
+    pub(super) normalize_lufs: Option<f64>,
 }
 
 impl AutoComposer {
@@ -22,6 +30,37 @@ impl AutoComposer {
             video_processor,
             storage,
             progress: Arc::new(RwLock::new(None)),
+            output_root: None,
+            normalize_lufs: None,
+        }
+    }
+
+    /// 산출물 루트 주입 (builder-style setter).
+    ///
+    /// 설정 시 모든 단계 산출물은 이 루트 하위에서 생성되고, 완료 후 중간 산출물은
+    /// 삭제되며 최종본 + 썸네일만 루트에 보존된다. 미설정이면 %TEMP% 동작을 유지한다.
+    pub fn set_output_root(&mut self, root: PathBuf) {
+        self.output_root = Some(root);
+    }
+
+    /// 최종 오디오 라우드니스 정규화 설정 (builder-style setter). None이면 끈다.
+    pub fn set_normalize_audio(&mut self, target_lufs: Option<f64>) {
+        self.normalize_lufs = target_lufs;
+    }
+
+    /// 단계별(중간) 산출물을 놓을 디렉토리.
+    pub(super) fn stage_dir(&self) -> PathBuf {
+        match &self.output_root {
+            Some(root) => root.join("intermediate"),
+            None => std::env::temp_dir().join("lolshorts_auto_edit"),
+        }
+    }
+
+    /// 최종본 + 썸네일을 놓을 디렉토리.
+    pub(super) fn final_dir(&self) -> PathBuf {
+        match &self.output_root {
+            Some(root) => root.clone(),
+            None => std::env::temp_dir().join("lolshorts_auto_edit"),
         }
     }
 
@@ -36,22 +75,21 @@ impl AutoComposer {
 
         self.update_progress(
             &job_id,
-            AutoEditStatus::Processing,
+            AutoEditStatus::SelectingClips,
             0.0,
             "자동 편집 초기화 중...".to_string(),
         )
         .await;
 
-        // YouTube Shorts 최대 60초 제한 검증
-        if config.target_duration > 60 {
+        // YouTube Shorts는 최대 3분(180초)까지 지원한다. 요청값(60/120/180 등)을
+        // 존중하고 상한 초과분만 잘라낸다.
+        let config = if config.target_duration > MAX_TARGET_DURATION_SECS {
             warn!(
-                "target_duration {}초가 YouTube Shorts 최대 60초를 초과합니다. 60초로 제한합니다.",
-                config.target_duration
+                "target_duration {}초가 YouTube Shorts 최대 {}초를 초과합니다. {}초로 제한합니다.",
+                config.target_duration, MAX_TARGET_DURATION_SECS, MAX_TARGET_DURATION_SECS
             );
-        }
-        let config = if config.target_duration > 60 {
             let mut clamped = config;
-            clamped.target_duration = 60;
+            clamped.target_duration = MAX_TARGET_DURATION_SECS;
             clamped
         } else {
             config
@@ -61,7 +99,7 @@ impl AutoComposer {
 
         self.update_progress(
             &job_id,
-            AutoEditStatus::Processing,
+            AutoEditStatus::SelectingClips,
             10.0,
             "DB에서 클립 불러오는 중...".to_string(),
         )
@@ -75,7 +113,7 @@ impl AutoComposer {
 
         self.update_progress(
             &job_id,
-            AutoEditStatus::Processing,
+            AutoEditStatus::SelectingClips,
             20.0,
             format!("{}개의 클립 중 최적의 클립 선택 중...", all_clips.len()),
         )
@@ -95,29 +133,56 @@ impl AutoComposer {
 
         self.update_progress(
             &job_id,
-            AutoEditStatus::Processing,
+            AutoEditStatus::PreparingClips,
             40.0,
             "클립 트리밍 및 전처리 중...".to_string(),
         )
         .await;
 
+        // 세대 손실 방지: 여기서는 재인코딩하지 않고 트림 구간(ClipSpec)만 계산한다.
+        // 실제 트림 + 9:16 스케일/크롭은 concatenate 단계의 단일 compose_with_options
+        // 패스가 한 번에 수행한다.
         let prepared_clips = self
             .prepare_clips(&selected_clips, config.target_duration)
             .await?;
 
+        // 이벤트 줌: 활성화 시 각 클립이 최종 타임라인에서 차지하는 구간의 중앙을
+        // 줌 이벤트 시각으로 사용한다(하이라이트는 대체로 클립 중앙에 위치).
+        let event_times: Option<Vec<f64>> = if config.enable_event_zoom {
+            let mut times = Vec::with_capacity(prepared_clips.len());
+            let mut offset = 0.0f64;
+            for (spec, clip) in prepared_clips.iter().zip(selected_clips.iter()) {
+                let effective = spec
+                    .trim_duration
+                    .unwrap_or_else(|| clip.duration.unwrap_or(10.0));
+                times.push(offset + effective / 2.0);
+                offset += effective;
+            }
+            info!("이벤트 줌 활성화: {}개 줌 시점 {:?}", times.len(), times);
+            Some(times)
+        } else {
+            None
+        };
+
         self.update_progress(
             &job_id,
-            AutoEditStatus::Processing,
+            AutoEditStatus::Concatenating,
             60.0,
             "클립 연결 중...".to_string(),
         )
         .await;
 
-        let concatenated_path = self.concatenate_clips(&prepared_clips).await?;
+        // 단일 패스 합성(트림 + 9:16 스케일/크롭 + 선택적 이벤트 줌).
+        let concatenated_path = self
+            .concatenate_clips(&prepared_clips, event_times.as_deref())
+            .await?;
+
+        // 완료 후 정리할 중간 산출물 추적(마지막 rendered 포함).
+        let mut produced: Vec<PathBuf> = vec![concatenated_path.clone()];
 
         self.update_progress(
             &job_id,
-            AutoEditStatus::Processing,
+            AutoEditStatus::ApplyingCanvas,
             75.0,
             "캔버스 및 워터마크 적용 중...".to_string(),
         )
@@ -129,23 +194,62 @@ impl AutoComposer {
         } else if !is_pro {
             self.apply_watermark_only(&concatenated_path).await?
         } else {
-            concatenated_path
+            concatenated_path.clone()
         };
+        if with_overlay != concatenated_path {
+            produced.push(with_overlay.clone());
+        }
 
         self.update_progress(
             &job_id,
-            AutoEditStatus::Processing,
+            AutoEditStatus::MixingAudio,
             90.0,
             "오디오 믹싱 중...".to_string(),
         )
         .await;
 
-        let final_path = if let Some(music) = &config.background_music {
-            self.mix_audio(&with_overlay, music, &config.audio_levels)
-                .await?
+        let mixed_path = if let Some(music) = &config.background_music {
+            let out = self
+                .mix_audio(&with_overlay, music, &config.audio_levels)
+                .await?;
+            if out != with_overlay {
+                produced.push(out.clone());
+            }
+            out
         } else {
-            with_overlay
+            with_overlay.clone()
         };
+
+        // 최종 라우드니스 정규화(오디오만 재인코딩, 비디오 -c copy). 설정 시에만 수행.
+        let rendered_path = if let Some(target_lufs) = self.normalize_lufs {
+            let normalized = self.stage_dir().join(format!(
+                "normalized_{}.mp4",
+                chrono::Local::now().format("%Y%m%d_%H%M%S")
+            ));
+            match self
+                .video_processor
+                .normalize_audio(&mixed_path, &normalized, target_lufs)
+                .await
+            {
+                Ok(path) => {
+                    if path != mixed_path {
+                        produced.push(path.clone());
+                    }
+                    path
+                }
+                Err(e) => {
+                    // 정규화 실패는 치명적이지 않다 — 정규화 전 결과를 그대로 사용.
+                    warn!("오디오 정규화 실패, 정규화 전 결과 사용: {}", e);
+                    mixed_path.clone()
+                }
+            }
+        } else {
+            mixed_path.clone()
+        };
+
+        // output_root가 설정되면 최종본을 앱 관리 루트로 이동하고 중간 산출물을 정리한다.
+        // 미설정 시 %TEMP% 동작을 그대로 유지한다(하위호환).
+        let final_path = self.finalize_output(&rendered_path, &job_id, &produced)?;
 
         let total_duration = self.video_processor.get_duration(&final_path).await?;
 
@@ -326,6 +430,24 @@ impl AutoComposer {
                     crate::storage::models::EventType::Custom(s) => s.clone(),
                 };
 
+                // 방어: 저장 시 duration=0.0 으로 기록된 클립은 실제 파일을 ffprobe로
+                // 실측해 선별/트리밍/목표길이 로직이 무력화되지 않도록 backfill 한다.
+                let duration = if clip.duration > 0.0 {
+                    clip.duration
+                } else {
+                    match self
+                        .video_processor
+                        .get_duration(Path::new(&clip.file_path))
+                        .await
+                    {
+                        Ok(measured) if measured > 0.0 => {
+                            info!("클립 duration 백필: {} -> {:.2}s", clip.file_path, measured);
+                            measured
+                        }
+                        _ => clip.duration, // 실측 실패 시 원값(0.0) 유지
+                    }
+                };
+
                 all_clips.push(ClipInfo {
                     id: clip_id_counter,
                     game_id: game_id.clone(),
@@ -334,7 +456,7 @@ impl AutoComposer {
                     priority: clip.priority as i32,
                     file_path: clip.file_path,
                     thumbnail_path: clip.thumbnail_path,
-                    duration: Some(clip.duration),
+                    duration: Some(duration),
                     usage_count: clip.usage_count,
                 });
 
@@ -406,5 +528,53 @@ impl AutoComposer {
 
     pub async fn get_progress(&self) -> Option<AutoEditProgress> {
         self.progress.read().await.clone()
+    }
+
+    /// 최종 렌더 결과를 확정한다.
+    ///
+    /// - output_root 설정 시: `rendered`를 `<root>/<job_id>.mp4`로 이동하고,
+    ///   중간 산출물(`produced`)을 모두 삭제해 최종본만 보존한다.
+    /// - 미설정 시: 이동/정리 없이 `rendered` 경로를 그대로 사용한다(하위호환).
+    pub(super) fn finalize_output(
+        &self,
+        rendered: &Path,
+        job_id: &str,
+        produced: &[PathBuf],
+    ) -> Result<PathBuf> {
+        // output_root 미설정 → 기존 %TEMP% 동작 유지(이동/정리 없음).
+        if self.output_root.is_none() {
+            return Ok(rendered.to_path_buf());
+        }
+
+        let final_dir = self.final_dir();
+        std::fs::create_dir_all(&final_dir).map_err(|e| VideoError::ProcessingError {
+            message: format!("산출물 루트 생성 실패 ({:?}): {}", final_dir, e),
+        })?;
+        let target = final_dir.join(format!("{}.mp4", job_id));
+
+        // rendered → target 이동(같은 볼륨이면 rename, 아니면 copy+remove 폴백).
+        if let Err(rename_err) = std::fs::rename(rendered, &target) {
+            std::fs::copy(rendered, &target).map_err(|e| VideoError::ProcessingError {
+                message: format!("최종본 이동 실패 (rename: {}, copy: {})", rename_err, e),
+            })?;
+            if let Err(e) = std::fs::remove_file(rendered) {
+                warn!("이동 후 원본 정리 실패 ({:?}): {}", rendered, e);
+            }
+        }
+
+        // 중간 산출물 정리 — 최종본은 제외. rendered는 이미 이동됐으므로 존재하지 않는다.
+        for path in produced {
+            if path.as_path() == target {
+                continue;
+            }
+            if path.exists() {
+                if let Err(e) = std::fs::remove_file(path) {
+                    warn!("중간 산출물 삭제 실패 ({:?}): {}", path, e);
+                }
+            }
+        }
+
+        info!("최종본 보존: {:?} (중간 {}개 정리)", target, produced.len());
+        Ok(target)
     }
 }

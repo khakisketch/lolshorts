@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { Games } from './Games';
+import { useEditorStore } from '@/stores/editorStore';
 
 // Mock i18n
 jest.mock('react-i18next', () => ({
@@ -119,13 +120,13 @@ describe('Games', () => {
       });
     });
 
-    it('should show dashboard navigation in empty state', async () => {
+    it('should offer a way back home in empty state', async () => {
       mockListGames.mockResolvedValue([]);
 
       render(<Games />);
 
       await waitFor(() => {
-        expect(screen.getByText('games.goToDashboard')).toBeInTheDocument();
+        expect(screen.getByText('games.goHome')).toBeInTheDocument();
       });
     });
   });
@@ -180,7 +181,7 @@ describe('Games', () => {
       });
     });
 
-    it('should allow free users to open Auto-Edit for a recorded game', async () => {
+    it('opens a recorded game in the editor via "다듬기"', async () => {
       mockListGames.mockResolvedValue(['game1']);
       mockGetGameMetadata.mockResolvedValue({
         game_id: 'game1',
@@ -194,16 +195,40 @@ describe('Games', () => {
 
       render(<Games />);
 
-      const autoEditButton = await screen.findByRole('button', { name: 'games.game.autoEdit' });
+      const polishButton = await screen.findByTestId('game-polish-game1');
 
-      expect(autoEditButton).toBeEnabled();
+      expect(polishButton).toBeEnabled();
 
-      fireEvent.click(autoEditButton);
+      fireEvent.click(polishButton);
 
+      // The editor works off the selected game, so the selection has to be set
+      // as well — navigating alone would open an empty editor.
+      expect(useEditorStore.getState().selectedGameId).toBe('game1');
       expect(mockNavigate).toHaveBeenCalledWith({
-        to: '/auto-edit',
+        to: '/editor',
         search: { gameId: 'game1' },
       });
+    });
+
+    it('no longer offers a manual auto-edit entry point', async () => {
+      mockListGames.mockResolvedValue(['game1']);
+      mockGetGameMetadata.mockResolvedValue({
+        game_id: 'game1',
+        champion: 'Lux',
+        game_mode: 'ARAM',
+        start_time: '2024-01-01T12:00:00Z',
+        end_time: '2024-01-01T12:20:00Z',
+        result: 'Win',
+        kda: { kills: 15, deaths: 2, assists: 20 },
+      });
+
+      render(<Games />);
+
+      await screen.findByTestId('game-polish-game1');
+
+      expect(
+        screen.queryByRole('button', { name: 'games.game.autoEdit' })
+      ).not.toBeInTheDocument();
     });
   });
 

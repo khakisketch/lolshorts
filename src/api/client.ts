@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import { toIpcArgs, type IpcArgWarning } from './ipcArgs';
 
 type TauriRuntimeWindow = Window & {
   __TAURI__?: unknown;
@@ -59,6 +60,31 @@ export async function listenToEvent<T>(
 }
 
 /**
+ * Surfaces argument-key problems during development only. A key that Tauri cannot
+ * resolve fails with an opaque "missing required key", so the warning names the
+ * offending key while the app is still in dev.
+ */
+function makeArgWarner(command: string): ((warning: IpcArgWarning) => void) | undefined {
+  if (!isDev()) {
+    return undefined;
+  }
+  return (warning) => {
+    if (warning.kind === 'unsupported-key') {
+      console.warn(
+        `[ipc] Command '${command}' passes argument key '${warning.key}', which is ` +
+          `neither lowercase snake_case nor lowerCamelCase. Tauri derives its key ` +
+          `with heck, so this may not match the Rust parameter name.`
+      );
+    } else {
+      console.warn(
+        `[ipc] Command '${command}': '${warning.key}' collides with another argument ` +
+          `on '${warning.camel}'; the later value wins and the earlier one is dropped.`
+      );
+    }
+  };
+}
+
+/**
  * Generic wrapper for Tauri invoke calls.
  * Handles structured error responses from the Rust backend.
  */
@@ -71,7 +97,7 @@ export async function cmd<T>(command: string, args?: Record<string, unknown>): P
   }
 
   try {
-    return await invoke<T>(command, args);
+    return await invoke<T>(command, toIpcArgs(args, makeArgWarner(command)));
   } catch (error: unknown) {
     // Only log detailed errors in development
     if (isDev()) {

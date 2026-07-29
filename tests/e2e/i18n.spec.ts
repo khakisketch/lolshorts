@@ -35,6 +35,11 @@ async function switchLanguage(page: Page, nativeName: string) {
 async function openSettings(page: Page) {
   await page.click('[data-testid="nav-settings"]');
   await expect(page.getByTestId("settings")).toBeVisible({ timeout: 10000 });
+  // 언어 선택기는 기본 5개에 들지 않아 "고급 설정" 안으로 내려갔다.
+  await page.getByTestId("advanced-settings-toggle").click();
+  await expect(page.locator("#language-select")).toBeVisible({
+    timeout: 10000,
+  });
 }
 
 test.describe("Internationalization (i18n)", () => {

@@ -48,12 +48,23 @@ pub struct AudioConfig {
     pub sample_rate: u32,
     /// Audio bitrate in kbps
     pub bitrate: u32,
+
+    /// Explicit WASAPI loopback device ID (from `AudioSettings::audio_device_id`).
+    /// Takes priority over `system_audio_device` when selecting the WASAPI
+    /// capture device (None = fall back to `system_audio_device`, then the
+    /// system default output device).
+    pub audio_device_id: Option<String>,
 }
 
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
-            record_microphone: true,
+            // Off by default: microphone capture is not wired into the
+            // actual Windows recording pipeline (`integration_backend::
+            // segment_recorder` never reads `record_microphone`), so
+            // defaulting this to `true` misled users into believing they
+            // were being recorded when they weren't.
+            record_microphone: false,
             microphone_device: None,
             microphone_volume: 120,
             record_system_audio: true,
@@ -61,6 +72,7 @@ impl Default for AudioConfig {
             system_audio_volume: 100,
             sample_rate: 48000,
             bitrate: 192,
+            audio_device_id: None,
         }
     }
 }
@@ -72,111 +84,12 @@ impl AudioConfig {
         self.record_microphone || self.record_system_audio
     }
 
-    /// Build FFmpeg audio input arguments
-    ///
-    /// Returns (input_args, filter_args, map_args, codec_args)
-    /// where each component is a Vec of FFmpeg argument strings
-    #[allow(dead_code)]
-    pub fn build_ffmpeg_args(&self) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
-        if !self.is_enabled() {
-            return (vec![], vec![], vec![], vec![]);
-        }
-
-        let mut input_args = Vec::new();
-        let mut filter_parts = Vec::new();
-        let mut map_args = Vec::new();
-        let codec_args = vec![
-            "-c:a".to_string(),
-            "aac".to_string(),
-            "-b:a".to_string(),
-            format!("{}k", self.bitrate),
-            "-ar".to_string(),
-            self.sample_rate.to_string(),
-        ];
-
-        // Track which audio input index we're on (starts at 1, since 0 is video)
-        let mut audio_input_idx = 1;
-        let mut mix_inputs = Vec::new();
-
-        // Add microphone input
-        if self.record_microphone {
-            input_args.push("-f".to_string());
-            input_args.push("dshow".to_string());
-            input_args.push("-i".to_string());
-
-            let mic_device = self
-                .microphone_device
-                .as_ref()
-                .map(|d| format!("audio={}", d))
-                .unwrap_or_else(|| {
-                    "audio=@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\\wave_in".to_string()
-                });
-            input_args.push(mic_device);
-
-            // Apply volume to microphone
-            let volume = self.microphone_volume as f32 / 100.0;
-            filter_parts.push(format!("[{}:a]volume={}[mic]", audio_input_idx, volume));
-            mix_inputs.push("[mic]".to_string());
-            audio_input_idx += 1;
-        }
-
-        // Add system audio input (loopback)
-        if self.record_system_audio {
-            input_args.push("-f".to_string());
-            input_args.push("dshow".to_string());
-            input_args.push("-i".to_string());
-
-            let sys_device = self
-                .system_audio_device
-                .as_ref()
-                .map(|d| format!("audio={}", d))
-                .unwrap_or_else(|| "audio=Stereo Mix".to_string());
-            input_args.push(sys_device);
-
-            // Apply volume to system audio
-            let volume = self.system_audio_volume as f32 / 100.0;
-            filter_parts.push(format!("[{}:a]volume={}[sys]", audio_input_idx, volume));
-            mix_inputs.push("[sys]".to_string());
-        }
-
-        // Build filter_complex for mixing
-        let filter_args = if mix_inputs.len() > 1 {
-            // Mix multiple audio sources
-            filter_parts.push(format!(
-                "{}amix=inputs={}[aout]",
-                mix_inputs.join(""),
-                mix_inputs.len()
-            ));
-            vec!["-filter_complex".to_string(), filter_parts.join(";")]
-        } else if mix_inputs.len() == 1 {
-            // Single audio source, just apply volume
-            vec![
-                "-filter_complex".to_string(),
-                filter_parts.join(";"),
-                "-map".to_string(),
-                "0:v".to_string(),
-                "-map".to_string(),
-                if self.record_microphone {
-                    "[mic]"
-                } else {
-                    "[sys]"
-                }
-                .to_string(),
-            ]
-        } else {
-            vec![]
-        };
-
-        // Add audio mapping
-        if mix_inputs.len() > 1 {
-            map_args.push("-map".to_string());
-            map_args.push("0:v".to_string());
-            map_args.push("-map".to_string());
-            map_args.push("[aout]".to_string());
-        }
-
-        (input_args, filter_args, map_args, codec_args)
-    }
+    // NOTE: `build_ffmpeg_args` (a DirectShow-based mic+system amix builder) was
+    // removed. Microphone and system-audio muxing now lives in
+    // `integration_backend::segment_recorder::save_clip`, which mixes the separately
+    // captured WASAPI/mic wavs (per-input `-ss` anchoring + `amix`) at clip-export
+    // time. This DirectShow builder was never wired into that pipeline and had no
+    // callers, so it was dead code.
 }
 
 /// Cached audio device manager for memory efficiency
@@ -186,6 +99,13 @@ pub struct AudioDeviceManager {
     pub last_refresh: std::time::Instant,
     /// Cache time-to-live (for cache management)
     pub cache_ttl: std::time::Duration,
+    /// True once at least one refresh attempt has completed successfully.
+    /// `last_refresh` is initialized to "now" at construction time, which
+    /// would otherwise look "fresh" under the TTL check and make
+    /// `refresh_if_needed` skip enumeration entirely on its very first
+    /// call — silently reporting the still-empty `devices` cache as
+    /// authoritative before any real enumeration ever ran.
+    initialized: bool,
 }
 
 impl Default for AudioDeviceManager {
@@ -200,6 +120,7 @@ impl AudioDeviceManager {
             devices: Vec::new(),
             last_refresh: std::time::Instant::now(),
             cache_ttl: std::time::Duration::from_secs(60), // Cache for 60 seconds
+            initialized: false,
         }
     }
 
@@ -209,38 +130,54 @@ impl AudioDeviceManager {
         &self.devices
     }
 
-    /// Refresh devices if cache expired
+    /// Whether `refresh_if_needed` may skip enumeration and reuse the
+    /// cached device list. Split out (pure, no I/O) so the TTL/first-call
+    /// logic is unit-testable without shelling out to FFmpeg.
+    fn should_skip_refresh(&self) -> bool {
+        self.initialized && self.last_refresh.elapsed() < self.cache_ttl
+    }
+
+    /// Refresh devices if cache expired (or has never been populated).
+    ///
+    /// This used to try a "Windows Core Audio API" step first by calling
+    /// the free `list_audio_devices()` function below — but that function
+    /// only ever *reads* this same manager's cache through
+    /// `AUDIO_DEVICE_MANAGER.try_lock()`. Called from here, while the
+    /// caller already holds this exact mutex via `.lock().await` to get
+    /// `&mut self`, that `try_lock()` always fails (tokio's `Mutex` is not
+    /// reentrant), so the "Core Audio" branch was permanently dead and
+    /// every refresh silently fell through to the FFmpeg DirectShow
+    /// fallback anyway. Enumerate via DirectShow directly instead — no
+    /// nested lock, so no reentrancy, and the fallback fills the cache
+    /// immediately in the same call rather than depending on a first
+    /// branch that could never succeed.
     #[allow(dead_code)]
     pub async fn refresh_if_needed(&mut self) -> Result<()> {
-        if self.last_refresh.elapsed() < self.cache_ttl {
+        if self.should_skip_refresh() {
             return Ok(()); // Use cached devices
         }
 
-        tracing::debug!("Refreshing cached audio devices...");
+        tracing::debug!("Refreshing cached audio devices via FFmpeg DirectShow...");
 
-        // Method 1: Try Windows Core Audio API (more reliable)
-        if let Ok(core_devices) = list_audio_devices() {
-            self.devices = core_devices;
-            self.last_refresh = std::time::Instant::now();
-            tracing::info!(
-                "Found {} audio devices via Windows Core Audio API",
-                self.devices.len()
-            );
-            return Ok(());
+        match list_audio_devices_ffmpeg() {
+            Ok(devices) => {
+                self.devices = devices;
+                self.last_refresh = std::time::Instant::now();
+                self.initialized = true;
+                tracing::info!(
+                    "Found {} audio devices via FFmpeg DirectShow",
+                    self.devices.len()
+                );
+                Ok(())
+            }
+            Err(e) => {
+                // Leave `initialized` false and `last_refresh` untouched so
+                // the *next* call retries immediately instead of treating
+                // this failed attempt as a "fresh" (but empty) cache.
+                tracing::warn!("FFmpeg DirectShow audio device enumeration failed: {}", e);
+                Err(e)
+            }
         }
-
-        // Method 2: Fallback to FFmpeg DirectShow (less reliable)
-        tracing::warn!("Windows Core Audio API failed, falling back to FFmpeg DirectShow");
-        if let Ok(ffmpeg_devices) = list_audio_devices_ffmpeg() {
-            self.devices = ffmpeg_devices;
-            self.last_refresh = std::time::Instant::now();
-            tracing::info!(
-                "Found {} audio devices via FFmpeg DirectShow",
-                self.devices.len()
-            );
-        }
-
-        Ok(())
     }
 
     /// Force refresh regardless of cache TTL
@@ -260,20 +197,22 @@ pub fn get_audio_device_manager() -> &'static tokio::sync::Mutex<AudioDeviceMana
     AUDIO_DEVICE_MANAGER.get_or_init(|| tokio::sync::Mutex::new(AudioDeviceManager::new()))
 }
 
-/// List available audio devices (optimized with caching and slice return)
+/// Get audio devices, refreshing the cache first if it is stale or has
+/// never been populated.
+///
+/// Previously this only read whatever was already cached (via
+/// `try_lock` + clone, without ever refreshing), so the very first call
+/// after app launch — before anything else happened to trigger a
+/// refresh — returned an empty `Ok(vec![])` instead of populating the
+/// list. It now performs the refresh itself under a single lock
+/// acquisition, so callers always get a populated (or honestly failed)
+/// result on the first call.
 #[allow(dead_code)]
-pub fn list_audio_devices() -> Result<Vec<AudioDevice>> {
-    tracing::debug!("Getting audio devices (cached)...");
-
+pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
     let manager = get_audio_device_manager();
-
-    // Use non-blocking try_lock to avoid deadlocks
-    let manager_guard = manager
-        .try_lock()
-        .map_err(|_| anyhow::anyhow!("Audio device manager is locked"))?;
-
-    // Clone only if needed (for backward compatibility)
-    Ok(manager_guard.devices.clone())
+    let mut manager_guard = manager.lock().await;
+    manager_guard.refresh_if_needed().await?;
+    Ok(manager_guard.get_devices().to_vec())
 }
 
 /// Get audio devices as slice (memory efficient - no copying)
@@ -362,30 +301,27 @@ mod tests {
     #[test]
     fn test_audio_config_default() {
         let config = AudioConfig::default();
-        assert!(config.record_microphone);
+        // Off by default: microphone capture isn't wired into the actual
+        // recording pipeline yet, so it must not silently default to "on"
+        // and mislead users into thinking they're being recorded.
+        assert!(!config.record_microphone);
         assert!(config.record_system_audio);
         assert_eq!(config.sample_rate, 48000);
         assert_eq!(config.bitrate, 192);
     }
 
     #[test]
-    fn test_audio_config_disabled() {
+    fn test_audio_config_disabled_is_not_enabled() {
         let config = AudioConfig {
             record_microphone: false,
             record_system_audio: false,
             ..Default::default()
         };
         assert!(!config.is_enabled());
-
-        let (input_args, filter_args, map_args, codec_args) = config.build_ffmpeg_args();
-        assert!(input_args.is_empty());
-        assert!(filter_args.is_empty());
-        assert!(map_args.is_empty());
-        assert!(codec_args.is_empty());
     }
 
     #[test]
-    fn test_audio_config_microphone_only() {
+    fn test_audio_config_enabled_when_only_microphone() {
         let config = AudioConfig {
             record_microphone: true,
             microphone_volume: 150,
@@ -393,37 +329,53 @@ mod tests {
             ..Default::default()
         };
         assert!(config.is_enabled());
-
-        let (input_args, filter_args, _, codec_args) = config.build_ffmpeg_args();
-        assert!(!input_args.is_empty());
-        assert!(!filter_args.is_empty());
-        assert!(!codec_args.is_empty());
-
-        // Check volume is applied (150% = 1.5)
-        let filter_str = filter_args.join(" ");
-        assert!(filter_str.contains("volume=1.5"));
     }
 
     #[test]
-    fn test_audio_config_both_sources() {
+    fn test_audio_config_enabled_when_only_system_audio() {
         let config = AudioConfig {
-            record_microphone: true,
-            microphone_volume: 120,
+            record_microphone: false,
             record_system_audio: true,
-            system_audio_volume: 100,
             ..Default::default()
         };
         assert!(config.is_enabled());
+    }
 
-        let (input_args, filter_args, map_args, codec_args) = config.build_ffmpeg_args();
-        assert!(!input_args.is_empty());
-        assert!(!filter_args.is_empty());
-        assert!(!map_args.is_empty());
-        assert!(!codec_args.is_empty());
+    // ---- AudioDeviceManager: refresh-skip decision (regression for the
+    // reentrant try_lock / cold-cache bug) ----
 
-        // Check mixing is configured
-        let filter_str = filter_args.join(" ");
-        assert!(filter_str.contains("amix"));
-        assert!(filter_str.contains("[aout]"));
+    #[test]
+    fn audio_device_manager_new_is_not_initialized() {
+        // `last_refresh` is set to "now" at construction, which would look
+        // "fresh" under a naive TTL check even though no enumeration has
+        // ever run — `initialized` must gate that.
+        let manager = AudioDeviceManager::new();
+        assert!(!manager.initialized);
+    }
+
+    #[test]
+    fn audio_device_manager_never_skips_refresh_before_first_successful_refresh() {
+        let manager = AudioDeviceManager::new();
+        // Fresh construction: `last_refresh.elapsed() < cache_ttl` would be
+        // true here, so only the `initialized` gate prevents a skip.
+        assert!(!manager.should_skip_refresh());
+    }
+
+    #[test]
+    fn audio_device_manager_skips_refresh_when_initialized_and_within_ttl() {
+        let mut manager = AudioDeviceManager::new();
+        manager.initialized = true;
+        manager.last_refresh = std::time::Instant::now();
+        manager.cache_ttl = std::time::Duration::from_secs(60);
+        assert!(manager.should_skip_refresh());
+    }
+
+    #[test]
+    fn audio_device_manager_does_not_skip_refresh_once_ttl_expires() {
+        let mut manager = AudioDeviceManager::new();
+        manager.initialized = true;
+        manager.cache_ttl = std::time::Duration::from_millis(1);
+        manager.last_refresh = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        assert!(!manager.should_skip_refresh());
     }
 }

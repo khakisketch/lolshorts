@@ -4,19 +4,12 @@
     "tagline": "Highlight Maker"
   },
   "nav": {
-    "dashboard": "Dashboard",
-    "games": "Games",
-    "editor": "Editor",
-    "autoEdit": "Auto-Edit",
     "results": "Results",
-    "youtube": "YouTube",
     "settings": "Settings",
-    "pro": "PRO",
     "sidebarLabel": "Application sidebar",
     "mainNavigation": "Main navigation",
-    "proRequired": "PRO required",
-    "replays": "Replays",
-    "userProfile": "User profile"
+    "userProfile": "User profile",
+    "home": "Home"
   },
   "auth": {
     "login": "Login",
@@ -116,6 +109,23 @@
         "blocked": "Blocked",
         "degraded": "Needs setup",
         "checking": "Checking"
+      },
+      "summaryReady": "Ready to record",
+      "summaryActionNeeded": "{{n}} item(s) need attention",
+      "summaryChecking": "Checking recording readiness",
+      "showDetails": "Details",
+      "hideDetails": "Hide",
+      "componentNames": {
+        "ffmpeg": "Recording engine",
+        "audio": "Audio",
+        "disk": "Storage",
+        "lcu": "League connection",
+        "gpu": "Graphics card"
+      },
+      "componentStatus": {
+        "ok": "OK",
+        "warning": "Warning",
+        "error": "Error"
       }
     },
     "stats": {
@@ -124,6 +134,8 @@
       "totalGames": "Total Games:",
       "totalClips": "Total Clips:",
       "storageUsed": "Storage Used:",
+      "clipLibrary": "Clip Library:",
+      "totalDiskUsage": "Total Disk Usage:",
       "comingSoon": "Coming soon"
     },
     "gettingStarted": {
@@ -136,7 +148,65 @@
         "autoRecord": "Recording starts automatically when game begins",
         "playNormal": "Play normally - highlights will be automatically detected based on kills, objectives, and multikills",
         "afterGame": "After the game, recording stops automatically and clips are saved for editing"
+      },
+      "show": "Show guide",
+      "hide": "Hide guide"
+    },
+    "hero": {
+      "connectSubtitle": "Launch the League client and we'll connect automatically",
+      "connectHint": "If it doesn't connect, run LoLShorts as administrator",
+      "waitingSubtitle": "Recording starts automatically when you enter a game",
+      "recordingSubtitle": "Automatically capturing your highlights"
+    },
+    "hotkeys": {
+      "title": "Hotkeys",
+      "toggleRecording": "Toggle auto-recording",
+      "manualSave": "Save clip manually",
+      "deleteLast": "Delete last clip"
+    },
+    "services": {
+      "title": "Service Status",
+      "labels": {
+        "capture": "Capture",
+        "replay": "Replay",
+        "autoEdit": "Auto Edit",
+        "publish": "Publish",
+        "storage": "Storage",
+        "service": "Service"
+      },
+      "status": {
+        "ready": "Ready",
+        "needsSetup": "Needs Setup",
+        "blocked": "Blocked",
+        "checking": "Checking"
+      },
+      "messages": {
+        "captureReady": "Ready to record",
+        "captureCheck": "Check recording components",
+        "replayReady": "Replay system ready",
+        "replayCheck": "Check League connection",
+        "autoEditReady": "AI editor ready",
+        "autoEditCheck": "Check system requirements",
+        "publishReady": "YouTube connected",
+        "publishCheck": "Connect account to publish",
+        "serviceOk": "All services healthy",
+        "serviceWarning": "Some warnings detected",
+        "serviceBlocked": "Service issues found",
+        "storageChecking": "Checking storage",
+        "storageOk": "Plenty of space ({{gb}}GB free)",
+        "storageWarning": "Low space ({{gb}}GB left)",
+        "storageBlocked": "Disk almost full ({{gb}}GB left)"
       }
+    },
+    "error": {
+      "title": "Error",
+      "retry": "Retry"
+    },
+    "recordingError": {
+      "title": "Recording status error"
+    },
+    "errors": {
+      "initialization": "Failed to initialize the dashboard"
     }
   },
   "games": {
@@ -146,7 +216,7 @@
     "noGames": "No games recorded yet",
     "noGamesRecorded": "No Games Recorded Yet",
     "playGame": "Play a League of Legends game to start recording",
-    "startRecordingPrompt": "Start recording games from the Dashboard to see them here.",
+    "startRecordingPrompt": "Check the recording status on Home and start a game.",
     "loadingGames": "Loading games...",
     "loadingGameData": "Loading game data...",
     "goToDashboard": "Go to Dashboard",
@@ -181,8 +251,23 @@
       "kdaFormat": "{{kills}}/{{deaths}}/{{assists}}",
       "viewClips": "View Clips",
       "delete": "Delete Game",
-      "autoEdit": "Auto-Edit"
-    }
+      "autoEdit": "Auto-Edit",
+      "gameId": "Game ID",
+      "complete": "Complete",
+      "inProgress": "In progress"
+    },
+    "goHome": "Go to Home",
+    "badge": {
+      "recorded": "Recorded game"
+    },
+    "searchPlaceholder": "Search by champion, mode or game ID",
+    "filterModePlaceholder": "All modes",
+    "filter": {
+      "allModes": "All modes"
+    },
+    "noGamesMatchFilters": "No games match your filters",
+    "tryDifferentFilters": "Try a different search term or mode.",
+    "clearFilters": "Clear filters"
   },
   "editor": {
     "title": "Video Editor",
@@ -194,7 +279,9 @@
     "chooseGame": "Choose a game",
     "selectGamePrompt": "Select a game to load its clips and start building your video timeline.",
     "loadingClips": "Loading clips...",
+    "loadingGames": "Loading games...",
     "errorLoadingClips": "Error Loading Clips",
+    "errorLoadingGames": "Error Loading Games",
     "backToGameSelection": "Back to Game Selection",
     "retry": "Retry",
     "changeGame": "Change Game",
@@ -226,7 +313,8 @@
       "clips": "Clips",
       "preview": "Preview",
       "settings": "Settings",
-      "timeline": "Timeline"
+      "timeline": "Timeline",
+      "effects": "Effects"
     },
     "tools": {
       "trim": "Trim",
@@ -271,11 +359,18 @@
       "processingClips": "Processing clips...",
       "mergingClips": "Merging clips...",
       "percentComplete": "{{percent}}% complete",
-      "noClipSourcePath": "No clip source path available"
+      "noClipSourcePath": "No clip source path available",
+      "fileFormat": "File Format",
+      "resolution": "Resolution",
+      "resolutionGif": "Source clip resolution",
+      "resolutionMontage": "Source clip resolution",
+      "resolutionFollowsAspectRatio": "Resolution follows the aspect ratio set in the composition panel.",
+      "proRequired": "Exporting Shorts and Montage videos requires a PRO subscription. GIF export stays free."
     },
     "preview": {
       "noCaptions": "No captions available",
-      "selectClipHint": "Select a clip from the library to preview"
+      "selectClipHint": "Select a clip from the library to preview",
+      "trimmedRangeNotice": "Trimmed preview: {{start}} - {{end}}"
     },
     "composition": {
       "title": "Composition Settings",
@@ -362,6 +457,44 @@
       "xPosition": "X Position (%)",
       "yPosition": "Y Position (%)",
       "enterImagePath": "Enter image path:"
+    },
+    "sidebarTabs": {
+      "composition": "Composition",
+      "effects": "Effects"
+    },
+    "effects": {
+      "title": "Video Effects",
+      "selectClipFirst": "Select a clip to apply effects.",
+      "slowMotion": "Slow Motion",
+      "speed": "Speed",
+      "slowMotionHint": "0.25x = very slow, 0.75x = slightly slow",
+      "applySlowMotion": "Apply Slow Motion",
+      "colorGrading": "Color Grading",
+      "brightness": "Brightness",
+      "contrast": "Contrast",
+      "saturation": "Saturation",
+      "applyColorGrading": "Apply Color Grading",
+      "textOverlay": "Text Overlay",
+      "text": "Text",
+      "textPlaceholder": "Enter overlay text...",
+      "position": "Position",
+      "positions": {
+        "topLeft": "Top Left",
+        "topRight": "Top Right",
+        "center": "Center",
+        "bottomLeft": "Bottom Left",
+        "bottomRight": "Bottom Right"
+      },
+      "color": "Color",
+      "fontSize": "Font Size",
+      "applyTextOverlay": "Apply Text Overlay",
+      "chainedEffects": "Chained Effects",
+      "chainedHint": "Apply slow motion, color grading, and text overlay in a single pass for better performance.",
+      "applyAllEffects": "Apply All Effects",
+      "slowMotionApplied": "Slow motion applied",
+      "colorGradingApplied": "Color grading applied",
+      "textOverlayApplied": "Text overlay applied",
+      "allEffectsApplied": "All effects applied"
     }
   },
   "autoEdit": {
@@ -462,14 +595,17 @@
     "priorityProcessing": "Priority processing",
     "advancedFeatures": "Advanced features",
     "quotaExhausted": "You've used all your monthly auto-edits. Upgrade to PRO for unlimited access.",
-    "quotaExhaustedAlert": "You've reached your monthly auto-edit limit. Upgrade to PRO to continue creating highlights."
+    "quotaExhaustedAlert": "You've reached your monthly auto-edit limit. Upgrade to PRO to continue creating highlights.",
+    "eventZoom": {
+      "label": "Auto zoom on kill events",
+      "experimental": "Experimental",
+      "description": "Automatically zooms in at kill/event timestamps."
+    }
   },
   "results": {
     "title": "Results",
-    "description": "View and manage your generated auto-edit videos",
     "refresh": "Refresh",
     "loading": "Loading results...",
-    "goToAutoEdit": "Create Auto-Edit",
     "confirmDelete": "Are you sure you want to delete this result? This action cannot be undone.",
     "deleteConfirmTitle": "Delete Result",
     "deleteConfirmDescription": "Are you sure you want to delete this auto-edit result? The video file will also be deleted and this action cannot be undone.",
@@ -482,7 +618,10 @@
     "unknown": "Unknown",
     "empty": {
       "title": "No Results Yet",
-      "description": "Generate your first auto-edit video to see results here"
+      "description": "Generate your first auto-edit video to see results here",
+      "noVideosTitle": "No videos yet",
+      "noVideosDescription": "Play a game and your highlights will pile up here. Check the recording status on Home.",
+      "goHome": "Go to Home"
     },
     "short": "Short",
     "duration": "Duration",
@@ -491,7 +630,43 @@
     "template": "Template",
     "withMusic": "With Music",
     "play": "Play",
-    "delete": "Delete"
+    "delete": "Delete",
+    "pageDescription": "Every recorded game and every video made for you, in one place.",
+    "thumbnailAlt": "Video thumbnail",
+    "polish": "Polish",
+    "share": "Share",
+    "tabs": {
+      "highlights": "Highlights",
+      "games": "Recorded games",
+      "replays": "Replays"
+    },
+    "highlights": {
+      "title": "My highlights",
+      "description": "Videos made for you automatically. Play, polish or share them."
+    },
+    "badge": {
+      "autoEdit": "Auto-edit"
+    },
+    "shareDialog": {
+      "title": "Share on YouTube",
+      "description": "Upload this video straight to YouTube. If your channel is not connected yet, connect it under \"Account\" first.",
+      "tabs": {
+        "upload": "Upload",
+        "account": "Account",
+        "history": "Upload history"
+      }
+    },
+    "searchPlaceholder": "Search by result or job ID",
+    "filterStatusPlaceholder": "All upload statuses",
+    "filter": {
+      "allStatuses": "All upload statuses"
+    },
+    "noResultsMatchFilters": "No videos match your filters",
+    "tryDifferentFilters": "Try a different search term or status.",
+    "clearFilters": "Clear filters",
+    "openFile": "Open file",
+    "showInFolder": "Show in folder",
+    "makeHighlight": "Make highlight"
   },
   "youtube": {
     "title": "YouTube",
@@ -522,7 +697,8 @@
       "waitingForAuthorization": "Waiting for authorization in browser. Please complete the authentication process. The app will automatically connect when done.",
       "automaticAuth": "Authentication is handled automatically. Simply authorize in your browser and this app will connect your account.",
       "authInstructions": "Please complete authentication in your browser and paste the authorization code in the callback URL.\\n\\nThe callback URL will look like:\\nhttp://localhost:8080/oauth2/callback?code=YOUR_CODE&state=YOUR_STATE",
-      "revokeAccess": "By connecting, you authorize LoLShorts to upload videos on your behalf. You can revoke access at any time from your Google Account settings."
+      "revokeAccess": "By connecting, you authorize LoLShorts to upload videos on your behalf. You can revoke access at any time from your Google Account settings.",
+      "authTimeout": "Authorization timed out. Please try again."
     },
     "upload": {
       "title": "Upload Video",
@@ -599,7 +775,8 @@
       "queueTitle": "Upload Queue",
       "scheduledFor": "Scheduled for",
       "queued": "Queued",
-      "cancelScheduled": "Cancel scheduled upload"
+      "cancelScheduled": "Cancel scheduled upload",
+      "appMustBeRunningNotice": "This is not a native YouTube schedule - LoLShorts must be running at the scheduled time for the upload to start."
     }
   },
   "statusDashboard": {
@@ -637,11 +814,147 @@
       "ffmpegPresent": "Is FFmpeg present in the binaries folder?",
       "audioDevice": "Is an audio device available?",
       "diskSpace": "Is there sufficient disk space?"
+    },
+    "readiness": {
+      "title": "Pre-flight Readiness",
+      "ready": "Ready",
+      "notReady": "Not Ready",
+      "components": "Components",
+      "blockers": "Action items",
+      "noBlockers": "No blockers"
+    },
+    "diagnostics": {
+      "description": "Updater, signing, and runtime configuration visibility"
     }
   },
   "settings": {
     "title": "Settings",
     "saved": "Settings saved",
+    "basic": {
+      "pageDescription": "Set these five and the rest runs itself. Every individual option is still there, under Advanced.",
+      "customLabel": "Custom",
+      "highlights": {
+        "title": "What to capture",
+        "description": "Choose how wide a net the automatic clipping casts",
+        "customHint": "You changed individual events under Advanced. Picking one below resets them to that bundle.",
+        "options": {
+          "everything": {
+            "label": "Capture a lot",
+            "description": "Includes deaths, assists and turrets. More clips to choose from."
+          },
+          "balanced": {
+            "label": "Balanced (recommended)",
+            "description": "Kills, multikills, assists and the major objectives."
+          },
+          "best_only": {
+            "label": "Only the sure things",
+            "description": "Multikills, steals and Baron-level moments only. Fewer clips."
+          }
+        },
+        "scenesLabel": "What gets captured",
+        "scenesEmpty": "Nothing selected. Pick one above.",
+        "scenes": {
+          "record_kills": "Kills",
+          "record_multikills": "Multikills",
+          "record_first_blood": "First Blood",
+          "record_shutdown": "Shutdowns",
+          "record_trade_kill": "Trades",
+          "record_outplay": "Outplays",
+          "record_low_hp": "Clutch survivals",
+          "record_assists": "Assists",
+          "record_deaths": "Deaths",
+          "record_steal": "Steals",
+          "record_baron": "Baron",
+          "record_elder": "Elder Dragon",
+          "record_dragon": "Dragon",
+          "record_herald": "Herald",
+          "record_voidgrubs": "Voidgrubs",
+          "record_atakhan": "Atakhan",
+          "record_turret": "Turrets",
+          "record_inhibitor": "Inhibitors",
+          "record_ace": "Ace",
+          "record_game_end": "Game end"
+        },
+        "clipLength": {
+          "kill": "Kills, objectives, most events",
+          "multikill": "Multikills",
+          "steal": "Steals",
+          "death": "Deaths",
+          "game_end": "Game end"
+        }
+      },
+      "quality": {
+        "title": "Quality",
+        "description": "Sets frame rate and quality together",
+        "note": "Capture resolution follows the game window. What you pick here is frame rate and quality (file size).",
+        "options": {
+          "high": {
+            "label": "High",
+            "description": "60fps · high quality · larger files"
+          },
+          "medium": {
+            "label": "Normal (recommended)",
+            "description": "60fps · standard quality · fits most PCs"
+          },
+          "low": {
+            "label": "Low",
+            "description": "30fps · light · smallest files and lowest load"
+          }
+        },
+        "specs": {
+          "frameRate": "Frame rate",
+          "frameRateValue": "{{fps}} fps",
+          "bitrate": "Quality (bitrate)",
+          "sizePerMinute": "Size per minute",
+          "codec": "Format",
+          "captureSize": "Capture size",
+          "captureSizeValue": "Same as the game window"
+        }
+      },
+      "sound": {
+        "title": "Sound",
+        "description": "Choose what audio goes into the recording",
+        "options": {
+          "game": {
+            "label": "Game audio",
+            "description": "Records the game's sound only"
+          },
+          "gameMic": {
+            "label": "Game audio + microphone",
+            "description": "Records the game's sound together with your voice"
+          },
+          "mute": {
+            "label": "Silent",
+            "description": "Records video only, with no audio"
+          }
+        },
+        "systemAudioNote": "Game sound includes everything your PC plays — Discord calls, music, notifications. Check before you upload."
+      },
+      "storage": {
+        "title": "Storage location",
+        "description": "Where recordings and edited results are kept",
+        "pathUnknown": "Could not determine the storage path",
+        "openFolder": "Open folder",
+        "openFailed": "Could not open the folder",
+        "autoCleanupLabel": "Clean up automatically when space runs out",
+        "autoCleanupDescription": "Deletes the oldest clips first to free space",
+        "limitLabel": "Storage limit (GB)",
+        "limitDescription": "Once total usage passes this, the oldest clips are deleted",
+        "limitDisabledHint": "Turn on automatic cleanup for this limit to apply"
+      },
+      "autoStart": {
+        "title": "Start with League",
+        "description": "LoLShorts starts automatically when League of Legends launches",
+        "label": "Start automatically"
+      },
+      "recommendedBadge": "Recommended",
+      "seconds": "{{count}}s"
+    },
+    "advanced": {
+      "title": "Advanced settings",
+      "description": "Individual events, codec and encoder, audio devices, clip length, game modes, hotkeys, diagnostics",
+      "syncNotice": "Changes here show up on the basic screen right away. Any combination that differs from a bundle shows as \"Custom\" there."
+    },
     "license": {
       "title": "License & Subscription",
       "description": "Your current plan and subscription details",
@@ -794,7 +1107,10 @@
           "selectDevice": "Select device",
           "microphoneVolume": "Microphone Volume",
           "muted": "Muted",
-          "boost": "200% (Boost)"
+          "boost": "200% (Boost)",
+          "comingSoon": "Coming soon",
+          "disabledNotice": "Microphone recording is not supported in the current version (coming soon).",
+          "mixingNotice": "The microphone is mixed into the same track as system audio."
         },
         "systemAudioRecording": {
           "title": "System Audio Recording",
@@ -804,6 +1120,7 @@
           "systemAudioVolume": "System Audio Volume",
           "defaultDevice": "Default Device",
           "selectDevice": "Select device",
+          "deviceListHint": "This list matches the actual capture device names used when recording.",
           "muted": "Muted",
           "boost": "200% (Boost)"
         },
@@ -913,7 +1230,8 @@
             "r2560x1440": "2560x1440 (1440p)",
             "r3840x2160": "3840x2160 (4K)"
           },
-          "recommended": "Recommended"
+          "recommended": "Recommended",
+          "captureNotice": "Recording capture always uses the game window's native resolution; this setting only sets the export/processing quality target."
         },
         "frameRate": {
           "title": "Frame Rate",
@@ -1054,6 +1372,10 @@
       "saveFailed": "Failed to save settings",
       "resetFailed": "Failed to reset settings",
       "licenseFailed": "Failed to load license info"
+    },
+    "diagnostics": {
+      "title": "Diagnostics & Support",
+      "description": "Service health, support summary, and system diagnostics"
     }
   },
   "common": {
@@ -1258,6 +1580,22 @@
       "active": "Recording buffer active - Press F8 to toggle",
       "inactive": "Press F8 or click Start to begin monitoring"
     },
+    "readiness": {
+      "blocked": "Recording cannot start",
+      "warning": "Recording will start, but check these",
+      "codes": {
+        "audio_disabled": "Audio recording is turned off in settings",
+        "audio_hardware_unverified": "Audio is on, but the actual device capture has not been verified yet",
+        "capture_hardware_unverified": "Screen capture can only be fully verified once a game window is open",
+        "disk_space_unknown": "Could not determine free disk space",
+        "encoder_unknown": "Encoder availability could not be probed safely",
+        "ffprobe_unknown": "ffprobe is not available or could not be located",
+        "lcu_not_connected": "Not connected to the League of Legends client",
+        "recording_already_active": "Recording is already active",
+        "recording_status_error": "Recording manager is in an error state",
+        "recording_status_processing": "Processing a previous stop/save operation"
+      }
+    },
     "manualReplay": {
       "title": "Manual Replay Save",
       "description": "Save the last N seconds of gameplay",
@@ -1294,12 +1632,14 @@
       "failedToStop": "Failed to Stop",
       "failedToSave": "Failed to Save Replay",
       "failedToSaveSettings": "Failed to Save Settings"
-    }
+    },
+    "audioNotCaptured": "System audio is not being captured.",
+    "micNotCaptured": "Microphone audio is not being captured."
   },
   "replays": {
     "title": "Replays",
     "refresh": "Refresh",
-    "noMatches": "No matches found or LCU not connected.",
+    "noMatches": "Not connected to the League client",
     "victory": "Victory",
     "defeat": "Defeat",
     "mode": "Mode",
@@ -1320,6 +1660,23 @@
       "launchingReplayDesc": "Select a player to record their highlights!",
       "loadError": "Error",
       "loadErrorDesc": "Failed to load match history."
+    },
+    "champion": "Champion",
+    "championNumber": "Champion #{{id}}",
+    "badge": {
+      "match": "Replay match"
+    },
+    "searchPlaceholder": "Search by mode or game ID",
+    "filterWinPlaceholder": "All results",
+    "filter": {
+      "allResults": "All results"
+    },
+    "noMatchesDesc": "Start the League of Legends client and your recent matches will show up here.",
+    "noMatchesMatchFilters": "No matches found",
+    "tryDifferentFilters": "Try a different search term or result filter.",
+    "clearFilters": "Clear filters",
+    "emptyState": {
+      "action": "Refresh history"
     }
   },
   "protectedFeature": {
@@ -1569,6 +1926,80 @@
       "playbackFailed": "Playback failed",
       "loadFailed": "Failed to load video",
       "loadFailedDesc": "The video file could not be loaded. It may be corrupted or in an unsupported format."
+    }
+  },
+  "support": {
+    "summary": {
+      "title": "Support & Diagnostics",
+      "copyButton": "Copy Support Summary",
+      "copied": "Copied!",
+      "copiedTitle": "Summary Copied",
+      "copiedDesc": "You can now paste this into your support ticket.",
+      "errorTitle": "Error",
+      "errorDesc": "Failed to generate support summary or copy it to the clipboard.",
+      "disclaimer": "The support summary contains app version, connection state, system metrics, disk capacity, and diagnostic checks. It does NOT include passwords, OAuth tokens, refresh tokens, payment keys, private keys, private media, screenshots, or personal files."
+    }
+  },
+  "events": {
+    "championKill": "Kill",
+    "turretKill": "Turret",
+    "inhibitorKill": "Inhibitor",
+    "dragonKill": "Dragon",
+    "baronKill": "Baron",
+    "ace": "Ace",
+    "firstBlood": "First Blood",
+    "unknown": "Highlight",
+    "custom": "{{name}}",
+    "multikill": {
+      "double": "Double Kill",
+      "triple": "Triple Kill",
+      "quadra": "Quadra Kill",
+      "penta": "Penta Kill",
+      "other": "{{count}} Kills"
+    }
+  },
+  "home": {
+    "status": {
+      "recording": {
+        "title": "Recording",
+        "description": "Clips are cut automatically when the game ends"
+      },
+      "ready": {
+        "title": "Ready",
+        "description": "Recording starts automatically when a game begins"
+      },
+      "idle": {
+        "title": "Waiting for League",
+        "description": "Launch League of Legends and it connects automatically"
+      },
+      "settingsLink": "Recording settings",
+      "paused": {
+        "title": "Paused",
+        "description": "Automatic recording is off. Turn it back on to capture games"
+      },
+      "pause": "Pause",
+      "resume": "Resume",
+      "startFailed": "Could not start automatic recording",
+      "stopFailed": "Could not stop automatic recording"
+    },
+    "clips": {
+      "title": "Fresh clips",
+      "seeAll": "See past games",
+      "seconds": "{{count}}s",
+      "toggleLabel": "Select {{event}} clip, {{seconds}} seconds",
+      "playLabel": "Play {{event}} clip"
+    },
+    "empty": {
+      "title": "No clips yet",
+      "description": "Play a game of League of Legends and your kills, multikills and objectives will show up here. Just leave the app running.",
+      "action": "Choose what to capture"
+    },
+    "actions": {
+      "selectHint": "Pick clips to turn into a video",
+      "selected": "{{count}} selected",
+      "clear": "Clear",
+      "trim": "Trim",
+      "makeHighlight": "Make highlight video"
     }
   }
 }

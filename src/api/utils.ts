@@ -1,10 +1,5 @@
 import { cmd } from "./client";
-
-interface StorageStats {
-  total_games: number;
-  total_clips: number;
-  total_size_bytes: number;
-}
+import type { StorageStats } from "@/types/storage";
 
 export interface DiskSpaceInfo {
   available_gb: number;

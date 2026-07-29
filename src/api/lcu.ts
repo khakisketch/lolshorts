@@ -39,6 +39,8 @@ export interface UnifiedGameStatus {
   game_time: number | null;
   is_monitoring: boolean;
   is_recording: boolean;
+  /** Clips saved during the current game session (used for the game-end notification). */
+  session_clip_count: number;
 }
 
 export const lcuApi = {

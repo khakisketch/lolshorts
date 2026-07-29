@@ -337,6 +337,63 @@ impl SupabaseClient {
         }
     }
 
+    /// Invoke a Supabase Edge Function with the user's access token.
+    ///
+    /// Posts `body` as JSON to `{project_url}/functions/v1/{name}` with the
+    /// caller's bearer token so the function can verify the JWT (mirrors the
+    /// `apikey` + `Authorization` header convention used elsewhere in this
+    /// client). Uses a deliberately short per-request timeout: callers treat a
+    /// failure here as "server unreachable" and fall back to their local path,
+    /// so a slow function must not stall a user-facing action.
+    pub async fn call_edge_function<B: serde::Serialize>(
+        &self,
+        name: &str,
+        access_token: &str,
+        body: &B,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/functions/v1/{}",
+            self.config.project_url.trim_end_matches('/'),
+            name
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .header("apikey", &self.config.anon_key)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(5))
+            .json(body)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            response.json().await.map_err(|e| {
+                SupabaseError::InvalidResponse(format!(
+                    "Failed to parse edge function '{}' response: {}",
+                    name, e
+                ))
+            })
+        } else {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            tracing::warn!(
+                "Edge function '{}' returned {}: {}",
+                name,
+                status,
+                error_text
+            );
+            Err(SupabaseError::ApiError(format!(
+                "Edge function '{}' failed: {} - {}",
+                name, status, error_text
+            )))
+        }
+    }
+
     /// Generic database query method
     ///
     /// # Arguments

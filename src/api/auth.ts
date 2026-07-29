@@ -9,7 +9,7 @@ export interface User {
 
 export interface EntitlementInfo {
   tier: 'FREE' | 'PRO';
-  status: 'active' | 'inactive' | 'expired' | 'cancelled' | 'none';
+  status: 'active' | 'inactive' | 'expired' | 'cancelled' | 'past_due' | 'none';
   expires_at: string | null;
   source: 'supabase';
   checked_at: string;
@@ -38,6 +38,11 @@ export interface SubscriptionDetails {
   payment_message: string | null;
   reason: string;
   next_required_step: string;
+  next_billing_date?: string | null;
+  cancel_at_period_end?: boolean;
+  provider?: string | null;
+  checkout_url?: string | null;
+  last_payment_error?: string | null;
 }
 
 export const authApi = {
@@ -72,9 +77,12 @@ export const authApi = {
   getSubscriptionDetails: () =>
     cmd<SubscriptionDetails>('get_subscription_details'),
 
-  openPaymentPage: () =>
-    cmd<string>('open_payment_page'),
+  openPaymentPage: (period: 'MONTHLY' | 'YEARLY' = 'MONTHLY') =>
+    cmd<string>('open_payment_page', { period }),
 
   cancelSubscription: () =>
-    cmd<void>('cancel_subscription'),
+    cmd<SubscriptionDetails>('cancel_subscription'),
+
+  confirmPayment: (paymentKey: string, orderId: string, amount: number) =>
+    cmd<SubscriptionDetails>('confirm_payment', { payment_key: paymentKey, order_id: orderId, amount }),
 };

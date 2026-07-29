@@ -15,9 +15,9 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { CheckCircle2, XCircle, Loader2, FolderOpen, Film, Settings, Clock, LayoutTemplate, Copy } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { save } from '@tauri-apps/plugin-dialog';
 import { open as openPath } from '@tauri-apps/plugin-shell';
-import { join, dirname } from '@tauri-apps/api/path';
+import { join, dirname, videoDir, downloadDir } from '@tauri-apps/api/path';
 import { getErrorMessage, formatDuration } from '@/lib/utils';
 import { logger } from '@/lib/logger';
 
@@ -30,6 +30,14 @@ type ExportFormat = 'shorts' | 'montage';
 
 const DEFAULT_SHORTS_FILENAME = 'lolshorts_export.mp4';
 const DEFAULT_MONTAGE_FILENAME = 'lol_montage.mp4';
+
+// compose_shorts_v2's output resolution is fully determined by the
+// composition's aspect ratio - there is no separate resolution knob.
+const ASPECT_RATIO_RESOLUTIONS: Record<string, string> = {
+  '9:16': '1080 x 1920',
+  '16:9': '1920 x 1080',
+  '1:1': '1080 x 1080',
+};
 
 export function ExportModal({ isOpen, onClose }: ExportModalProps) {
   const { t } = useTranslation();
@@ -52,9 +60,15 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
   const { toast } = useToast();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>('shorts');
-  const [fileFormat, setFileFormat] = useState<'mp4' | 'webm' | 'mov' | 'gif'>('mp4');
-  const [resolution, setResolution] = useState<'1080x1920' | '720x1280'>('1080x1920');
+  const [fileFormat, setFileFormat] = useState<'mp4' | 'gif'>('mp4');
   const [gifDuration, setGifDuration] = useState(10);
+
+  // NOTE: export is deliberately NOT gated. Getting your own clip out of the app
+  // is free for any signed-in user — see
+  // `command_policy.rs::local_export_stays_free_for_signed_in_users`. Every
+  // comparable tool gives local export away and the League client itself records
+  // highlights for free, so gating it put this app below the in-game baseline.
+  // The paid surface is canvas templates and scheduled uploads instead.
 
   // Reset modal state when opened
   useEffect(() => {
@@ -65,7 +79,6 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
       setSelectedPath(null);
       setExportFormat('shorts');
       setFileFormat('mp4');
-      setResolution('1080x1920');
       setGifDuration(10);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -73,17 +86,34 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
 
   const handleSelectPath = async () => {
     try {
-      const defaultName = exportFormat === 'shorts' ? DEFAULT_SHORTS_FILENAME : DEFAULT_MONTAGE_FILENAME;
-      const selected = await open({
+      const baseName = exportFormat === 'shorts' ? DEFAULT_SHORTS_FILENAME : DEFAULT_MONTAGE_FILENAME;
+      const defaultName = fileFormat === 'gif' ? baseName.replace(/\.mp4$/, '.gif') : baseName;
+
+      // videoDir() is the natural home for exported clips, but it can be
+      // unavailable in some environments/sandboxes - fall back to the
+      // downloads folder so the save dialog always has a valid starting
+      // directory instead of throwing before it even opens.
+      let baseDir: string;
+      try {
+        baseDir = await videoDir();
+      } catch (dirError) {
+        logger.error('Failed to resolve video directory, falling back to downloads:', dirError);
+        baseDir = await downloadDir();
+      }
+
+      // This is a save-target selection (we're choosing where a new file
+      // will be written), so it must use the save dialog - the open dialog
+      // only lets the user pick existing files/folders.
+      const selected = await save({
         title: t('editor.export.saveTitle'),
         filters: [{
           name: t('editor.export.videoFiles'),
           extensions: [fileFormat],
         }],
-        defaultPath: await join(await dirname(''), defaultName),
+        defaultPath: await join(baseDir, defaultName),
       });
 
-      if (selected && typeof selected === 'string') {
+      if (selected) {
         setSelectedPath(selected);
       }
     } catch (error) {
@@ -286,32 +316,34 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
                 <div className="flex gap-4">
                   <div className="flex-1 space-y-1">
                     <Label className="text-xs">{t('editor.export.fileFormat', 'File Format')}</Label>
-                    <Select value={fileFormat} onValueChange={(v) => setFileFormat(v as 'mp4' | 'webm' | 'mov' | 'gif')}>
+                    <Select value={fileFormat} onValueChange={(v) => setFileFormat(v as 'mp4' | 'gif')}>
                       <SelectTrigger className="h-8 text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="mp4">MP4 (H.264)</SelectItem>
-                        <SelectItem value="webm">WebM (VP9)</SelectItem>
-                        <SelectItem value="mov">MOV (ProRes)</SelectItem>
                         <SelectItem value="gif">GIF (Animated)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="flex-1 space-y-1">
                     <Label className="text-xs">{t('editor.export.resolution', 'Resolution')}</Label>
-                    <Select value={resolution} onValueChange={(v) => setResolution(v as '1080x1920' | '720x1280')}>
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1080x1920">1080 x 1920 (FHD)</SelectItem>
-                        <SelectItem value="720x1280">720 x 1280 (HD)</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <div className="h-8 flex items-center px-3 rounded-md border text-xs text-muted-foreground bg-muted/40">
+                      {fileFormat === 'gif'
+                        ? t('editor.export.resolutionGif', 'Source clip resolution')
+                        : exportFormat === 'shorts'
+                          ? (ASPECT_RATIO_RESOLUTIONS[compositionSettings.aspectRatio] ?? compositionSettings.aspectRatio)
+                          : t('editor.export.resolutionMontage', 'Source clip resolution')}
+                    </div>
                   </div>
                 </div>
+                {fileFormat !== 'gif' && exportFormat === 'shorts' && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('editor.export.resolutionFollowsAspectRatio', 'Resolution follows the aspect ratio set in the composition panel.')}
+                  </p>
+                )}
               </div>
+
 
               <Separator />
 

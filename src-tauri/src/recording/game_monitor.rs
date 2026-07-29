@@ -1,7 +1,7 @@
 use crate::lcu::{LcuClient, LcuError};
 use crate::recording::auto_clip_manager::AutoClipManager;
 use crate::recording::live_client::{
-    check_live_client_basic, EventTrigger, GameEvent, LiveClientMonitor,
+    check_live_client_basic, EventTrigger, GameEvent, LiveClientBasicInfo, LiveClientMonitor,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -37,6 +37,11 @@ pub struct UnifiedGameStatus {
     pub is_monitoring: bool,
     /// Whether recording is active
     pub is_recording: bool,
+    /// Number of clips saved during the current game session. Populated from
+    /// AutoClipManager so the game-end notification can report a real count
+    /// instead of a hardcoded 0.
+    #[serde(default)]
+    pub session_clip_count: usize,
 }
 
 /// Game state monitor for automatic recording
@@ -51,6 +56,11 @@ pub struct GameStateMonitor {
     unified_status: Arc<RwLock<UnifiedGameStatus>>,
     /// Handle for the live client monitoring task (spawned per game session)
     live_monitor_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
+}
+
+fn live_client_mode_hint(data: Option<&LiveClientBasicInfo>) -> Option<GameMode> {
+    data.filter(|info| info.game_mode.contains("TFT"))
+        .map(|_| GameMode::TFT)
 }
 
 impl GameStateMonitor {
@@ -72,6 +82,7 @@ impl GameStateMonitor {
                 game_time: None,
                 is_monitoring: false,
                 is_recording: false,
+                session_clip_count: 0,
             })),
         }
     }
@@ -276,34 +287,39 @@ impl GameStateMonitor {
                     let game_mode_clone = Arc::clone(&game_mode_arc);
                     let unified_status_clone = Arc::clone(&unified_status_arc);
 
-                    match LiveClientMonitor::new() {
+                    // Task 30: build the monitor from user settings so contest_window_secs applies.
+                    let event_config = auto_clip_manager.event_stream_config().await;
+                    match LiveClientMonitor::with_config(
+                        event_config,
+                        auto_clip_manager.summary_slot(),
+                    ) {
                         Ok(monitor) => {
-                            // Check TFT first via Live Client API game_mode field
-                            let tft_check = check_live_client_basic().await;
-                            let is_tft = tft_check
-                                .as_ref()
-                                .is_some_and(|info| info.game_mode.contains("TFT"));
-
-                            let detected_mode = if is_tft {
-                                info!("🎯 TFT (팀파이트 택틱스) 모드 감지됨");
-                                GameMode::TFT
-                            } else {
-                                // Auto-detect if this is a replay or live game
-                                match monitor.detect_replay_mode().await {
-                                    Some(true) => {
-                                        info!("🎬 Replay mode detected automatically");
-                                        GameMode::Replay(None)
+                            let detected_mode =
+                                match live_client_mode_hint(live_client_data.as_ref()) {
+                                    Some(GameMode::TFT) => {
+                                        info!("🎯 TFT (팀파이트 택틱스) 모드 감지됨");
+                                        GameMode::TFT
                                     }
-                                    Some(false) => {
-                                        info!("🎮 Live game mode detected");
-                                        GameMode::Live
+                                    _ => {
+                                        // Auto-detect if this is a replay or live game.
+                                        match monitor.detect_replay_mode().await {
+                                            Some(true) => {
+                                                info!("🎬 Replay mode detected automatically");
+                                                GameMode::Replay(None)
+                                            }
+                                            Some(false) => {
+                                                info!("🎮 Live game mode detected");
+                                                GameMode::Live
+                                            }
+                                            None => {
+                                                info!(
+                                                "⚠️ Could not detect game mode, defaulting to Live"
+                                            );
+                                                GameMode::Live
+                                            }
+                                        }
                                     }
-                                    None => {
-                                        info!("⚠️ Could not detect game mode, defaulting to Live");
-                                        GameMode::Live
-                                    }
-                                }
-                            };
+                                };
 
                             // Update game mode
                             {
@@ -314,8 +330,8 @@ impl GameStateMonitor {
                             // Update unified status
                             {
                                 let mut status = unified_status_arc.write().await;
-                                status.game_mode = detected_mode;
-                                status.is_recording = true;
+                                status.game_mode = detected_mode.clone();
+                                status.is_recording = false;
                             }
 
                             // Set game mode on clip manager for filtering
@@ -327,7 +343,55 @@ impl GameStateMonitor {
 
                             // Start FFmpeg recording BEFORE event monitoring
                             if let Err(e) = on_game_start().await {
+                                // FIX: distinguish manual-capture preemption from a real failure.
+                                // If recording is already active, the user started capture manually
+                                // (F8 / start command) before auto-detect fired. Adopt that session
+                                // instead of retrying start_recording every second (log spam) and
+                                // never running end-of-game cleanup.
+                                if auto_clip_manager.is_recording().await {
+                                    info!(
+                                        "Recording already active (manual capture) — adopting session ({})",
+                                        e
+                                    );
+                                    {
+                                        let mut status = unified_status_arc.write().await;
+                                        status.is_recording = true;
+                                    }
+                                    // Ensure event monitoring runs exactly once. If the manual
+                                    // path already started it, this is a no-op (guarded in
+                                    // start_event_monitoring), preventing duplicate event streams.
+                                    if !auto_clip_manager.is_monitoring().await {
+                                        if let Err(mon_err) =
+                                            auto_clip_manager.start_event_monitoring().await
+                                        {
+                                            warn!(
+                                                "Failed to start event monitoring while adopting manual session: {}",
+                                                mon_err
+                                            );
+                                        }
+                                    }
+                                    // Transition to in-game so the end edge runs cleanup once.
+                                    *last_state = true;
+                                    retry_count = 0;
+                                    tokio::time::sleep(CHECK_INTERVAL).await;
+                                    continue;
+                                }
+
                                 error!("Failed to start recording on game start: {}", e);
+                                auto_clip_manager.set_game_mode(String::new(), None).await;
+                                {
+                                    let mut status = unified_status_arc.write().await;
+                                    status.is_recording = false;
+                                }
+                                *last_state = false;
+                                retry_count = 0;
+                                tokio::time::sleep(CHECK_INTERVAL).await;
+                                continue;
+                            }
+
+                            {
+                                let mut status = unified_status_arc.write().await;
+                                status.is_recording = true;
                             }
 
                             // FIX #1: Spawn monitoring in tokio::spawn so it doesn't block
@@ -468,3 +532,35 @@ impl GameStateMonitor {
 }
 
 // Default implementation removed since AutoClipManager is required
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn live_info(game_mode: &str) -> LiveClientBasicInfo {
+        LiveClientBasicInfo {
+            summoner_name: "tester".to_string(),
+            champion_name: "Ahri".to_string(),
+            game_time: 10.0,
+            game_mode: game_mode.to_string(),
+        }
+    }
+
+    #[test]
+    fn live_client_mode_hint_detects_tft_without_extra_probe() {
+        assert_eq!(
+            live_client_mode_hint(Some(&live_info("TFT"))),
+            Some(GameMode::TFT)
+        );
+        assert_eq!(
+            live_client_mode_hint(Some(&live_info("TFT_DOUBLE_UP"))),
+            Some(GameMode::TFT)
+        );
+    }
+
+    #[test]
+    fn live_client_mode_hint_leaves_non_tft_for_replay_detection() {
+        assert_eq!(live_client_mode_hint(Some(&live_info("CLASSIC"))), None);
+        assert_eq!(live_client_mode_hint(None), None);
+    }
+}

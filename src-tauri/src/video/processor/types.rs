@@ -1,6 +1,35 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+/// A single source clip for `VideoProcessor::compose_with_options`, with
+/// optional input-level trimming (mapped to FFmpeg `-ss` / `-t` before `-i`
+/// so trim + concat + scale happen in a single re-encode pass — no separate
+/// extract pass, no extra generation loss).
+#[derive(Debug, Clone)]
+pub struct ClipSpec {
+    pub path: PathBuf,
+    /// Seconds; `None` = from the clip start.
+    pub trim_start: Option<f64>,
+    /// Seconds; `None` = to the clip end.
+    pub trim_duration: Option<f64>,
+}
+
+/// Options for `VideoProcessor::compose_with_options` (offline composition).
+#[derive(Debug, Clone)]
+pub struct ComposeOptions {
+    pub width: u32,
+    pub height: u32,
+    /// `("fade"|"slide"|"dissolve"|"wipeleft", duration_secs)`. `None` = hard cut.
+    pub transition: Option<(String, f64)>,
+    /// Zoom event times (seconds) on the *composed* output timeline.
+    pub event_times: Option<Vec<f64>>,
+    /// Source fps used by zoompan and fps normalization (default 60).
+    pub fps: Option<u32>,
+    /// `Some(target_lufs)` applies a final 2-pass loudnorm to the composite.
+    pub normalize_audio: Option<f64>,
+}
 
 /// Types for video transitions and effects
 #[derive(Debug, Clone)]
@@ -23,67 +52,73 @@ pub enum VideoEncoder {
 }
 
 impl VideoEncoder {
+    /// FFmpeg encoder arguments for **offline** processing (export / compose /
+    /// extract), tuned for quality rather than latency.
+    ///
+    /// Each variant is self-contained on quality: software encoders carry their
+    /// own `-crf`, and hardware encoders carry their own `-cq` / `-qp` /
+    /// `-global_quality`. Callers MUST NOT append a blanket `-crf` after these
+    /// args — that is unsupported by nvenc/amf/qsv and hard-fails the encode.
+    ///
+    /// These are NOT the low-latency args used for realtime recording; the live
+    /// segment recorder (`recording::integration_backend::segment_recorder`)
+    /// owns its own `-tune ll`-style arguments.
     pub fn get_ffmpeg_args(&self) -> Vec<&'static str> {
         match self {
-            VideoEncoder::H264 => vec![
-                "-c:v",
-                "libx264",
-                "-preset",
-                "medium",
-                "-tune",
-                "fastdecode",
-            ],
-            VideoEncoder::H265 => vec![
-                "-c:v",
-                "libx265",
-                "-preset",
-                "medium",
-                "-tune",
-                "fastdecode",
-            ],
-            // p4 balances quality and speed (p1=fastest/worst, p7=slowest/best)
-            // -rc:v vbr uses modern FFmpeg syntax; -b:v 0 enables pure CQ mode
+            // -crf 23 is the software quality target; -preset medium balances
+            // speed/size. fastdecode tune is dropped for offline (it hurts quality).
+            VideoEncoder::H264 => vec!["-c:v", "libx264", "-preset", "medium", "-crf", "23"],
+            VideoEncoder::H265 => vec!["-c:v", "libx265", "-preset", "medium", "-crf", "28"],
+            // p5 + hq tune favors quality over latency for offline export.
+            // -rc:v vbr with -b:v 0 enables pure CQ mode; -bf/-rc-lookahead
+            // improve compression at safe (Maxwell+) levels.
             VideoEncoder::NvidiaH264 => vec![
                 "-c:v",
                 "h264_nvenc",
                 "-preset",
-                "p4",
+                "p5",
                 "-tune",
-                "ll",
+                "hq",
                 "-rc:v",
                 "vbr",
                 "-b:v",
                 "0",
                 "-cq",
                 "23",
+                "-bf",
+                "3",
+                "-rc-lookahead",
+                "20",
             ],
             VideoEncoder::NvidiaH265 => vec![
                 "-c:v",
                 "hevc_nvenc",
                 "-preset",
-                "p4",
+                "p5",
                 "-tune",
-                "ll",
+                "hq",
                 "-rc:v",
                 "vbr",
                 "-b:v",
                 "0",
                 "-cq",
                 "28",
+                "-bf",
+                "3",
+                "-rc-lookahead",
+                "20",
             ],
-            // balanced trades a few% speed for better quality vs speed preset
+            // "quality" preset favors quality over the "balanced"/"speed" presets.
             VideoEncoder::AmdH264 => vec![
-                "-c:v", "h264_amf", "-quality", "balanced", "-rc", "vbr_peak", "-qp_i", "23",
-                "-qp_p", "23",
+                "-c:v", "h264_amf", "-quality", "quality", "-rc", "vbr_peak", "-qp_i", "23",
+                "-qp_p", "23", "-qp_b", "23",
             ],
-            // faster is more broadly supported than veryfast across QSV driver versions
+            // "slow" preset favors quality; ICQ via -global_quality (no -tune ll offline).
             VideoEncoder::IntelH264 => vec![
                 "-c:v",
                 "h264_qsv",
                 "-preset",
-                "faster",
-                "-tune",
-                "ll",
+                "slow",
                 "-global_quality",
                 "23",
             ],
@@ -99,6 +134,16 @@ impl VideoEncoder {
             VideoEncoder::AmdH264 => "AMD H.264 (Hardware)",
             VideoEncoder::IntelH264 => "Intel H.264 (Hardware)",
         }
+    }
+
+    pub fn is_hardware_accelerated(&self) -> bool {
+        matches!(
+            self,
+            VideoEncoder::NvidiaH264
+                | VideoEncoder::NvidiaH265
+                | VideoEncoder::AmdH264
+                | VideoEncoder::IntelH264
+        )
     }
 
     pub fn get_output_format(&self) -> &'static str {
@@ -327,6 +372,16 @@ mod tests {
     fn video_encoder_ffmpeg_args_returns_non_empty_vec() {
         assert!(!VideoEncoder::H264.get_ffmpeg_args().is_empty());
         assert!(!VideoEncoder::NvidiaH265.get_ffmpeg_args().is_empty());
+    }
+
+    #[test]
+    fn video_encoder_hardware_detection_matches_accelerated_variants() {
+        assert!(!VideoEncoder::H264.is_hardware_accelerated());
+        assert!(!VideoEncoder::H265.is_hardware_accelerated());
+        assert!(VideoEncoder::NvidiaH264.is_hardware_accelerated());
+        assert!(VideoEncoder::NvidiaH265.is_hardware_accelerated());
+        assert!(VideoEncoder::AmdH264.is_hardware_accelerated());
+        assert!(VideoEncoder::IntelH264.is_hardware_accelerated());
     }
 
     // ---- VideoEncoder::get_output_format ----

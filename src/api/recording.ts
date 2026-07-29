@@ -99,6 +99,21 @@ export interface AudioDevice {
   device_type: AudioDeviceType;
 }
 
+export interface PerformanceStats {
+  recording: {
+    total_frames: number;
+    uptime_seconds: number;
+    current_fps: number;
+    /** False if system audio capture is failing during an active recording. */
+    audio_active: boolean;
+    /** False if microphone capture is failing during an active recording. */
+    mic_active: boolean;
+  };
+  system: {
+    status: string;
+  };
+}
+
 export const recordingApi = {
   // Core Controls
   start: () => cmd<void>('start_recording'),
@@ -107,6 +122,7 @@ export const recordingApi = {
   // Status & Metrics
   getStatus: () => cmd<RecordingStatus>('get_detailed_recording_status'),
   getMetrics: () => cmd<RecordingMetrics>('get_recording_metrics'),
+  getPerformanceStats: () => cmd<PerformanceStats>('get_performance_stats'),
   getRecordingReadiness: async () => {
     const raw = await cmd<BackendReadiness>('get_recording_readiness');
     

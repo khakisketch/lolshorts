@@ -17,6 +17,16 @@ export interface RecordingStore {
   readiness: RecordingReadiness | null;
   settings: RecordingSettings;
   error: string | null;
+  /**
+   * Whether system audio is currently being captured. `null` when unknown
+   * (not recording, or the last performance-stats fetch failed).
+   */
+  audioActive: boolean | null;
+  /**
+   * Whether the microphone is currently being captured. `null` when unknown
+   * (not recording, or the last performance-stats fetch failed).
+   */
+  micActive: boolean | null;
   _pollInterval: number | null;
 
   // Actions
@@ -118,6 +128,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
   readiness: null,
   settings: DEFAULT_SETTINGS,
   error: null,
+  audioActive: null,
+  micActive: null,
   _pollInterval: null,
 
   startRecording: async () => {
@@ -168,7 +180,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
         state: 'idle',
       },
       readiness: null,
-      error: null
+      error: null,
+      audioActive: null,
+      micActive: null,
     });
   },
 
@@ -179,12 +193,32 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
         recordingApi.getRecordingReadiness(),
       ]);
 
+      const recording = apiIsRecording(backendStatus);
+
+      // Only probe performance stats while actively recording - audio
+      // capture health is meaningless (and not worth the extra IPC call)
+      // when idle.
+      let audioActive: boolean | null = null;
+      let micActive: boolean | null = null;
+      if (recording) {
+        try {
+          const perf = await recordingApi.getPerformanceStats();
+          audioActive = perf.recording.audio_active;
+          micActive = perf.recording.mic_active;
+        } catch {
+          audioActive = null;
+          micActive = null;
+        }
+      }
+
       set((state) => ({
         error: null,
         readiness,
+        audioActive,
+        micActive,
         status: {
           ...state.status,
-          isRecording: apiIsRecording(backendStatus),
+          isRecording: recording,
           state: backendStatus.status,
           // Note: start_time not available from backend, keep existing value
           duration: backendStatus.buffer_duration_secs,
@@ -194,6 +228,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
       const errorMessage = e instanceof Error ? e.message : 'Failed to sync recording status';
       set((state) => ({
         error: errorMessage,
+        audioActive: null,
+        micActive: null,
         status: {
           ...state.status,
           isRecording: false,

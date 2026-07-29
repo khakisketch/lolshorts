@@ -11,6 +11,7 @@ export function useStorage() {
 
   const listGames = useCallback(async (): Promise<string[]> => {
     setLoadingCount(c => c + 1);
+    setError(null);
     try {
       const gameIds = await storageApi.listGames();
       return gameIds;
@@ -25,6 +26,9 @@ export function useStorage() {
 
   const getGameMetadata = useCallback(async (gameId: string): Promise<GameMetadata> => {
     setLoadingCount(c => c + 1);
+    // 주의: 여기서는 setError(null)을 호출하지 않는다 — 이 함수는 게임 목록
+    // 루프에서 항목마다 불리므로, 동시에 실행 중인 다른 액션(getStorageStats 등)이
+    // 세팅한 에러 배너를 지워버린다(에러 초기화는 최상위 액션들이 담당).
     try {
       const metadata = await storageApi.getGameMetadata(gameId);
       return metadata;
@@ -39,6 +43,7 @@ export function useStorage() {
 
   const getAllGames = useCallback(async (): Promise<GameMetadata[]> => {
     setLoadingCount(c => c + 1);
+    setError(null);
     try {
       const gameIds = await storageApi.listGames();
       // Use Promise.allSettled to handle partial failures gracefully
@@ -63,6 +68,7 @@ export function useStorage() {
 
   const saveGameMetadata = useCallback(async (gameId: string, metadata: GameMetadata): Promise<void> => {
     setLoadingCount(c => c + 1);
+    setError(null);
     try {
       await storageApi.saveGameMetadata(gameId, metadata);
     } catch (err) {
@@ -76,6 +82,7 @@ export function useStorage() {
 
   const getGameEvents = useCallback(async (gameId: string): Promise<EventData[]> => {
     setLoadingCount(c => c + 1);
+    setError(null);
     try {
       const events = await storageApi.getGameEvents(gameId);
       return events;
@@ -90,6 +97,7 @@ export function useStorage() {
 
   const saveGameEvents = useCallback(async (gameId: string, events: EventData[]): Promise<void> => {
     setLoadingCount(c => c + 1);
+    setError(null);
     try {
       await storageApi.saveGameEvents(gameId, events);
     } catch (err) {
@@ -103,6 +111,7 @@ export function useStorage() {
 
   const saveClipMetadata = useCallback(async (gameId: string, clip: ClipMetadata): Promise<void> => {
     setLoadingCount(c => c + 1);
+    setError(null);
     try {
       await storageApi.saveClipMetadata(gameId, clip);
     } catch (err) {
@@ -116,6 +125,7 @@ export function useStorage() {
 
   const deleteGame = useCallback(async (gameId: string): Promise<void> => {
     setLoadingCount(c => c + 1);
+    setError(null);
     try {
       await storageApi.deleteGame(gameId);
     } catch (err) {
@@ -129,6 +139,7 @@ export function useStorage() {
 
   const getStorageStats = useCallback(async (): Promise<StorageStats> => {
     setLoadingCount(c => c + 1);
+    setError(null);
     try {
       const stats = await storageApi.getStorageStats();
       return stats;

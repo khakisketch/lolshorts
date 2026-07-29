@@ -6,12 +6,22 @@ use tokio::process::Command as TokioCommand;
 use tracing::{info, warn};
 
 use super::super::{execute_ffmpeg_command, Result, VideoError};
-use super::types::{LoudnessInfo, TransitionType, VideoEncoder};
-use crate::utils::ffmpeg::get_ffmpeg_path;
+use super::types::{ClipSpec, ComposeOptions, LoudnessInfo, TransitionType, VideoEncoder};
+use crate::utils::ffmpeg::{get_ffmpeg_path, get_ffprobe_path};
 use crate::utils::process::command_output_with_timeout;
 
 const VIDEO_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const ENCODER_DETECTION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Bitrate ceiling for offline final export / composition (1080p60 H.264).
+/// A safety cap that rarely binds at CRF/CQ 23 but bounds worst-case bitrate on
+/// high-motion content. NOT applied to intermediate extract passes or realtime
+/// recording.
+const BITRATE_CAP_ARGS: &[&str] = &["-maxrate", "16M", "-bufsize", "32M"];
+
+/// Process-wide cache of the detected optimal encoder, so we do not re-run
+/// `nvidia-smi` / `ffmpeg -encoders` on every command invocation.
+static OPTIMAL_ENCODER: std::sync::OnceLock<VideoEncoder> = std::sync::OnceLock::new();
 
 /// FFmpeg video processor for clip extraction and composition
 pub struct VideoProcessor {
@@ -54,8 +64,18 @@ impl VideoProcessor {
         }
     }
 
-    /// Detect the optimal hardware-accelerated encoder available on the system
+    /// Detect the optimal hardware-accelerated encoder available on the system.
+    ///
+    /// The result is cached process-wide: hardware probing spawns
+    /// `nvidia-smi` / `ffmpeg -encoders` subprocesses which are wasteful to
+    /// repeat on every video command.
     pub fn detect_optimal_encoder() -> VideoEncoder {
+        OPTIMAL_ENCODER
+            .get_or_init(Self::detect_optimal_encoder_uncached)
+            .clone()
+    }
+
+    fn detect_optimal_encoder_uncached() -> VideoEncoder {
         if Self::check_nvidia_availability() {
             return VideoEncoder::NvidiaH264;
         }
@@ -86,7 +106,7 @@ impl VideoProcessor {
             }
         }
 
-        let mut command = std::process::Command::new("ffmpeg");
+        let mut command = Self::ffmpeg_probe_command();
         command.args(["-hide_banner", "-encoders"]);
         command_output_with_timeout(command, ENCODER_DETECTION_TIMEOUT, "FFmpeg encoder probe")
             .map(|output| String::from_utf8_lossy(&output.stdout).contains("h264_nvenc"))
@@ -94,7 +114,7 @@ impl VideoProcessor {
     }
 
     fn check_amd_availability() -> bool {
-        let mut command = std::process::Command::new("ffmpeg");
+        let mut command = Self::ffmpeg_probe_command();
         command.args(["-hide_banner", "-encoders"]);
         command_output_with_timeout(command, ENCODER_DETECTION_TIMEOUT, "FFmpeg encoder probe")
             .map(|output| String::from_utf8_lossy(&output.stdout).contains("h264_amf"))
@@ -102,15 +122,71 @@ impl VideoProcessor {
     }
 
     fn check_intel_availability() -> bool {
-        let mut command = std::process::Command::new("ffmpeg");
+        let mut command = Self::ffmpeg_probe_command();
         command.args(["-hide_banner", "-encoders"]);
         command_output_with_timeout(command, ENCODER_DETECTION_TIMEOUT, "FFmpeg encoder probe")
             .map(|output| String::from_utf8_lossy(&output.stdout).contains("h264_qsv"))
             .unwrap_or(false)
     }
 
+    fn ffmpeg_probe_command() -> std::process::Command {
+        let ffmpeg_path = get_ffmpeg_path().unwrap_or_else(|_| PathBuf::from("ffmpeg"));
+        std::process::Command::new(ffmpeg_path)
+    }
+
     pub fn get_optimal_encoder(&self) -> &VideoEncoder {
         &self.optimal_encoder
+    }
+
+    async fn execute_ffmpeg_with_software_fallback<F>(
+        &self,
+        operation: &str,
+        output: &Path,
+        primary_encoder: &VideoEncoder,
+        mut build_command: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&VideoEncoder) -> Result<TokioCommand>,
+    {
+        let mut command = build_command(primary_encoder)?;
+        match execute_ffmpeg_command(&mut command).await {
+            Ok(()) => {
+                crate::video::get_global_stats().record_success();
+                Ok(())
+            }
+            Err(primary_error) if primary_encoder.is_hardware_accelerated() => {
+                warn!(
+                    "{} failed with {}: {}. Retrying with H.264 software encoder.",
+                    operation,
+                    primary_encoder.get_name(),
+                    primary_error
+                );
+                crate::video::get_global_stats().record_failure();
+                let _ = tokio::fs::remove_file(output).await;
+
+                let fallback_encoder = VideoEncoder::H264;
+                let mut fallback_command = build_command(&fallback_encoder)?;
+                match execute_ffmpeg_command(&mut fallback_command).await {
+                    Ok(()) => {
+                        crate::video::get_global_stats().record_success();
+                        Ok(())
+                    }
+                    Err(fallback_error) => {
+                        crate::video::get_global_stats().record_failure();
+                        Err(VideoError::ProcessingError {
+                            message: format!(
+                                "{} failed with {} and software fallback also failed: {}",
+                                operation, primary_error, fallback_error
+                            ),
+                        })
+                    }
+                }
+            }
+            Err(error) => {
+                crate::video::get_global_stats().record_failure();
+                Err(error)
+            }
+        }
     }
 
     /// Extract a clip from a video file
@@ -143,67 +219,75 @@ impl VideoProcessor {
             }
         }
 
-        let mut command = TokioCommand::new(&self.ffmpeg_path);
-
-        command.arg("-ss");
-        command.arg(format!("{:.3}", start_time));
-
-        if duration < 300.0 {
-            // -hwaccel auto lets FFmpeg pick the best available decoder (cuda/dxva2/qsv)
-            // without hard-coding a backend that may not be present at runtime
-            command.args(["-hwaccel", "auto"]);
-        }
-
-        command.arg("-i");
-        command.arg(input.to_str().ok_or_else(|| VideoError::FileAccessError {
-            path: input.display().to_string(),
-        })?);
-
-        command.arg("-t");
-        command.arg(format!("{:.3}", duration));
-
-        if duration < 300.0 {
-            let encoder_args = self.optimal_encoder.get_ffmpeg_args();
-            command.args(&encoder_args);
-
-            match self.optimal_encoder {
-                VideoEncoder::NvidiaH264 | VideoEncoder::NvidiaH265 => {
-                    command.args(["-preset", "fast"]);
-                }
-                VideoEncoder::IntelH264 => {
-                    command.args(["-preset", "medium"]);
-                }
-                _ => {}
-            }
-
-            command.args(["-crf", "23", "-threads", "0", "-pix_fmt", "yuv420p"]);
+        let primary_encoder = if duration < 300.0 {
+            self.optimal_encoder.clone()
         } else {
-            command.args(["-c", "copy"]);
-        }
+            VideoEncoder::H264
+        };
 
-        command.args([
-            "-avoid_negative_ts",
-            "make_zero",
-            "-movflags",
-            "+faststart",
-            "-y",
-            output.to_str().ok_or_else(|| VideoError::FileAccessError {
-                path: output.display().to_string(),
-            })?,
-        ]);
+        self.execute_ffmpeg_with_software_fallback(
+            "clip extraction",
+            output,
+            &primary_encoder,
+            |encoder| {
+                let mut command = TokioCommand::new(&self.ffmpeg_path);
 
-        let ffmpeg_result = execute_ffmpeg_command(&mut command).await;
+                command.arg("-ss");
+                command.arg(format!("{:.3}", start_time));
 
-        match &ffmpeg_result {
-            Ok(_) => {
-                crate::video::get_global_stats().record_success();
-            }
-            Err(_) => {
-                crate::video::get_global_stats().record_failure();
-            }
-        }
+                if duration < 300.0 {
+                    // -hwaccel auto lets FFmpeg pick the best available decoder (cuda/dxva2/qsv)
+                    // without hard-coding a backend that may not be present at runtime
+                    command.args(["-hwaccel", "auto"]);
+                }
 
-        ffmpeg_result?;
+                command.arg("-i");
+                command.arg(input.to_str().ok_or_else(|| VideoError::FileAccessError {
+                    path: input.display().to_string(),
+                })?);
+
+                command.arg("-t");
+                command.arg(format!("{:.3}", duration));
+
+                if duration < 300.0 {
+                    let encoder_args = encoder.get_ffmpeg_args();
+                    command.args(&encoder_args);
+
+                    match encoder {
+                        VideoEncoder::NvidiaH264 | VideoEncoder::NvidiaH265 => {
+                            command.args(["-preset", "fast"]);
+                        }
+                        VideoEncoder::IntelH264 => {
+                            command.args(["-preset", "medium"]);
+                        }
+                        _ => {}
+                    }
+
+                    // Quality is already encoded in the per-encoder args
+                    // (libx264 `-crf`, nvenc `-cq`, amf `-qp`, qsv
+                    // `-global_quality`). Appending a blanket `-crf` here would
+                    // hard-fail hardware encoders, so we only add threading and
+                    // the compatibility pixel format.
+                    command.args(["-threads", "0", "-pix_fmt", "yuv420p"]);
+                } else {
+                    command.args(["-c", "copy"]);
+                }
+
+                command.args([
+                    "-avoid_negative_ts",
+                    "make_zero",
+                    "-movflags",
+                    "+faststart",
+                    "-y",
+                    output.to_str().ok_or_else(|| VideoError::FileAccessError {
+                        path: output.display().to_string(),
+                    })?,
+                ]);
+
+                Ok(command)
+            },
+        )
+        .await?;
 
         if !output.exists() {
             return Err(VideoError::ProcessingError {
@@ -367,42 +451,52 @@ impl VideoProcessor {
             _ => base_filter,
         };
 
-        let mut command = TokioCommand::new(&self.ffmpeg_path);
-        command.args([
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_file
-                .to_str()
-                .ok_or_else(|| VideoError::FileAccessError {
-                    path: concat_file.display().to_string(),
-                })?,
-            "-vf",
-            &vf,
-        ]);
-        for arg in self.optimal_encoder.get_ffmpeg_args() {
-            command.arg(arg);
-        }
-        command.args([
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            // faststart moves moov atom to front for faster YouTube streaming start
-            "-movflags",
-            "+faststart",
-            // prevents muxer overflow when audio/video packet queues diverge
-            "-max_muxing_queue_size",
-            "1024",
-            "-y",
-            output.to_str().ok_or_else(|| VideoError::FileAccessError {
-                path: output.display().to_string(),
-            })?,
-        ]);
+        let result = self
+            .execute_ffmpeg_with_software_fallback(
+                "short composition",
+                output,
+                &self.optimal_encoder,
+                |encoder| {
+                    let mut command = TokioCommand::new(&self.ffmpeg_path);
+                    command.args([
+                        "-f",
+                        "concat",
+                        "-safe",
+                        "0",
+                        "-i",
+                        concat_file
+                            .to_str()
+                            .ok_or_else(|| VideoError::FileAccessError {
+                                path: concat_file.display().to_string(),
+                            })?,
+                        "-vf",
+                        &vf,
+                    ]);
+                    for arg in encoder.get_ffmpeg_args() {
+                        command.arg(arg);
+                    }
+                    command.args(BITRATE_CAP_ARGS);
+                    command.args([
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        "192k",
+                        // faststart moves moov atom to front for faster YouTube streaming start
+                        "-movflags",
+                        "+faststart",
+                        // prevents muxer overflow when audio/video packet queues diverge
+                        "-max_muxing_queue_size",
+                        "1024",
+                        "-y",
+                        output.to_str().ok_or_else(|| VideoError::FileAccessError {
+                            path: output.display().to_string(),
+                        })?,
+                    ]);
 
-        let result = execute_ffmpeg_command(&mut command).await;
+                    Ok(command)
+                },
+            )
+            .await;
         let _ = tokio::fs::remove_file(&concat_file).await;
 
         result.map_err(|e| VideoError::ConcatenationError {
@@ -565,6 +659,7 @@ impl VideoProcessor {
             for arg in self.optimal_encoder.get_ffmpeg_args() {
                 fallback_cmd.arg(arg);
             }
+            fallback_cmd.args(BITRATE_CAP_ARGS);
             fallback_cmd.args([
                 "-c:a",
                 "aac",
@@ -604,36 +699,45 @@ impl VideoProcessor {
             target_height, target_width, target_height
         );
 
-        let mut command = TokioCommand::new(&self.ffmpeg_path);
-        command.args([
-            "-i",
-            input.to_str().ok_or_else(|| VideoError::FileAccessError {
-                path: input.display().to_string(),
-            })?,
-            "-vf",
-            &filter,
-        ]);
-        for arg in self.optimal_encoder.get_ffmpeg_args() {
-            command.arg(arg);
-        }
-        command.args([
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            // faststart moves moov atom to front for faster YouTube streaming start
-            "-movflags",
-            "+faststart",
-            // prevents muxer overflow when audio/video packet queues diverge
-            "-max_muxing_queue_size",
-            "1024",
-            "-y",
-            output.to_str().ok_or_else(|| VideoError::FileAccessError {
-                path: output.display().to_string(),
-            })?,
-        ]);
+        self.execute_ffmpeg_with_software_fallback(
+            "single clip scaling",
+            output,
+            &self.optimal_encoder,
+            |encoder| {
+                let mut command = TokioCommand::new(&self.ffmpeg_path);
+                command.args([
+                    "-i",
+                    input.to_str().ok_or_else(|| VideoError::FileAccessError {
+                        path: input.display().to_string(),
+                    })?,
+                    "-vf",
+                    &filter,
+                ]);
+                for arg in encoder.get_ffmpeg_args() {
+                    command.arg(arg);
+                }
+                command.args(BITRATE_CAP_ARGS);
+                command.args([
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                    // faststart moves moov atom to front for faster YouTube streaming start
+                    "-movflags",
+                    "+faststart",
+                    // prevents muxer overflow when audio/video packet queues diverge
+                    "-max_muxing_queue_size",
+                    "1024",
+                    "-y",
+                    output.to_str().ok_or_else(|| VideoError::FileAccessError {
+                        path: output.display().to_string(),
+                    })?,
+                ]);
 
-        execute_ffmpeg_command(&mut command).await?;
+                Ok(command)
+            },
+        )
+        .await?;
         Ok(output.to_path_buf())
     }
 
@@ -663,34 +767,43 @@ impl VideoProcessor {
             input, output, target_width, target_height
         );
 
-        let mut command = TokioCommand::new(&self.ffmpeg_path);
-        command.args([
-            "-i",
-            input.to_str().ok_or_else(|| VideoError::FileAccessError {
-                path: input.display().to_string(),
-            })?,
-            "-vf",
-            &filter,
-        ]);
-        for arg in self.optimal_encoder.get_ffmpeg_args() {
-            command.arg(arg);
-        }
-        command.args([
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-movflags",
-            "+faststart",
-            "-max_muxing_queue_size",
-            "1024",
-            "-y",
-            output.to_str().ok_or_else(|| VideoError::FileAccessError {
-                path: output.display().to_string(),
-            })?,
-        ]);
+        self.execute_ffmpeg_with_software_fallback(
+            "single clip scaling with zoom",
+            output,
+            &self.optimal_encoder,
+            |encoder| {
+                let mut command = TokioCommand::new(&self.ffmpeg_path);
+                command.args([
+                    "-i",
+                    input.to_str().ok_or_else(|| VideoError::FileAccessError {
+                        path: input.display().to_string(),
+                    })?,
+                    "-vf",
+                    &filter,
+                ]);
+                for arg in encoder.get_ffmpeg_args() {
+                    command.arg(arg);
+                }
+                command.args(BITRATE_CAP_ARGS);
+                command.args([
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                    "-movflags",
+                    "+faststart",
+                    "-max_muxing_queue_size",
+                    "1024",
+                    "-y",
+                    output.to_str().ok_or_else(|| VideoError::FileAccessError {
+                        path: output.display().to_string(),
+                    })?,
+                ]);
 
-        execute_ffmpeg_command(&mut command).await?;
+                Ok(command)
+            },
+        )
+        .await?;
         Ok(output.to_path_buf())
     }
 
@@ -704,7 +817,8 @@ impl VideoProcessor {
             });
         }
 
-        let mut command = TokioCommand::new("ffprobe");
+        let ffprobe_path = get_ffprobe_path().map_err(|_| VideoError::FfprobeNotFound)?;
+        let mut command = TokioCommand::new(ffprobe_path);
         command.args([
             "-v",
             "error",
@@ -729,7 +843,7 @@ impl VideoProcessor {
             })?
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    VideoError::FfmpegNotFound
+                    VideoError::FfprobeNotFound
                 } else {
                     VideoError::ProcessingError {
                         message: format!("Failed to execute ffprobe: {}", e),
@@ -813,7 +927,8 @@ impl VideoProcessor {
             });
         }
 
-        let mut command = TokioCommand::new("ffprobe");
+        let ffprobe_path = get_ffprobe_path().map_err(|_| VideoError::FfprobeNotFound)?;
+        let mut command = TokioCommand::new(ffprobe_path);
         command.args([
             "-v",
             "error",
@@ -834,7 +949,7 @@ impl VideoProcessor {
             })?
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    VideoError::FfmpegNotFound
+                    VideoError::FfprobeNotFound
                 } else {
                     VideoError::ProcessingError {
                         message: format!("Failed to execute ffprobe: {}", e),
@@ -1081,81 +1196,390 @@ impl Default for VideoProcessor {
 }
 
 // ============================================================================
-// Hardware encoder failure recovery (Spec 3.7)
+// Editor composition with per-clip trim, transitions, zoom, and normalization
 // ============================================================================
 
 impl VideoProcessor {
-    /// Run a single FFmpeg re-encode pass using the given encoder name.
+    /// Build the `-filter_complex` graph for `compose_with_options`.
     ///
-    /// Builds a minimal FFmpeg command that stream-copies the input and
-    /// re-encodes video with the specified codec, writing to `output_path`.
-    async fn run_encode(
-        &self,
-        input_path: &std::path::Path,
-        output_path: &std::path::Path,
-        encoder: &str,
-    ) -> Result<()> {
-        let mut command = TokioCommand::new(&self.ffmpeg_path);
-        command.args([
-            "-y",
-            "-i",
-            input_path
-                .to_str()
-                .ok_or_else(|| VideoError::FileAccessError {
-                    path: input_path.display().to_string(),
-                })?,
-            "-c:v",
-            encoder,
-            "-c:a",
-            "copy",
-            "-movflags",
-            "+faststart",
-            output_path
-                .to_str()
-                .ok_or_else(|| VideoError::FileAccessError {
-                    path: output_path.display().to_string(),
-                })?,
-        ]);
+    /// Inputs are assumed already trimmed at the input level (`-ss`/`-t`), so
+    /// `[i:v]`/`[i:a]` are the trimmed segments. Produces final labels
+    /// `[outv]` and `[outa]`.
+    ///
+    /// `has_audio[i]` marks whether input `i` actually carries an audio stream.
+    /// For clips WITHOUT audio we never reference `[i:a]` (FFmpeg would fail with
+    /// "Stream specifier :a matches no streams"); instead we synthesize stereo
+    /// 48 kHz silence bounded to the clip's trimmed length so `concat` /
+    /// `acrossfade` still see a finite `[a{i}]` stream. A missing entry defaults
+    /// to `true` (assume audio) to preserve the previous behavior.
+    ///
+    /// `effective_durations` is consulted (a) when `transition` is `Some` to
+    /// place xfade offsets, and (b) to bound synthesized silence for any silent
+    /// clip — callers MUST populate it whenever `has_audio` contains a `false`.
+    // The parameters are all distinct, independently-sourced scalars/slices that the
+    // caller assembles from different places (ComposeOptions, per-clip probes, the
+    // trim plan). Bundling them into a struct here would only move the same argument
+    // list one level up while hiding which of them the graph actually depends on.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn build_compose_filtergraph(
+        n: usize,
+        width: u32,
+        height: u32,
+        fps: u32,
+        transition: Option<(&str, f64)>,
+        effective_durations: &[f64],
+        has_audio: &[bool],
+        event_times: Option<&[f64]>,
+    ) -> String {
+        let base_vf = format!(
+            "scale=-1:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,format=yuv420p,fps={fps}",
+            h = height,
+            w = width,
+            fps = fps
+        );
+        let base_af =
+            "aresample=async=1:out_sample_rate=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
 
-        execute_ffmpeg_command(&mut command).await
+        let mut parts: Vec<String> = Vec::new();
+        for i in 0..n {
+            parts.push(format!("[{i}:v]{base_vf}[v{i}]"));
+            if has_audio.get(i).copied().unwrap_or(true) {
+                parts.push(format!("[{i}:a]{base_af}[a{i}]"));
+            } else {
+                // No audio stream on this input: fabricate silence of the clip's
+                // trimmed duration. anullsrc emits infinite silence, so atrim is
+                // mandatory — an unbounded [a{i}] would make concat/acrossfade
+                // wait forever on this segment. base_af then normalizes it to the
+                // same fltp/stereo/48k the real-audio branch produces.
+                let dur = effective_durations.get(i).copied().unwrap_or(0.0);
+                parts.push(format!(
+                    "anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration={dur:.3},asetpts=PTS-STARTPTS,{base_af}[a{i}]"
+                ));
+            }
+        }
+
+        let (video_label, audio_label) = if n == 1 {
+            ("v0".to_string(), "a0".to_string())
+        } else if let Some((kind, d)) = transition {
+            let xkind = Self::map_transition_kind(kind);
+            // Video xfade chain: offset_k = sum(dur[0..=k]) - (k+1)*d.
+            let mut prev = "v0".to_string();
+            let mut cum = effective_durations.first().copied().unwrap_or(0.0);
+            for i in 1..n {
+                let out = if i == n - 1 {
+                    "vx_final".to_string()
+                } else {
+                    format!("vx{i}")
+                };
+                let offset = (cum - d).max(0.0);
+                parts.push(format!(
+                    "[{prev}][v{i}]xfade=transition={xkind}:duration={d}:offset={offset:.3}[{out}]"
+                ));
+                prev = out;
+                cum += effective_durations.get(i).copied().unwrap_or(0.0) - d;
+            }
+            // Audio crossfade chain (stays in sync: both overlap by d per join).
+            let mut aprev = "a0".to_string();
+            for i in 1..n {
+                let out = if i == n - 1 {
+                    "ax_final".to_string()
+                } else {
+                    format!("ax{i}")
+                };
+                parts.push(format!("[{aprev}][a{i}]acrossfade=d={d}[{out}]"));
+                aprev = out;
+            }
+            ("vx_final".to_string(), "ax_final".to_string())
+        } else {
+            // Hard-cut concat.
+            let mut concat_in = String::new();
+            for i in 0..n {
+                concat_in.push_str(&format!("[v{i}][a{i}]"));
+            }
+            parts.push(format!("{concat_in}concat=n={n}:v=1:a=1[vc][ac]"));
+            ("vc".to_string(), "ac".to_string())
+        };
+
+        // Optional event-based zoom on the composed video timeline.
+        match event_times {
+            Some(times) if !times.is_empty() => {
+                let zoom = Self::generate_event_zoom_filter(times, fps, width, height);
+                parts.push(format!("[{video_label}]{zoom}[outv]"));
+            }
+            _ => {
+                parts.push(format!("[{video_label}]null[outv]"));
+            }
+        }
+        parts.push(format!("[{audio_label}]anull[outa]"));
+
+        parts.join(";")
     }
 
-    /// Attempt encoding with the given hardware encoder, falling back to
-    /// `libx264` (software) on failure.
-    ///
-    /// This provides resilience for systems where a hardware encoder is
-    /// detected at startup but becomes unavailable at encode time (e.g.,
-    /// GPU driver crash, resource contention, or hot-unplug).
-    ///
-    /// # TODO
-    /// Integrate this as the primary encode path in `extract_clip` and
-    /// `compose_shorts` by replacing the direct `execute_ffmpeg_command`
-    /// calls with `encode_with_fallback`.
-    pub async fn encode_with_fallback(
-        &self,
-        input_path: &std::path::Path,
-        output_path: &std::path::Path,
-        encoder: &str,
-    ) -> Result<()> {
-        match self.run_encode(input_path, output_path, encoder).await {
-            Ok(()) => {
-                info!("Encoding succeeded with encoder '{}'", encoder);
-                Ok(())
-            }
-            Err(e) if encoder != "libx264" => {
-                warn!(
-                    "Hardware encoder '{}' failed: {}. Retrying with libx264 (software fallback)",
-                    encoder, e
-                );
-                crate::video::get_global_stats().record_failure();
-                self.run_encode(input_path, output_path, "libx264")
-                    .await
-                    .map(|()| {
-                        crate::video::get_global_stats().record_success();
-                    })
-            }
-            Err(e) => Err(e),
+    fn map_transition_kind(kind: &str) -> &'static str {
+        match kind.to_lowercase().as_str() {
+            "fade" => "fade",
+            "slide" | "slideleft" => "slideleft",
+            "dissolve" => "dissolve",
+            "wipe" | "wipeleft" => "wipeleft",
+            _ => "fade",
         }
+    }
+
+    /// Returns `true` iff `path` contains at least one audio stream.
+    ///
+    /// Uses `ffprobe -select_streams a -show_entries stream=index` (CSV): a
+    /// non-empty stdout means an audio stream exists. On ANY failure (ffprobe
+    /// missing, spawn error, timeout, non-zero exit, non-UTF8 path) we return
+    /// `false` and treat the clip as silent — synthesizing silence is always
+    /// safe, whereas a false positive would reference a missing `[i:a]` and
+    /// hard-fail the whole composition.
+    pub(super) async fn clip_has_audio_stream(&self, path: &Path) -> bool {
+        let ffprobe_path = match get_ffprobe_path() {
+            Ok(p) => p,
+            Err(_) => {
+                warn!("ffprobe not found; treating {:?} as silent", path);
+                return false;
+            }
+        };
+        let path_str = match path.to_str() {
+            Some(s) => s,
+            None => {
+                warn!("non-UTF8 clip path; treating as silent: {:?}", path);
+                return false;
+            }
+        };
+
+        let mut command = TokioCommand::new(ffprobe_path);
+        command.args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+            path_str,
+        ]);
+        command.kill_on_drop(true);
+
+        match tokio::time::timeout(VIDEO_PROBE_TIMEOUT, command.output()).await {
+            Ok(Ok(output)) if output.status.success() => {
+                !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+            }
+            Ok(Ok(output)) => {
+                warn!(
+                    "ffprobe audio detection failed for {:?} (treating as silent): {}",
+                    path,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                false
+            }
+            Ok(Err(e)) => {
+                warn!(
+                    "ffprobe spawn failed for {:?} (treating as silent): {}",
+                    path, e
+                );
+                false
+            }
+            Err(_) => {
+                warn!(
+                    "ffprobe audio detection timed out for {:?} (treating as silent)",
+                    path
+                );
+                false
+            }
+        }
+    }
+
+    /// Compose editor clips into a single video in one re-encode pass.
+    ///
+    /// Supports per-clip input-level trimming (`ClipSpec.trim_*` → `-ss`/`-t`),
+    /// aspect scaling/cropping, optional cross-clip transitions, optional
+    /// event-based zoom, a bitrate ceiling, and an optional final 2-pass
+    /// loudnorm — without the separate extract pass that caused generation loss.
+    pub async fn compose_with_options(
+        &self,
+        clips: &[ClipSpec],
+        output: &Path,
+        opts: &ComposeOptions,
+    ) -> Result<()> {
+        if clips.is_empty() {
+            return Err(VideoError::ProcessingError {
+                message: "No clips provided for composition".to_string(),
+            });
+        }
+        for clip in clips {
+            if !clip.path.exists() {
+                return Err(VideoError::FileNotFound {
+                    path: clip.path.display().to_string(),
+                });
+            }
+        }
+        if let Some(parent) = output.parent() {
+            if !parent.exists() {
+                return Err(VideoError::OutputDirectoryNotFound {
+                    path: parent.display().to_string(),
+                });
+            }
+        }
+
+        let fps = opts.fps.unwrap_or(60);
+
+        // Probe each clip for an audio stream up front. Clips without audio get
+        // synthesized silence in the filtergraph instead of a dangling `[i:a]`
+        // reference that would hard-fail the export — and the software fallback,
+        // which shares the exact same graph, would fail identically.
+        let mut has_audio: Vec<bool> = Vec::with_capacity(clips.len());
+        for clip in clips {
+            has_audio.push(self.clip_has_audio_stream(&clip.path).await);
+        }
+        let any_silent = has_audio.iter().any(|&h| !h);
+
+        let mut transition: Option<(String, f64)> = opts.transition.clone();
+
+        // Effective per-clip durations are needed both to place xfade offsets
+        // and to bound synthesized silence for any clip lacking audio, so probe
+        // them whenever either applies.
+        let mut effective_durations: Vec<f64> = Vec::new();
+        if transition.is_some() || any_silent {
+            for clip in clips {
+                let dur = match clip.trim_duration {
+                    Some(d) => d,
+                    None => {
+                        let full = self.get_duration(&clip.path).await?;
+                        (full - clip.trim_start.unwrap_or(0.0)).max(0.0)
+                    }
+                };
+                effective_durations.push(dur);
+            }
+        }
+
+        if transition.is_some() {
+            let min_dur = effective_durations
+                .iter()
+                .copied()
+                .fold(f64::INFINITY, f64::min);
+            if let Some((kind, d)) = transition.take() {
+                if min_dur.is_finite() && min_dur <= d + 0.2 {
+                    let safe = (min_dur - 0.2).max(0.0);
+                    if safe >= 0.1 {
+                        transition = Some((kind, safe));
+                    } else {
+                        warn!(
+                            "Clip too short ({:.2}s) for transition; using hard cuts",
+                            min_dur
+                        );
+                        transition = None;
+                    }
+                } else {
+                    transition = Some((kind, d));
+                }
+            }
+        }
+
+        let transition_ref = transition.as_ref().map(|(k, d)| (k.as_str(), *d));
+        let filter = Self::build_compose_filtergraph(
+            clips.len(),
+            opts.width,
+            opts.height,
+            fps,
+            transition_ref,
+            &effective_durations,
+            &has_audio,
+            opts.event_times.as_deref(),
+        );
+
+        // When normalizing we render to a temp file first, then loudnorm into
+        // the final path (loudnorm copies video, so no extra generation loss).
+        let compose_target: PathBuf = if opts.normalize_audio.is_some() {
+            let dir = output.parent().unwrap_or_else(|| Path::new("."));
+            let stem = output
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("compose");
+            dir.join(format!(".{stem}.precompose.mp4"))
+        } else {
+            output.to_path_buf()
+        };
+
+        self.execute_ffmpeg_with_software_fallback(
+            "editor composition",
+            &compose_target,
+            &self.optimal_encoder,
+            |encoder| {
+                let mut command = TokioCommand::new(&self.ffmpeg_path);
+                for clip in clips {
+                    if let Some(start) = clip.trim_start {
+                        command.arg("-ss");
+                        command.arg(format!("{:.3}", start));
+                    }
+                    if let Some(dur) = clip.trim_duration {
+                        command.arg("-t");
+                        command.arg(format!("{:.3}", dur));
+                    }
+                    command.arg("-i");
+                    command.arg(
+                        clip.path
+                            .to_str()
+                            .ok_or_else(|| VideoError::FileAccessError {
+                                path: clip.path.display().to_string(),
+                            })?,
+                    );
+                }
+                command.args([
+                    "-filter_complex",
+                    &filter,
+                    "-map",
+                    "[outv]",
+                    "-map",
+                    "[outa]",
+                ]);
+                for arg in encoder.get_ffmpeg_args() {
+                    command.arg(arg);
+                }
+                command.args(BITRATE_CAP_ARGS);
+                command.args([
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                    "-movflags",
+                    "+faststart",
+                    "-max_muxing_queue_size",
+                    "1024",
+                    "-y",
+                    compose_target
+                        .to_str()
+                        .ok_or_else(|| VideoError::FileAccessError {
+                            path: compose_target.display().to_string(),
+                        })?,
+                ]);
+                Ok(command)
+            },
+        )
+        .await?;
+
+        if !compose_target.exists() {
+            return Err(VideoError::ProcessingError {
+                message: format!("Composition output was not created: {:?}", compose_target),
+            });
+        }
+
+        if let Some(target_lufs) = opts.normalize_audio {
+            self.normalize_audio(&compose_target, output, target_lufs)
+                .await?;
+            let _ = tokio::fs::remove_file(&compose_target).await;
+        }
+
+        if !output.exists() {
+            return Err(VideoError::ProcessingError {
+                message: format!("Composition output was not created: {:?}", output),
+            });
+        }
+
+        info!("Composition complete: {:?}", output);
+        Ok(())
     }
 }
 
@@ -1249,6 +1673,206 @@ mod tests {
             open_count, close_count,
             "Unbalanced parentheses in filter: {}",
             filter
+        );
+    }
+
+    // ---- compose_with_options filtergraph builder ----
+
+    #[test]
+    fn build_compose_filtergraph_single_clip_hardcut() {
+        let f =
+            VideoProcessor::build_compose_filtergraph(1, 1080, 1920, 60, None, &[], &[true], None);
+        assert!(f.contains("[0:v]"), "{}", f);
+        assert!(f.contains("crop=1080:1920"), "{}", f);
+        assert!(f.contains("[outv]") && f.ends_with("[outa]"), "{}", f);
+        assert!(
+            !f.contains("concat="),
+            "single clip should not concat: {}",
+            f
+        );
+    }
+
+    #[test]
+    fn build_compose_filtergraph_multi_clip_concat() {
+        let f = VideoProcessor::build_compose_filtergraph(
+            3,
+            1080,
+            1920,
+            60,
+            None,
+            &[],
+            &[true, true, true],
+            None,
+        );
+        assert!(f.contains("concat=n=3:v=1:a=1[vc][ac]"), "{}", f);
+        assert!(f.contains("[v0][a0][v1][a1][v2][a2]"), "{}", f);
+    }
+
+    #[test]
+    fn build_compose_filtergraph_transition_uses_xfade_offsets() {
+        // Two 5s clips with a 0.5s fade: first xfade offset = 5.0 - 0.5 = 4.5.
+        let f = VideoProcessor::build_compose_filtergraph(
+            2,
+            1080,
+            1920,
+            30,
+            Some(("fade", 0.5)),
+            &[5.0, 5.0],
+            &[true, true],
+            None,
+        );
+        assert!(
+            f.contains("xfade=transition=fade:duration=0.5:offset=4.500"),
+            "{}",
+            f
+        );
+        assert!(f.contains("acrossfade=d=0.5"), "{}", f);
+        assert!(!f.contains("concat="), "{}", f);
+    }
+
+    #[test]
+    fn build_compose_filtergraph_slide_maps_to_slideleft() {
+        let f = VideoProcessor::build_compose_filtergraph(
+            2,
+            1080,
+            1920,
+            30,
+            Some(("slide", 0.5)),
+            &[5.0, 5.0],
+            &[true, true],
+            None,
+        );
+        assert!(f.contains("transition=slideleft"), "{}", f);
+    }
+
+    #[test]
+    fn build_compose_filtergraph_zoom_appended() {
+        let f = VideoProcessor::build_compose_filtergraph(
+            2,
+            1080,
+            1920,
+            60,
+            None,
+            &[],
+            &[true, true],
+            Some(&[3.0]),
+        );
+        assert!(f.contains("zoompan"), "{}", f);
+        assert!(f.contains("fps=60"), "{}", f);
+    }
+
+    // ---- silent-clip handling: no [i:a] reference, synthesized silence ----
+
+    #[test]
+    fn build_compose_filtergraph_all_audio_uses_input_audio() {
+        // Regression: every clip has audio -> real [i:a], no synthesized silence.
+        let f = VideoProcessor::build_compose_filtergraph(
+            2,
+            1080,
+            1920,
+            60,
+            None,
+            &[5.0, 5.0],
+            &[true, true],
+            None,
+        );
+        assert!(f.contains("[0:a]"), "audio clip keeps [0:a]: {}", f);
+        assert!(f.contains("[1:a]"), "audio clip keeps [1:a]: {}", f);
+        assert!(
+            !f.contains("anullsrc"),
+            "no silence should be synthesized: {}",
+            f
+        );
+    }
+
+    #[test]
+    fn build_compose_filtergraph_silent_clip_synthesizes_bounded_silence() {
+        // Mixed: clip 1 has no audio -> anullsrc bounded to its trimmed duration,
+        // and its [1:a] input must never be referenced.
+        let f = VideoProcessor::build_compose_filtergraph(
+            2,
+            1080,
+            1920,
+            60,
+            None,
+            &[5.0, 4.0],
+            &[true, false],
+            None,
+        );
+        assert!(f.contains("[0:a]"), "audio clip keeps [0:a]: {}", f);
+        assert!(
+            !f.contains("[1:a]"),
+            "silent clip must not reference [1:a]: {}",
+            f
+        );
+        assert!(
+            f.contains("anullsrc=channel_layout=stereo:sample_rate=48000"),
+            "silence synthesized for silent clip: {}",
+            f
+        );
+        assert!(
+            f.contains("atrim=duration=4.000"),
+            "silence bounded to clip's trimmed duration: {}",
+            f
+        );
+        assert!(
+            f.contains("[a1]"),
+            "synthesized silence still labeled [a1]: {}",
+            f
+        );
+        // Concat still consumes [v_][a_] pairs for every clip.
+        assert!(f.contains("[v0][a0][v1][a1]concat=n=2"), "{}", f);
+    }
+
+    #[test]
+    fn build_compose_filtergraph_all_silent_synthesizes_all_silence() {
+        let f = VideoProcessor::build_compose_filtergraph(
+            2,
+            1080,
+            1920,
+            60,
+            None,
+            &[3.0, 3.0],
+            &[false, false],
+            None,
+        );
+        assert!(
+            !f.contains("[0:a]") && !f.contains("[1:a]"),
+            "no input audio references when all clips are silent: {}",
+            f
+        );
+        assert_eq!(
+            f.matches("anullsrc").count(),
+            2,
+            "exactly one silence source per clip: {}",
+            f
+        );
+        assert!(f.contains("[v0][a0][v1][a1]concat=n=2"), "{}", f);
+    }
+
+    #[test]
+    fn build_compose_filtergraph_silent_clip_with_transition_feeds_acrossfade() {
+        // Transition path: acrossfade must still find [a1] from synthesized silence.
+        let f = VideoProcessor::build_compose_filtergraph(
+            2,
+            1080,
+            1920,
+            30,
+            Some(("fade", 0.5)),
+            &[5.0, 5.0],
+            &[true, false],
+            None,
+        );
+        assert!(
+            !f.contains("[1:a]"),
+            "silent clip must not reference [1:a] even with transition: {}",
+            f
+        );
+        assert!(f.contains("anullsrc"), "silence synthesized: {}", f);
+        assert!(
+            f.contains("[a0][a1]acrossfade=d=0.5"),
+            "acrossfade consumes the synthesized [a1]: {}",
+            f
         );
     }
 

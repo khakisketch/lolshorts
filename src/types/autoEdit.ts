@@ -72,6 +72,9 @@ export interface AutoEditConfig {
   canvas_template?: CanvasTemplate; // Optional canvas overlay
   background_music?: BackgroundMusic; // Optional background music
   audio_levels?: AudioLevels;       // Optional audio mixing levels
+  // Experimental: auto zoom-in on kill/event timestamps. Backend defaults to
+  // false (serde default) when omitted.
+  enable_event_zoom?: boolean;
 }
 
 // ========================================================================

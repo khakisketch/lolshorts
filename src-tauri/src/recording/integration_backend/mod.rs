@@ -110,7 +110,7 @@ mod tests {
         assert_eq!(config.fps, 60);
         assert_eq!(config.bitrate, 15_000_000);
         assert_eq!(config.resolution, (1920, 1080));
-        assert_eq!(config.buffer_duration_secs, 60);
+        assert_eq!(config.buffer_duration_secs, 90);
         assert_eq!(config.segment_duration_secs, 10);
     }
 

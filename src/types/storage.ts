@@ -55,5 +55,12 @@ export interface ClipMetadata {
 export interface StorageStats {
   total_games: number;
   total_clips: number;
+  /** clips 테이블에 등록된 파일들의 합산 크기 (기존 의미 유지) */
   total_size_bytes: number;
+  /** recordings/ 디렉토리(순환 버퍼 세그먼트 + wav 포함) 실사용량 */
+  recordings_dir_size_bytes?: number;
+  /** exports/ 디렉토리(자동편집 결과물) 실사용량 */
+  exports_dir_size_bytes?: number;
+  /** recordings + exports 실사용량 합계 */
+  total_disk_usage_bytes?: number;
 }

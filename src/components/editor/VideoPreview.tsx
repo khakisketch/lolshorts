@@ -19,6 +19,7 @@ export function VideoPreview() {
   const {
     selectedClipId,
     availableClips,
+    timelineClips,
     isPlaying,
     play,
     pause,
@@ -28,13 +29,25 @@ export function VideoPreview() {
   // Get selected clip
   const selectedClip = availableClips.find(c => c.file_path === selectedClipId);
 
+  // If the selected clip is on the timeline, it may have a trim range - the
+  // library-only ClipMetadata has no trim fields, so look it up separately.
+  const timelineClip = timelineClips.find(c => c.file_path === selectedClipId);
+  const trimStart = timelineClip?.trimStart ?? 0;
+  // trimEnd is undefined until the video's real duration is known (metadata
+  // load), at which point it falls back to the full duration.
+  const trimEnd = timelineClip?.trimEnd;
+  const effectiveEnd = trimEnd ?? duration;
+
   // Update video source when clip changes
   useEffect(() => {
     if (videoRef.current && selectedClip) {
       const src = convertFileSrc(selectedClip.file_path);
       videoRef.current.src = src;
       videoRef.current.load();
+      setCurrentVideoTime(trimStart);
     }
+    // Only reset when the clip itself changes, not on every trim adjustment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClip]);
 
   // Handle play/pause state
@@ -57,31 +70,59 @@ export function VideoPreview() {
 
   const handleTimeUpdate = useCallback(() => {
     if (videoRef.current) {
-      setCurrentVideoTime(videoRef.current.currentTime);
-      setCurrentTime(videoRef.current.currentTime);
+      const t = videoRef.current.currentTime;
+      // Auto-stop at the trimmed end so the preview reflects what will
+      // actually be exported (compose_shorts_v2 cuts trimEnd from the clip).
+      if (trimEnd !== undefined && t >= trimEnd) {
+        videoRef.current.pause();
+        videoRef.current.currentTime = trimEnd;
+        pause();
+        setCurrentVideoTime(trimEnd);
+        setCurrentTime(trimEnd);
+        return;
+      }
+      setCurrentVideoTime(t);
+      setCurrentTime(t);
     }
-  }, [setCurrentTime]);
+  }, [pause, setCurrentTime, trimEnd]);
 
   const handleLoadedMetadata = useCallback(() => {
     if (videoRef.current) {
       setDuration(videoRef.current.duration);
+      // Start playback position at the trim-in point rather than 0.
+      if (trimStart > 0) {
+        videoRef.current.currentTime = trimStart;
+        setCurrentVideoTime(trimStart);
+      }
     }
-  }, []);
+    // Only re-run when the clip (and thus trimStart) actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClip]);
 
   const handlePlayPause = useCallback(() => {
     if (isPlaying) {
       pause();
     } else {
+      // If the playhead is outside the trimmed range (e.g. sitting at the
+      // trimmed-out end from a previous auto-stop), restart from trimStart.
+      if (videoRef.current) {
+        const t = videoRef.current.currentTime;
+        if (t < trimStart || t >= effectiveEnd) {
+          videoRef.current.currentTime = trimStart;
+          setCurrentVideoTime(trimStart);
+        }
+      }
       play();
     }
-  }, [isPlaying, pause, play]);
+  }, [isPlaying, pause, play, trimStart, effectiveEnd]);
 
   const handleSeek = useCallback((value: number[]) => {
     if (videoRef.current) {
-      videoRef.current.currentTime = value[0];
-      setCurrentVideoTime(value[0]);
+      const clamped = Math.min(Math.max(value[0], trimStart), effectiveEnd);
+      videoRef.current.currentTime = clamped;
+      setCurrentVideoTime(clamped);
     }
-  }, []);
+  }, [trimStart, effectiveEnd]);
 
   const handleVolumeChange = useCallback((value: number[]) => {
     setVolume(value[0]);
@@ -129,22 +170,32 @@ export function VideoPreview() {
       {/* Custom Controls */}
       {selectedClip && (
         <div className="bg-card border-t p-4 space-y-2">
-          {/* Seek Bar */}
+          {/* Seek Bar - clamped to the timeline clip's trim range, if any */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground w-12 text-right">
               {formatDuration(currentVideoTime)}
             </span>
             <Slider
               value={[currentVideoTime]}
-              max={duration}
+              min={trimStart}
+              max={effectiveEnd}
               step={0.1}
               onValueChange={handleSeek}
               className="flex-1"
             />
             <span className="text-xs text-muted-foreground w-12">
-              {formatDuration(duration)}
+              {formatDuration(effectiveEnd)}
             </span>
           </div>
+          {timelineClip && (trimStart > 0 || (trimEnd !== undefined && trimEnd < duration)) && (
+            <p className="text-xs text-muted-foreground text-center">
+              {t('editor.preview.trimmedRangeNotice', {
+                start: formatDuration(trimStart),
+                end: formatDuration(effectiveEnd),
+                defaultValue: 'Trimmed preview: {{start}} - {{end}}',
+              })}
+            </p>
+          )}
 
           {/* Control Buttons */}
           <div className="flex items-center justify-between">

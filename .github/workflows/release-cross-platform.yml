@@ -3,7 +3,7 @@ name: Release - Cross-Platform
 on:
   push:
     tags:
-      - 'v*.*.*'  # Trigger on version tags (e.g., v1.0.0, v1.2.3)
+      - "v*.*.*" # Trigger on version tags (e.g., v1.0.0, v1.2.3)
 
 env:
   CARGO_TERM_COLOR: always
@@ -140,8 +140,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
 
       - name: Install WiX Toolset
         run: |
@@ -242,18 +242,16 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
 
       - name: Install macOS dependencies
         run: |
-          brew install create-dmg
-          # Install FFmpeg for macOS
+          brew install create-dmg ffmpeg
           mkdir -p src-tauri/binaries
-          curl -L "https://evermeet.cx/ffmpeg/ffmpeg-6.1.zip" -o ffmpeg.zip
-          unzip ffmpeg.zip
-          mv ffmpeg src-tauri/binaries/
-          chmod +x src-tauri/binaries/ffmpeg
+          cp "$(which ffmpeg)" src-tauri/binaries/ffmpeg
+          cp "$(which ffprobe)" src-tauri/binaries/ffprobe
+          chmod +x src-tauri/binaries/ffmpeg src-tauri/binaries/ffprobe
 
       - name: Install dependencies
         run: npm ci

@@ -1,18 +1,7 @@
 import { useState } from "react";
-import {
-  Home,
-  Film,
-  Video,
-  Settings,
-  LogOut,
-  Sparkles,
-  Youtube,
-  Grid3x3,
-  RotateCcw,
-} from "lucide-react";
+import { Home, Settings, LogOut, Grid3x3 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { useAuthStore } from "@/lib/auth";
 import { useTranslation } from "react-i18next";
 import { AuthModal } from "@/components/auth/AuthModal";
@@ -29,45 +18,22 @@ export function Sidebar({ className = "" }: SidebarProps) {
     entitlement?.tier === "PRO" && entitlement.status === "active";
   const tierLabel = hasProEntitlement ? "PRO" : "FREE";
 
+  // Top level is intentionally three destinations: 홈 / 결과 / 설정.
+  // Editing, auto-edit and sharing are not screens of their own any more —
+  // they are entered from a single item inside 결과.
   const navItems = [
     {
       path: "/",
-      label: t("nav.dashboard"),
+      label: t("nav.home"),
       icon: Home,
+      // Kept as `nav-dashboard` so existing e2e navigation steps keep working.
       testId: "nav-dashboard",
-    },
-    { path: "/games", label: t("nav.games"), icon: Film, testId: "nav-games" },
-    {
-      path: "/replays",
-      label: "Replays",
-      icon: RotateCcw,
-      testId: "nav-library",
-    },
-    {
-      path: "/editor",
-      label: t("nav.editor"),
-      icon: Video,
-      testId: "nav-editor",
-    },
-    {
-      path: "/auto-edit",
-      label: t("nav.autoEdit"),
-      icon: Sparkles,
-      testId: "nav-auto-edit",
     },
     {
       path: "/results",
       label: t("nav.results"),
       icon: Grid3x3,
       testId: "nav-results",
-    },
-    {
-      path: "/youtube",
-      label: t("nav.youtube"),
-      icon: Youtube,
-      badge: t("nav.pro"),
-      proRequired: true,
-      testId: "nav-youtube",
     },
     {
       path: "/settings",
@@ -101,54 +67,22 @@ export function Sidebar({ className = "" }: SidebarProps) {
         role="navigation"
         aria-label={t("nav.mainNavigation")}
       >
-        {navItems.map((item) => {
-          const isProRequired = item.proRequired && !hasProEntitlement;
-          return (
-            <Link
-              key={item.path}
-              to={item.path}
-              data-testid={item.testId}
-              className={`
-                gaming-nav-item flex items-center gap-3 px-4 py-3 text-sm font-bold tracking-wide
-                ${isProRequired ? "opacity-40" : ""}
-              `}
-              activeProps={{
-                className:
-                  "gaming-nav-item active flex items-center gap-3 px-4 py-3 text-sm font-bold tracking-wide",
-              }}
-              aria-label={
-                isProRequired
-                  ? `${item.label} (${t("nav.proRequired")})`
-                  : item.label
-              }
-              aria-disabled={isProRequired ? "true" : undefined}
-              onClick={
-                isProRequired
-                  ? (e) => {
-                      e.preventDefault();
-                      setAuthModalOpen(true);
-                    }
-                  : undefined
-              }
-            >
-              <item.icon className="w-5 h-5" aria-hidden="true" />
-              <span className="flex-1">{item.label}</span>
-              {item.badge && (
-                <Badge
-                  variant="outline"
-                  className={`text-[10px] ${
-                    isProRequired
-                      ? "border-yellow-600/50 text-yellow-600"
-                      : "border-gaming-cyan/50 text-gaming-cyan"
-                  }`}
-                  aria-label={item.badge}
-                >
-                  {item.badge}
-                </Badge>
-              )}
-            </Link>
-          );
-        })}
+        {navItems.map((item) => (
+          <Link
+            key={item.path}
+            to={item.path}
+            data-testid={item.testId}
+            className="gaming-nav-item flex items-center gap-3 px-4 py-3 text-sm font-bold tracking-wide"
+            activeProps={{
+              className:
+                "gaming-nav-item active flex items-center gap-3 px-4 py-3 text-sm font-bold tracking-wide",
+            }}
+            aria-label={item.label}
+          >
+            <item.icon className="w-5 h-5" aria-hidden="true" />
+            <span className="flex-1">{item.label}</span>
+          </Link>
+        ))}
       </nav>
 
       {/* User Profile / Auth */}

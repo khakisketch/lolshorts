@@ -22,11 +22,23 @@ pub struct AutoEditConfig {
     pub background_music: Option<BackgroundMusic>,
 
     /// 오디오 믹싱 레벨 설정
+    ///
+    /// 배경 음악이 없어도 게임 오디오 볼륨을 결정하므로 항상 의미가 있다.
+    /// `#[serde(default)]` 가 없으면 프론트가 이 필드를 생략했을 때
+    /// `missing field audio_levels` 로 auto-edit 이 통째로 실패한다.
+    #[serde(default)]
     pub audio_levels: AudioLevels,
 
     /// 중복 클립 사용 허용 여부 (기본값: false)
     #[serde(default)]
     pub allow_duplicates: bool,
+
+    /// 이벤트(킬 등) 시점 자동 줌인 효과 활성화 여부 (기본값: false)
+    ///
+    /// true면 선택된 클립들의 누적 타임라인 오프셋으로 event_times를 계산해
+    /// compose_with_options 로 전달, 소스 fps 60 기준 zoompan 을 적용한다.
+    #[serde(default)]
+    pub enable_event_zoom: bool,
 }
 
 /// 오버레이용 캔버스 템플릿
@@ -38,18 +50,41 @@ pub struct CanvasTemplate {
     pub elements: Vec<CanvasElement>,
 }
 
+// NOTE: the frontend (src/types/autoEdit.ts, src/components/editor/canvas/
+// CanvasControlsPanel.tsx, CanvasEditor.tsx) sends the `type` tag in
+// PascalCase ("Color"/"Gradient"/"Image"/"Text"), while these enums
+// serialize it in lowercase via `rename_all = "lowercase"`. These structs
+// are deserialized directly from Tauri command JSON args (see
+// `save_canvas_template` / `AutoEditConfig::canvas_template`), so a tag
+// case mismatch is a hard deserialization error, not a silently-skipped
+// branch. The `alias` below accepts the frontend's PascalCase tag in
+// addition to the canonical lowercase one; serialization is unaffected
+// (still emits lowercase, matching the tests below).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum BackgroundLayer {
+    #[serde(alias = "Color")]
     Color { value: String },
+    #[serde(alias = "Gradient")]
     Gradient { value: String },
+    #[serde(alias = "Image")]
     Image { path: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum CanvasElement {
+    #[serde(alias = "Text")]
     Text {
+        // `#[serde(default)]`: the frontend's CanvasElement type
+        // (src/types/autoEdit.ts) never sends an `id` field when
+        // constructing new elements (CanvasControlsPanel.tsx
+        // addTextElement/addImageElement) — `id` is unused by any Rust
+        // processing logic (grep confirms only `.id` reads elsewhere are
+        // unrelated ClipInfo/job ids), so defaulting to an empty string
+        // keeps deserialization from hard-failing on a frontend-omitted
+        // field instead of silently killing the whole canvas template.
+        #[serde(default)]
         id: String,
         content: String,
         font: String,
@@ -58,7 +93,9 @@ pub enum CanvasElement {
         outline: Option<String>,
         position: Position,
     },
+    #[serde(alias = "Image")]
     Image {
+        #[serde(default)]
         id: String,
         path: String,
         width: u32,
@@ -148,6 +185,21 @@ pub struct AutoEditProgress {
 #[serde(rename_all = "lowercase")]
 pub enum AutoEditStatus {
     Queued,
+    // Granular processing stages. These serialize in PascalCase (not the
+    // enum-wide lowercase) so that the frontend stepper's pass-through switch
+    // (src/api/video.ts `normalizeAutoEditStatus`) can highlight the matching
+    // stage row (SelectingClips/PreparingClips/Concatenating/ApplyingCanvas/
+    // MixingAudio). The generic `Processing` below is kept for backward compat.
+    #[serde(rename = "SelectingClips")]
+    SelectingClips,
+    #[serde(rename = "PreparingClips")]
+    PreparingClips,
+    #[serde(rename = "Concatenating")]
+    Concatenating,
+    #[serde(rename = "ApplyingCanvas")]
+    ApplyingCanvas,
+    #[serde(rename = "MixingAudio")]
+    MixingAudio,
     Processing,
     Completed,
     Failed,
@@ -193,6 +245,7 @@ mod tests {
             background_music: None,
             audio_levels: AudioLevels::default(),
             allow_duplicates: false,
+            enable_event_zoom: false,
         };
 
         let json = serde_json::to_string(&config).expect("serialization should succeed");
@@ -214,6 +267,7 @@ mod tests {
                 background_music: 40,
             },
             allow_duplicates: true,
+            enable_event_zoom: true,
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed");
@@ -226,6 +280,24 @@ mod tests {
         assert_eq!(restored.audio_levels.game_audio, 70);
         assert_eq!(restored.audio_levels.background_music, 40);
         assert!(restored.allow_duplicates);
+        assert!(restored.enable_event_zoom);
+    }
+
+    #[test]
+    fn auto_edit_config_enable_event_zoom_defaults_to_false_when_missing_from_json() {
+        // The field has #[serde(default)], so omitting it should deserialize as false.
+        let json = r#"{
+            "target_duration": 60,
+            "game_ids": [],
+            "selected_clip_ids": null,
+            "canvas_template": null,
+            "background_music": null,
+            "audio_levels": { "game_audio": 60, "background_music": 80 }
+        }"#;
+
+        let config: AutoEditConfig =
+            serde_json::from_str(json).expect("deserialization should succeed");
+        assert!(!config.enable_event_zoom);
     }
 
     #[test]
@@ -290,6 +362,40 @@ mod tests {
         }
     }
 
+    // ---- BackgroundLayer accepts the frontend's PascalCase `type` tag ----
+    // (src/types/autoEdit.ts / CanvasControlsPanel.tsx send "Color"/
+    // "Gradient"/"Image", not the canonical lowercase serialized form.)
+
+    #[test]
+    fn background_layer_deserializes_frontend_pascal_case_color_tag() {
+        let json = r##"{"type":"Color","value":"#112233"}"##;
+        let layer: BackgroundLayer =
+            serde_json::from_str(json).expect("should accept PascalCase tag");
+        match layer {
+            BackgroundLayer::Color { value } => assert_eq!(value, "#112233"),
+            _ => panic!("expected BackgroundLayer::Color"),
+        }
+    }
+
+    #[test]
+    fn background_layer_deserializes_frontend_pascal_case_gradient_tag() {
+        let json = r##"{"type":"Gradient","value":"#000:#fff"}"##;
+        let layer: BackgroundLayer =
+            serde_json::from_str(json).expect("should accept PascalCase tag");
+        assert!(matches!(layer, BackgroundLayer::Gradient { .. }));
+    }
+
+    #[test]
+    fn background_layer_deserializes_frontend_pascal_case_image_tag() {
+        let json = r#"{"type":"Image","path":"/bg.png"}"#;
+        let layer: BackgroundLayer =
+            serde_json::from_str(json).expect("should accept PascalCase tag");
+        match layer {
+            BackgroundLayer::Image { path } => assert_eq!(path, "/bg.png"),
+            _ => panic!("expected BackgroundLayer::Image"),
+        }
+    }
+
     // ---- CanvasElement serialization ----
 
     #[test]
@@ -319,6 +425,37 @@ mod tests {
         };
         let json = serde_json::to_string(&element).expect("serialization should succeed");
         assert!(json.contains("\"type\":\"image\""), "json: {}", json);
+    }
+
+    // ---- CanvasElement accepts the frontend's PascalCase `type` tag and
+    // its omitted `id` field (CanvasControlsPanel.tsx never sends `id`) ----
+
+    #[test]
+    fn canvas_element_deserializes_frontend_pascal_case_text_without_id() {
+        let json = r##"{"type":"Text","content":"Hello","font":"Arial","size":24,"color":"#fff","outline":null,"position":{"x":50.0,"y":10.0}}"##;
+        let element: CanvasElement =
+            serde_json::from_str(json).expect("should accept PascalCase tag with missing id");
+        match element {
+            CanvasElement::Text { id, content, .. } => {
+                assert_eq!(id, "");
+                assert_eq!(content, "Hello");
+            }
+            _ => panic!("expected CanvasElement::Text"),
+        }
+    }
+
+    #[test]
+    fn canvas_element_deserializes_frontend_pascal_case_image_without_id() {
+        let json = r#"{"type":"Image","path":"/img.png","width":100,"height":80,"position":{"x":0.0,"y":0.0}}"#;
+        let element: CanvasElement =
+            serde_json::from_str(json).expect("should accept PascalCase tag with missing id");
+        match element {
+            CanvasElement::Image { id, path, .. } => {
+                assert_eq!(id, "");
+                assert_eq!(path, "/img.png");
+            }
+            _ => panic!("expected CanvasElement::Image"),
+        }
     }
 
     // ---- AutoEditStatus ----
@@ -363,5 +500,39 @@ mod tests {
     fn auto_edit_status_deserializes_from_lowercase_failed() {
         let status: AutoEditStatus = serde_json::from_str("\"failed\"").unwrap();
         assert_eq!(status, AutoEditStatus::Failed);
+    }
+
+    // ---- Granular stage variants serialize in PascalCase for the frontend stepper ----
+
+    #[test]
+    fn auto_edit_status_stage_variants_serialize_in_pascal_case() {
+        // These must match the pass-through cases in src/api/video.ts exactly.
+        assert_eq!(
+            serde_json::to_string(&AutoEditStatus::SelectingClips).unwrap(),
+            "\"SelectingClips\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AutoEditStatus::PreparingClips).unwrap(),
+            "\"PreparingClips\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AutoEditStatus::Concatenating).unwrap(),
+            "\"Concatenating\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AutoEditStatus::ApplyingCanvas).unwrap(),
+            "\"ApplyingCanvas\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AutoEditStatus::MixingAudio).unwrap(),
+            "\"MixingAudio\""
+        );
+    }
+
+    #[test]
+    fn auto_edit_status_processing_still_serializes_to_lowercase() {
+        // Backward-compat: the legacy generic status is unchanged.
+        let json = serde_json::to_string(&AutoEditStatus::Processing).unwrap();
+        assert_eq!(json, "\"processing\"");
     }
 }

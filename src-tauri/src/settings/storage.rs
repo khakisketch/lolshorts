@@ -131,11 +131,55 @@ impl RecordingSettings {
     /// - Windows: %APPDATA%/Roaming/LoLShorts/settings.json
     /// - macOS: ~/Library/Application Support/LoLShorts/settings.json
     /// - Linux: ~/.config/LoLShorts/settings.json
+    ///
+    /// NOTE: this is a deliberately separate storage channel from
+    /// `storage::Storage` (SQLite + media files under `dirs::data_dir()`).
+    /// On Windows both resolve under `%APPDATA%\Roaming`, but on Linux
+    /// `dirs::config_dir()` (`~/.config`) and `dirs::data_dir()`
+    /// (`~/.local/share`) are genuinely different directories. They are
+    /// intentionally NOT merged here to avoid a migration/data-loss risk for
+    /// existing users -- see the storage-location note on `storage::Storage`
+    /// for the other half of this split.
     fn get_settings_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir().ok_or(SettingsError::ConfigDirNotFound)?;
+        Ok(Self::config_dir()?.join("settings.json"))
+    }
 
-        let lolshorts_dir = config_dir.join("LoLShorts");
-        Ok(lolshorts_dir.join("settings.json"))
+    /// Directory holding `settings.json`.
+    ///
+    /// `LOLSHORTS_CONFIG_DIR` overrides it. That escape hatch exists because the
+    /// tests in this module WRITE AND DELETE the settings file, and they used to
+    /// do it against the real one: a plain `cargo test` on a developer's machine
+    /// silently destroyed that machine's saved settings. It was observed, not
+    /// theorised -- the log went
+    ///
+    /// ```text
+    /// 07:37:46  Loaded settings from: ...\LoLShorts\settings.json
+    /// 07:42:29  Settings file not found, using defaults
+    /// ```
+    ///
+    /// with nothing but a test run in between, and only `settings.json.bak`
+    /// survived. (The `#[ignore]` on `test_save_and_load`, blaming a "race
+    /// condition ... both use same settings file", was the same bug seen from
+    /// the other side and worked around instead of fixed.)
+    ///
+    /// Unit tests get an automatic per-process temp directory so they can never
+    /// reach real user data even if someone forgets the variable; integration
+    /// tests, which link the library without `cfg(test)`, must set it.
+    fn config_dir() -> Result<PathBuf> {
+        if let Some(dir) = std::env::var_os("LOLSHORTS_CONFIG_DIR") {
+            return Ok(PathBuf::from(dir));
+        }
+
+        #[cfg(test)]
+        {
+            return Ok(test_config_dir());
+        }
+
+        #[cfg(not(test))]
+        {
+            let config_dir = dirs::config_dir().ok_or(SettingsError::ConfigDirNotFound)?;
+            Ok(config_dir.join("LoLShorts"))
+        }
     }
 
     /// Reset settings to default and save
@@ -398,11 +442,47 @@ impl RecordingSettings {
     }
 }
 
+/// Per-process throwaway config directory for unit tests.
+///
+/// Kept alive for the whole test binary (leaked on purpose) so the directory is
+/// not removed while a later test still reads from it. The `LoLShorts` component
+/// is preserved because `test_settings_path` asserts on it -- and because the
+/// real layout is what we want to exercise, just somewhere harmless.
+#[cfg(test)]
+fn test_config_dir() -> PathBuf {
+    use std::sync::OnceLock;
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let base = tempfile::Builder::new()
+            .prefix("lolshorts-settings-test-")
+            .tempdir()
+            .expect("temp dir for settings tests");
+        let path = base.keep().join("LoLShorts");
+        std::fs::create_dir_all(&path).expect("temp config dir");
+        path
+    })
+    .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn settings_tests_never_touch_the_real_config_directory() {
+        // The guard for the data-loss bug documented on `config_dir`. If this
+        // ever fails, `cargo test` is again writing where a user's settings live.
+        let path = RecordingSettings::get_settings_path().unwrap();
+        let real = dirs::config_dir().map(|d| d.join("LoLShorts").join("settings.json"));
+        assert_ne!(
+            Some(path.clone()),
+            real,
+            "테스트가 실제 사용자 설정 파일을 가리키고 있다: {}",
+            path.display()
+        );
+    }
 
     #[test]
     fn test_settings_path() {

@@ -258,7 +258,7 @@ pub enum UploadStatus {
 /// - Total number of games recorded
 /// - Total number of clips created
 /// - Total storage space used
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StorageStats {
     /// Total number of games with recorded clips
     pub total_games: usize,
@@ -266,8 +266,38 @@ pub struct StorageStats {
     /// Total number of individual clips across all games
     pub total_clips: usize,
 
-    /// Total storage used by all clips in bytes
+    /// Total storage used by all clips in bytes.
+    ///
+    /// NOTE: this is computed from the `clips` DB table only (sum of
+    /// `fs::metadata(file_path).len()` for every known clip row) and does
+    /// NOT include the rolling-buffer segments directory, replays, or
+    /// auto-edit exports. Kept as-is for backward compatibility with
+    /// existing frontend consumers -- see `recordings_dir_size_bytes` /
+    /// `exports_dir_size_bytes` / `total_disk_usage_bytes` below for a
+    /// fuller picture of real disk usage.
     pub total_size_bytes: u64,
+
+    /// Real on-disk usage (bytes) of `base_path/recordings`, i.e. the
+    /// rolling-buffer segments (segment mp4s, WASAPI loopback WAV, concat
+    /// list) plus the flat extracted-clip directory. Unlike
+    /// `total_size_bytes`, this is a filesystem walk and is unaware of the
+    /// DB, so it also counts files the DB doesn't know about (e.g. stale
+    /// segments) and won't count clip files a user relocated outside this
+    /// directory.
+    #[serde(default)]
+    pub recordings_dir_size_bytes: u64,
+
+    /// Real on-disk usage (bytes) of `base_path/exports` (auto-edit
+    /// intermediate stages + final rendered Shorts + thumbnails).
+    #[serde(default)]
+    pub exports_dir_size_bytes: u64,
+
+    /// Best-effort total disk footprint of everything this app manages
+    /// under `base_path`: `recordings_dir_size_bytes + exports_dir_size_bytes`.
+    /// This is the field to prefer for a "how much disk am I using" display;
+    /// `total_size_bytes` undercounts because it ignores segments/exports.
+    #[serde(default)]
+    pub total_disk_usage_bytes: u64,
 }
 
 #[cfg(test)]

@@ -34,11 +34,9 @@ export function Replays() {
     try {
       const isConnected = await lcuApi.checkStatus();
       if (!isConnected) {
-        toast({
-          title: t('replays.toast.lcuDisconnected'),
-          description: t('replays.toast.lcuDisconnectedDesc'),
-          variant: "destructive",
-        });
+        // A disconnected client is the normal state when the user is not
+        // playing — the empty state below says so in plain words, so there is
+        // no error toast to dismiss every time this tab is opened.
         setMatches([]);
         return;
       }
@@ -121,47 +119,53 @@ export function Replays() {
   return (
     <div data-testid="replays-page" className={pageStyles.container}>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <h1 className={pageStyles.title}>{t('replays.title')}</h1>
+        <h2 className="text-xl font-bold">{t('replays.title')}</h2>
         <Button variant="outline" onClick={loadMatches} disabled={loading}>
           <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           {t('replays.refresh')}
         </Button>
       </div>
 
-      {/* Filters */}
-      <div className="bg-black/40 rounded-lg border border-white/5 p-4 mb-6">
-        <div className="flex gap-4">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder={t('replays.searchPlaceholder', 'Search by mode or game ID...')}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Filter className="h-4 w-4 text-muted-foreground" />
-            <Select value={filterWin} onValueChange={setFilterWin}>
-              <SelectTrigger className="w-[150px]">
-                <SelectValue placeholder={t('replays.filterWinPlaceholder', 'All Results')} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{t('replays.filter.allResults', 'All Results')}</SelectItem>
-                <SelectItem value="win">{t('replays.victory')}</SelectItem>
-                <SelectItem value="loss">{t('replays.defeat')}</SelectItem>
-              </SelectContent>
-            </Select>
+      {/* Filters — only worth showing once there is something to filter. */}
+      {matches.length > 0 && (
+        <div className="bg-black/40 rounded-lg border border-white/5 p-4">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder={t('replays.searchPlaceholder')}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
+              <Select value={filterWin} onValueChange={setFilterWin}>
+                <SelectTrigger className="w-full sm:w-[150px]">
+                  <SelectValue placeholder={t('replays.filterWinPlaceholder')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{t('replays.filter.allResults')}</SelectItem>
+                  <SelectItem value="win">{t('replays.victory')}</SelectItem>
+                  <SelectItem value="loss">{t('replays.defeat')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {matches.length === 0 && !loading && (
         <EmptyState
           title={t('replays.noMatches')}
-          description={t('replays.noMatchesDesc', 'Start playing a game with League of Legends running, and your games will be automatically recorded here.')}
+          description={
+            <span style={{ wordBreak: 'keep-all' }}>
+              {t('replays.noMatchesDesc')}
+            </span>
+          }
           action={{
-            label: t('replays.emptyState.action', 'Refresh History'),
+            label: t('replays.emptyState.action'),
             onClick: loadMatches,
           }}
           className="py-20"
@@ -171,10 +175,10 @@ export function Replays() {
       {matches.length > 0 && filteredMatches.length === 0 && (
         <EmptyState
           icon={Search}
-          title={t('replays.noMatchesMatchFilters', 'No matches found')}
-          description={t('replays.tryDifferentFilters', 'Try adjusting your search or filter criteria.')}
+          title={t('replays.noMatchesMatchFilters')}
+          description={t('replays.tryDifferentFilters')}
           action={{
-            label: t('replays.clearFilters', 'Clear Filters'),
+            label: t('replays.clearFilters'),
             onClick: () => {
               setSearchQuery('');
               setFilterWin('all');
@@ -193,8 +197,8 @@ export function Replays() {
                   <span className={`text-base font-bold ${match.win ? 'text-gaming-cyan' : 'text-gaming-magenta'}`}>
                     {match.win ? t('replays.victory') : t('replays.defeat')}
                   </span>
-                  <Badge variant="outline" className="text-[10px] uppercase tracking-wider opacity-70">
-                    Replay Match
+                  <Badge variant="outline" className="text-[10px] tracking-wider opacity-70">
+                    {t('replays.badge.match')}
                   </Badge>
                 </div>
                 <span className="text-sm text-muted-foreground">
@@ -205,7 +209,9 @@ export function Replays() {
             <div className="p-4 space-y-2 bg-black/20">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">{t('replays.champion')}:</span>
-                <span className="font-medium">Champion #{match.champion_id}</span>
+                <span className="font-medium">
+                  {t('replays.championNumber', { id: match.champion_id })}
+                </span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">{t('replays.mode')}:</span>

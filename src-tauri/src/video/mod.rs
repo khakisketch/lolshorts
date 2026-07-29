@@ -1,6 +1,5 @@
 pub mod auto_composer;
 pub mod commands;
-pub mod performance;
 pub mod processor;
 pub mod statistics;
 pub mod thumbnail;
@@ -33,6 +32,9 @@ pub enum VideoError {
     // FFmpeg Errors
     #[error("FFmpeg is not installed or not found in system PATH\n\nPlease install FFmpeg from https://ffmpeg.org/download.html")]
     FfmpegNotFound,
+
+    #[error("FFprobe is not bundled or not found in system PATH\n\nVideo probing features need FFprobe beside FFmpeg.")]
+    FfprobeNotFound,
 
     #[error("FFmpeg process failed: {message}\n\nTechnical details: {stderr}")]
     FfmpegProcessError { message: String, stderr: String },
@@ -139,6 +141,11 @@ impl VideoError {
                 "Add FFmpeg to your system PATH".to_string(),
                 "Restart the application after installing".to_string(),
             ],
+            Self::FfprobeNotFound => vec![
+                "Bundle FFprobe beside FFmpeg".to_string(),
+                "Run the FFmpeg preparation script before building installers".to_string(),
+                "Restart the application after installing FFprobe".to_string(),
+            ],
             Self::NoClipsFound => vec![
                 "Record more games to generate clips".to_string(),
                 "Check recording settings are enabled".to_string(),
@@ -187,6 +194,16 @@ const FFMPEG_PROCESS_TIMEOUT_SECS: u64 = 30 * 60;
 /// Helper to execute FFmpeg command with proper error handling
 pub async fn execute_ffmpeg_command(command: &mut tokio::process::Command) -> Result<()> {
     use tokio::time::{timeout, Duration};
+
+    // Bound the number of concurrent offline FFmpeg processes. Held for the
+    // duration of this encode; released on drop. Realtime recording does not go
+    // through this path, so it is never throttled.
+    let _pool_permit = crate::utils::ffmpeg_pool::global_ffmpeg_pool()
+        .acquire()
+        .await
+        .map_err(|e| VideoError::ProcessingError {
+            message: format!("FFmpeg pool acquire failed: {}", e),
+        })?;
 
     command.stderr(std::process::Stdio::piped());
     command.stdout(std::process::Stdio::null());

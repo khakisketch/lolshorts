@@ -1,4 +1,6 @@
--- Enable required extensions
+-- Enable required extensions.
+-- Production Supabase projects already provide the auth schema and API roles.
+-- Any local bootstrap in this file must stay passwordless and least-privilege.
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
@@ -217,7 +219,8 @@ BEGIN
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, auth, pg_temp;
 
 -- Add triggers for updated_at
 CREATE TRIGGER update_user_profiles_updated_at BEFORE UPDATE ON public.user_profiles
@@ -325,7 +328,9 @@ CREATE POLICY "Users can insert own quota" ON public.quota_usage
 CREATE POLICY "Users can update own quota" ON public.quota_usage
     FOR UPDATE USING (auth.uid() = user_id);
 
--- Create database roles if they don't exist
+-- Create only the passwordless API roles needed by local Postgres bootstrap.
+-- Supabase-hosted production projects already own these roles; do not create
+-- LOGIN roles or default passwords in production-facing migrations.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN
@@ -339,35 +344,29 @@ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
         CREATE ROLE service_role NOLOGIN;
     END IF;
-
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticator') THEN
-        CREATE ROLE authenticator LOGIN PASSWORD 'postgres';
-    END IF;
-
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'supabase_admin') THEN
-        CREATE ROLE supabase_admin LOGIN PASSWORD 'postgres';
-    END IF;
-
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'supabase_auth_admin') THEN
-        CREATE ROLE supabase_auth_admin LOGIN PASSWORD 'postgres';
-    END IF;
-
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'supabase_storage_admin') THEN
-        CREATE ROLE supabase_storage_admin LOGIN PASSWORD 'postgres';
-    END IF;
 END
 $$;
 
--- Grant permissions
+-- Grant permissions. RLS remains the data access boundary for authenticated
+-- users; anon only receives explicit public catalog reads.
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT SELECT ON public.license_tiers TO anon, authenticated;
 
--- Grant authenticator the ability to switch to other roles
-GRANT anon TO authenticator;
-GRANT authenticated TO authenticator;
-GRANT service_role TO authenticator;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.user_profiles TO authenticated;
+GRANT SELECT ON public.user_licenses TO authenticated;
+GRANT SELECT ON public.subscriptions TO authenticated;
+GRANT SELECT ON public.payments TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.games TO authenticated;
+GRANT SELECT, INSERT, DELETE ON public.clips TO authenticated;
+GRANT SELECT, INSERT, DELETE ON public.auto_edit_results TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.youtube_uploads TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.quota_usage TO authenticated;
+
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.update_updated_at_column() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.handle_new_user() TO service_role;
+
 
 -- Comment on tables
 COMMENT ON TABLE public.user_profiles IS 'User profile information only; entitlement is in user_licenses';

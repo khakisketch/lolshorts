@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::process::Child;
 use tokio::sync::Mutex;
@@ -6,6 +7,24 @@ use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
 const DEFAULT_MAX_CONCURRENT: usize = 3;
+
+/// Concurrency cap for the process-wide offline FFmpeg pool. Kept low because
+/// consumer hardware encoders (notably NVENC) limit simultaneous sessions.
+const DEFAULT_GLOBAL_MAX_CONCURRENT: usize = 2;
+
+/// Acquire timeout for the global pool. Deliberately longer than any single
+/// offline encode's process timeout so a queued encode waits its turn instead
+/// of spuriously failing while another encode holds the slot.
+const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+
+static GLOBAL_POOL: OnceLock<FfmpegPool> = OnceLock::new();
+
+/// Process-wide FFmpeg concurrency limiter for **offline** video processing
+/// (export / compose / effects). NOT used by the realtime segment recorder,
+/// which owns its own capture process lifecycle.
+pub fn global_ffmpeg_pool() -> &'static FfmpegPool {
+    GLOBAL_POOL.get_or_init(|| FfmpegPool::new(DEFAULT_GLOBAL_MAX_CONCURRENT))
+}
 
 pub struct FfmpegPool {
     semaphore: Arc<Semaphore>,
@@ -23,18 +42,15 @@ impl FfmpegPool {
     }
 
     pub async fn acquire(&self) -> Result<FfmpegPermit, crate::error::AppError> {
-        let permit = tokio::time::timeout(
-            Duration::from_secs(30),
-            self.semaphore.clone().acquire_owned(),
-        )
-        .await
-        .map_err(|_| {
-            crate::error::AppError::ProcessTimeout(format!(
-                "FFmpeg pool full ({} concurrent). Timed out waiting for slot.",
-                self.max_concurrent
-            ))
-        })?
-        .map_err(|_| crate::error::AppError::Internal("Semaphore closed".into()))?;
+        let permit = tokio::time::timeout(ACQUIRE_TIMEOUT, self.semaphore.clone().acquire_owned())
+            .await
+            .map_err(|_| {
+                crate::error::AppError::ProcessTimeout(format!(
+                    "FFmpeg pool full ({} concurrent). Timed out waiting for slot.",
+                    self.max_concurrent
+                ))
+            })?
+            .map_err(|_| crate::error::AppError::Internal("Semaphore closed".into()))?;
 
         Ok(FfmpegPermit {
             _permit: permit,

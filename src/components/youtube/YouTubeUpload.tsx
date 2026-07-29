@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useYouTube } from '@/hooks/useYouTube';
 import { useAutoEditResults } from '@/hooks/useAutoEditResults';
+import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -72,6 +73,7 @@ function classifyUploadError(error: unknown): UploadErrorType {
 export function YouTubeUpload({ initialPath, resultId }: YouTubeUploadProps = {}) {
   const { t } = useTranslation();
   const { getResult, updateYouTubeStatus: updateResultStatus } = useAutoEditResults();
+  const { toast } = useToast();
   const {
     authStatus,
     isLoading,
@@ -154,6 +156,11 @@ export function YouTubeUpload({ initialPath, resultId }: YouTubeUploadProps = {}
       }
     } catch (err) {
       logger.error('File selection error:', err);
+      toast({
+        title: t('toast.error'),
+        description: t('errors.fileSelectionFailed'),
+        variant: 'destructive',
+      });
     }
   };
 
@@ -169,6 +176,11 @@ export function YouTubeUpload({ initialPath, resultId }: YouTubeUploadProps = {}
       }
     } catch (err) {
       logger.error('File selection error:', err);
+      toast({
+        title: t('toast.error'),
+        description: t('errors.fileSelectionFailed'),
+        variant: 'destructive',
+      });
     }
   };
 
@@ -627,6 +639,15 @@ export function YouTubeUpload({ initialPath, resultId }: YouTubeUploadProps = {}
                 min={new Date().toISOString().slice(0, 16)}
               />
               <p className="text-xs text-muted-foreground">{t('youtube.schedule.publishAtHint')}</p>
+              <Alert className="bg-blue-50 text-blue-900 border-blue-200">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription className="text-xs">
+                  {t(
+                    'youtube.schedule.appMustBeRunningNotice',
+                    'This is not a native YouTube schedule - LoLShorts must be running at the scheduled time for the upload to start.',
+                  )}
+                </AlertDescription>
+              </Alert>
             </div>
           )}
 
@@ -682,6 +703,12 @@ export function YouTubeUpload({ initialPath, resultId }: YouTubeUploadProps = {}
               {t('youtube.schedule.queueTitle')} ({uploadQueue.length})
             </h4>
           </div>
+          <p className="text-xs text-muted-foreground">
+            {t(
+              'youtube.schedule.appMustBeRunningNotice',
+              'This is not a native YouTube schedule - LoLShorts must be running at the scheduled time for the upload to start.',
+            )}
+          </p>
           <div className="space-y-2">
             {uploadQueue.map((item) => (
               <div

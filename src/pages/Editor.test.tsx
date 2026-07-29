@@ -40,6 +40,7 @@ jest.mock('@/hooks/useStorage', () => ({
   useStorage: () => ({
     getAllGames: mockGetAllGames,
     isLoading: false,
+    error: null,
   }),
 }));
 
@@ -117,11 +118,42 @@ describe('Editor', () => {
       jest.spyOn(require('@/hooks/useStorage'), 'useStorage').mockImplementation(() => ({
         getAllGames: jest.fn().mockResolvedValue([]),
         isLoading: true,
+        error: null,
       }));
 
       // This test just verifies the component renders without error during loading
       const { container } = render(<Editor />);
       expect(container).toBeTruthy();
+    });
+  });
+
+  describe('Games Error State', () => {
+    it('shows an error message with a retry button instead of spinning forever', async () => {
+      const retryGetAllGames = jest.fn().mockResolvedValue([]);
+      jest.spyOn(require('@/hooks/useStorage'), 'useStorage').mockImplementation(() => ({
+        getAllGames: retryGetAllGames,
+        isLoading: false,
+        error: 'disk read error',
+      }));
+
+      render(<Editor />);
+
+      await waitFor(() => {
+        expect(screen.getByText('editor.errorLoadingGames')).toBeInTheDocument();
+        expect(screen.getByText('disk read error')).toBeInTheDocument();
+      });
+
+      const callsBeforeRetry = retryGetAllGames.mock.calls.length;
+      expect(callsBeforeRetry).toBeGreaterThan(0);
+
+      const retryButton = screen.getByText('editor.retry');
+      expect(retryButton).toBeInTheDocument();
+
+      retryButton.click();
+
+      await waitFor(() => {
+        expect(retryGetAllGames.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+      });
     });
   });
 

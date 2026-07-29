@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Arc;
+use tauri::Manager;
 use tokio::sync::RwLock;
 // Import everything from the library crate
 use lolshorts::*;
@@ -130,9 +131,6 @@ async fn main() {
 
     // 인증 관리자(Auth Manager) 초기화
     let auth = Arc::new(auth::AuthManager::new());
-
-    // 기능 게이트(Feature Gate) 초기화
-    let feature_gate = Arc::new(feature_gate::FeatureGate::new(auth.clone()));
 
     // 녹화 디렉토리 초기화
     let mut recordings_dir = runtime_data_dir.join("recordings");
@@ -303,6 +301,38 @@ async fn main() {
 
     tracing::info!("정리 관리자 초기화됨");
 
+    // 저장 공간 보존 정책(자동 삭제/최대 용량) 적용: 기동 1회 + 6시간 간격 반복.
+    // 매 사이클마다 recording_settings를 다시 읽어 사용자가 설정 화면에서
+    // 바꾼 값을 재시작 없이 반영한다(캐시된 스냅샷을 쓰지 않음).
+    {
+        let retention_storage = Arc::clone(&storage);
+        let retention_settings = Arc::clone(&recording_settings);
+        let retention_cleanup_manager = Arc::clone(&cleanup_manager);
+
+        let startup_settings_snapshot = retention_settings.read().await.storage.clone();
+        if let Err(e) = retention_cleanup_manager
+            .run_retention_cycle(&retention_storage, &startup_settings_snapshot)
+            .await
+        {
+            tracing::error!("시작 시 저장 공간 보존 정책 적용 실패: {}", e);
+        }
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
+            interval.tick().await; // 첫 tick은 즉시 완료됨 — 위의 기동 1회 실행과 중복 방지
+            loop {
+                interval.tick().await;
+                let settings_snapshot = retention_settings.read().await.storage.clone();
+                if let Err(e) = retention_cleanup_manager
+                    .run_retention_cycle(&retention_storage, &settings_snapshot)
+                    .await
+                {
+                    tracing::error!("저장 공간 보존 정책 적용 실패: {}", e);
+                }
+            }
+        });
+    }
+
     // 자동 편집(Auto-edit) 기능을 위한 Auto Composer 초기화
     let video_processor = match video::VideoProcessor::new() {
         Ok(processor) => {
@@ -318,10 +348,19 @@ async fn main() {
         }
     };
 
-    let auto_composer = Arc::new(video::AutoComposer::new(
-        Arc::clone(&video_processor),
-        Arc::clone(&storage),
-    ));
+    let auto_composer = {
+        let mut composer =
+            video::AutoComposer::new(Arc::clone(&video_processor), Arc::clone(&storage));
+        // 산출물을 %TEMP% 대신 앱 관리 디렉토리에 보존 (중간 산출물은 자동 정리)
+        composer.set_output_root(runtime_data_dir.join("exports").join("auto_edit"));
+        let audio = recording_settings.read().await.audio.clone();
+        composer.set_normalize_audio(if audio.audio_normalize {
+            Some(audio.audio_target_lufs)
+        } else {
+            None
+        });
+        Arc::new(composer)
+    };
 
     tracing::info!("Auto Composer 초기화됨");
 
@@ -351,11 +390,11 @@ async fn main() {
     let overlay_settings = Arc::clone(&recording_settings);
     let recording_disk_monitor_for_start = Arc::clone(&recording_disk_monitor);
     let recording_disk_monitor_for_end = Arc::clone(&recording_disk_monitor);
+    let storage_for_game_lifecycle = Arc::clone(&storage);
 
     let app_state = AppState {
         storage,
         auth,
-        feature_gate,
         recording_manager: Arc::clone(&recording_manager),
         clip_manager: Arc::clone(&auto_clip_manager),
         game_monitor: Arc::clone(&game_monitor),
@@ -375,6 +414,11 @@ async fn main() {
     let recording_manager_hotkey = Arc::clone(&recording_manager);
     let auto_clip_manager_hotkey = Arc::clone(&auto_clip_manager);
     let startup_issues_hotkey = Arc::clone(&startup_issues);
+    // B4 fix: F8/F9는 게임 자동 감지(game_start_callback/game_end_callback)와 별개
+    // 진입점이라 오버레이 show/hide가 없었다 — 아래에서 같은 handle/settings로
+    // 대칭 적용한다(apply_overlay_show_for_hotkey/apply_overlay_hide_for_hotkey).
+    let overlay_handle_for_hotkey = Arc::clone(&overlay_app_handle);
+    let recording_settings_for_hotkey = Arc::clone(&app_state.recording_settings);
     let hotkey_settings = app_state.recording_settings.read().await.hotkeys.clone();
     let hotkey_config = hotkey::HotkeyConfig {
         manual_save_clip: hotkey_settings.manual_save_clip,
@@ -384,11 +428,15 @@ async fn main() {
 
     // TODO: Replace with spawn_monitored once the inner closure types support UnwindSafe
     tokio::spawn(async move {
+        let storage_hotkey = Arc::clone(&storage_for_game_lifecycle);
         let hotkey_result = hotkey_manager
             .start_with_config(
                 move |event| {
                     let rm = Arc::clone(&recording_manager_hotkey);
                     let acm = Arc::clone(&auto_clip_manager_hotkey);
+                    let storage = Arc::clone(&storage_hotkey);
+                    let overlay_handle = Arc::clone(&overlay_handle_for_hotkey);
+                    let overlay_cfg = Arc::clone(&recording_settings_for_hotkey);
 
                     tokio::spawn(async move {
                         use hotkey::HotkeyEvent;
@@ -396,25 +444,58 @@ async fn main() {
                         match event {
                             HotkeyEvent::ToggleAutoCapture => {
                                 // 자동 캡처가 실행 중인지 확인
-                                let is_monitoring = acm.is_monitoring().await;
+                                let is_monitoring = acm.is_monitoring().await
+                                    || rm.read().await.get_current_game().await.is_some();
 
                                 if is_monitoring {
-                                    // 자동 캡처 중지
+                                    // 자동 캡처 중지 — 순서/롤백은 stop_capture_pipeline 단일 소스
                                     tracing::info!("핫키 F8: 자동 캡처 중지");
-                                    if let Err(e) = acm.stop_event_monitoring().await {
+                                    let outcome =
+                                        recording::game_lifecycle::stop_capture_pipeline(
+                                            &storage, &rm, &acm,
+                                        )
+                                        .await;
+                                    if let Err(e) = outcome.event_monitoring {
                                         tracing::error!("자동 캡처 중지 실패: {}", e);
                                     }
-                                    if let Err(e) = rm.write().await.stop_recording().await {
+                                    if let Err(e) = outcome.recording_stopped {
                                         tracing::error!("리플레이 버퍼 중지 실패: {}", e);
                                     }
-                                } else {
-                                    // 자동 캡처 시작
-                                    tracing::info!("핫키 F8: 자동 캡처 시작");
-                                    if let Err(e) = rm.write().await.start_recording().await {
-                                        tracing::error!("리플레이 버퍼 시작 실패: {}", e);
+                                    if let Err(e) = outcome.finalized {
+                                        tracing::error!("핫키 자동 캡처 게임 종료 처리 실패: {}", e);
                                     }
-                                    if let Err(e) = acm.start_event_monitoring().await {
-                                        tracing::error!("이벤트 모니터링 시작 실패: {}", e);
+                                    // B4 fix: game_end_callback과 대칭으로 오버레이를 숨긴다
+                                    // (개별 outcome 필드 실패 여부와 무관하게 무조건 — hide는
+                                    // 멱등이라 안전하다).
+                                    apply_overlay_hide_for_hotkey(&overlay_handle).await;
+                                } else {
+                                    // 자동 캡처 시작 — 순서/롤백은 start_capture_pipeline 단일 소스
+                                    tracing::info!("핫키 F8: 자동 캡처 시작");
+                                    let session_context =
+                                        recording::game_lifecycle::GameSessionContext::from_live_client(
+                                            recording::live_client::check_live_client_basic().await,
+                                        );
+                                    match recording::game_lifecycle::start_capture_pipeline(
+                                        &storage,
+                                        &rm,
+                                        &acm,
+                                        session_context,
+                                        recording::game_lifecycle::CaptureStartMode::Manual,
+                                    )
+                                    .await
+                                    {
+                                        Ok(_) => {
+                                            // B4 fix: game_start_callback과 대칭으로, 캡처가
+                                            // 실제로 시작됐을 때만 오버레이를 띄운다.
+                                            apply_overlay_show_for_hotkey(
+                                                &overlay_handle,
+                                                &overlay_cfg,
+                                            )
+                                            .await;
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("핫키 자동 캡처 시작 실패: {}", e);
+                                        }
                                     }
                                 }
                             }
@@ -422,20 +503,37 @@ async fn main() {
                                 // 최근 60초 저장 - 녹화 중단 없이 클립 추출
                                 tracing::info!("핫키 F9: 60초 리플레이 저장");
                                 match rm.read().await.save_last_seconds(60).await {
-                                    Ok(path) => {
+                                    Ok((path, measured_secs)) => {
                                         tracing::info!("60초 리플레이 저장됨: {:?}", path);
+                                        // 메타데이터 저장 — 없으면 라이브러리/편집기에
+                                        // 나타나지 않는 고아 파일이 된다
+                                        if let Err(e) =
+                                            recording::commands::persist_manual_replay_metadata(
+                                                &storage,
+                                                &acm,
+                                                &path,
+                                                measured_secs,
+                                            )
+                                            .await
+                                        {
+                                            tracing::warn!(
+                                                "수동 리플레이 메타데이터 저장 실패: {}",
+                                                e
+                                            );
+                                        }
                                     }
                                     Err(e) => tracing::error!("60초 리플레이 저장 실패: {}", e),
                                 }
                             }
-                            HotkeyEvent::SaveReplay30 => {
-                                // 최근 30초 저장 - 녹화 중단 없이 클립 추출
-                                tracing::info!("핫키 F10: 30초 리플레이 저장");
-                                match rm.read().await.save_last_seconds(30).await {
-                                    Ok(path) => {
-                                        tracing::info!("30초 리플레이 저장됨: {:?}", path);
+                            HotkeyEvent::DeleteLastClip => {
+                                // 가장 최근에 저장된 클립 삭제
+                                tracing::info!("핫키 F10: 마지막 클립 삭제");
+                                match storage.delete_last_clip() {
+                                    Ok(Some(path)) => {
+                                        tracing::info!("마지막 클립 삭제됨: {}", path);
                                     }
-                                    Err(e) => tracing::error!("30초 리플레이 저장 실패: {}", e),
+                                    Ok(None) => tracing::info!("삭제할 클립이 없습니다"),
+                                    Err(e) => tracing::error!("마지막 클립 삭제 실패: {}", e),
                                 }
                             }
                         }
@@ -456,11 +554,15 @@ async fn main() {
         // 자동 녹화를 위한 게임 모니터링 시작
         let recording_manager_start = Arc::clone(&recording_manager_for_monitor);
         let clip_manager_start = Arc::clone(&clip_manager_for_monitor);
+        let storage_for_game_start = Arc::clone(&storage_for_game_lifecycle);
+        let storage_for_game_end = Arc::clone(&storage_for_game_lifecycle);
+        let clip_manager_for_end = Arc::clone(&clip_manager_for_monitor);
 
         // 게임 시작 콜백 정의
         let game_start_callback = move || {
             let recording_mgr = Arc::clone(&recording_manager_start);
             let clip_mgr = Arc::clone(&clip_manager_start);
+            let storage = Arc::clone(&storage_for_game_start);
             let overlay_handle = Arc::clone(&overlay_handle_for_start);
             let overlay_cfg = Arc::clone(&overlay_settings);
             let disk_monitor = Arc::clone(&recording_disk_monitor_for_start);
@@ -468,10 +570,32 @@ async fn main() {
             async move {
                 tracing::info!("🎮 게임 감지됨! 자동 녹화 시작...");
 
-                // 녹화 시작
-                if let Err(e) = recording_mgr.write().await.start_recording().await {
-                    tracing::error!("리플레이 버퍼 시작 실패: {}", e);
-                    return Err(e.to_string());
+                let live_client_info = recording::live_client::check_live_client_basic().await;
+                let session_context =
+                    recording::game_lifecycle::GameSessionContext::from_live_client(
+                        live_client_info,
+                    );
+                // 세션 begin → 녹화 시작 순서·에러 처리·수동 선점(adoption) 분기는
+                // game_lifecycle::start_capture_pipeline이 단일 소스로 관리한다.
+                match recording::game_lifecycle::start_capture_pipeline(
+                    &storage,
+                    &recording_mgr,
+                    &clip_mgr,
+                    session_context,
+                    recording::game_lifecycle::CaptureStartMode::AutoDetect,
+                )
+                .await
+                {
+                    Ok(recording::game_lifecycle::CaptureStartOutcome::Started) => {}
+                    Ok(recording::game_lifecycle::CaptureStartOutcome::AlreadyRecording) => {
+                        // 수동(F8) 캡처 선점 — 세션을 finalize하지 않고 게임 모니터의
+                        // 채택(adoption) 경로에 맡긴다.
+                        tracing::info!("수동 캡처 선점 감지 — 세션 채택 경로로 위임");
+                        return Err(
+                            "recording already active (manual capture preemption)".to_string()
+                        );
+                    }
+                    Err(e) => return Err(e),
                 }
 
                 if let Some(handle) = overlay_handle.lock().await.as_ref().cloned() {
@@ -482,14 +606,6 @@ async fn main() {
                         recordings_dir,
                     )
                     .await;
-                }
-
-                // 하이라이트 이벤트 모니터링 시작
-                if let Err(e) = clip_mgr.start_event_monitoring().await {
-                    tracing::error!("이벤트 모니터링 시작 실패: {}", e);
-                    recording::commands::stop_recording_disk_monitor_with_sender(disk_monitor)
-                        .await;
-                    return Err(e.to_string());
                 }
 
                 // Show overlay if enabled
@@ -508,6 +624,8 @@ async fn main() {
         // 게임 종료 콜백 정의
         let game_end_callback = move || {
             let recording_mgr = Arc::clone(&recording_manager_for_monitor);
+            let clip_mgr = Arc::clone(&clip_manager_for_end);
+            let storage = Arc::clone(&storage_for_game_end);
             let overlay_handle = Arc::clone(&overlay_handle_for_end);
             let disk_monitor = Arc::clone(&recording_disk_monitor_for_end);
 
@@ -521,11 +639,25 @@ async fn main() {
                     overlay::hide_overlay(handle);
                 }
 
-                // 녹화 중지
-                if let Err(e) = recording_mgr.write().await.stop_recording().await {
-                    tracing::error!("리플레이 버퍼 중지 실패: {}", e);
-                    return Err(e.to_string());
+                // 종료 시퀀스(이벤트 flush → 녹화 중지 → finalize)는
+                // game_lifecycle::stop_capture_pipeline이 단일 소스로 관리한다.
+                let outcome = recording::game_lifecycle::stop_capture_pipeline(
+                    &storage,
+                    &recording_mgr,
+                    &clip_mgr,
+                )
+                .await;
+                if let Err(e) = &outcome.event_monitoring {
+                    tracing::warn!("이벤트 모니터링 중지 중 오류: {}", e);
                 }
+                if let Err(e) = &outcome.recording_stopped {
+                    tracing::error!("리플레이 버퍼 중지 실패: {}", e);
+                }
+                if let Err(e) = &outcome.finalized {
+                    tracing::error!("게임 메타데이터 종료 처리 실패: {}", e);
+                }
+                outcome.recording_stopped?;
+                outcome.finalized?;
 
                 tracing::info!("✅ 자동 녹화 중지됨");
                 Ok(())
@@ -545,7 +677,9 @@ async fn main() {
         }
     });
 
-    tauri::Builder::default()
+    let auto_clip_manager_for_setup = Arc::clone(&auto_clip_manager);
+
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -554,11 +688,17 @@ async fn main() {
             None,
         ))
         .manage(app_state)
-        .setup(|app| {
-            // Store app handle for overlay (used by game monitor callbacks)
+        .setup(move |app| {
+            // Store app handle for overlay (used by game monitor callbacks) and wire
+            // it into AutoClipManager so it can emit `recording-status` / `clip-saved`
+            // / `clip-save-failed` / `game-event` to the overlay + dashboard — an
+            // AppHandle only exists once the app has started, so this is the earliest
+            // point either can be wired in.
             {
                 let handle = app.handle().clone();
+                let acm = Arc::clone(&auto_clip_manager_for_setup);
                 tauri::async_runtime::spawn(async move {
+                    acm.set_app_handle(handle.clone()).await;
                     *overlay_handle_for_setup.lock().await = Some(handle);
                     tracing::info!("Overlay app handle stored for game callbacks");
                 });
@@ -619,6 +759,7 @@ async fn main() {
             auth::commands::get_subscription_details,
             auth::commands::cancel_subscription,
             auth::commands::open_payment_page,
+            auth::commands::confirm_payment,
             // 녹화(Recording) 명령
             recording::commands::get_unified_game_status,
             recording::commands::set_recording_target,
@@ -635,6 +776,8 @@ async fn main() {
             recording::commands::get_saved_clips,
             recording::commands::clear_saved_clips,
             recording::commands::list_audio_devices,
+            recording::commands::list_system_audio_devices,
+            recording::commands::list_microphone_devices,
             recording::commands::refresh_audio_devices,
             recording::commands::get_audio_devices_with_cache_info,
             recording::commands::get_recording_quality_info,
@@ -648,6 +791,7 @@ async fn main() {
             video::commands::get_clips,
             video::commands::extract_clip,
             video::commands::compose_shorts,
+            video::commands::compose_shorts_v2,
             video::commands::create_longform_video,
             video::commands::generate_thumbnail,
             video::commands::generate_clip_thumbnail,
@@ -749,12 +893,99 @@ async fn main() {
             // Autostart 명령
             set_autostart,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
             tracing::error!("Failed to run Tauri application: {}", e);
             eprintln!("Fatal Error: LoLShorts failed to start: {}", e);
             std::process::exit(1);
         });
+
+    // RunEvent 핸들러: 마지막 창을 닫거나 트레이에서 종료할 때(둘 다 결국
+    // AppHandle::exit → ExitRequested를 거친다) 진행 중인 녹화를 먼저 정지하고,
+    // 그 다음 세그먼트 정리(cleanup_on_shutdown)를 수행한다. managed state
+    // (recording_manager)의 Drop은 이 종료 경로들에서 실행되지 않으므로, 여기서
+    // 직접 정지하지 않으면 창 없는 FFmpeg가 좀비로 남아 15Mbps로 세그먼트를
+    // 계속 기록한다.
+    //
+    // B7 fix: 이 종료 시퀀스는 이제 여기 한 곳에서만 실행된다. 트레이 "종료"
+    // 메뉴와 main 창 닫기(minimize_to_tray=false)는 각자 정리를 수행하지 않고
+    // `exit(0)`만 호출해 이 핸들러로 위임한다(tray.rs 참고) — 예전에는 트레이
+    // 경로가 직접 정리를 수행한 뒤 `handle.exit(0)`이 이 핸들러를 다시 트리거해
+    // 정지 시도가 2번 실행됐고, 반대로 main 창 닫기 단독 종료에서는
+    // cleanup_on_shutdown이 전혀 실행되지 않는 비대칭이 있었다.
+    app.run(move |app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            let app_handle = app_handle.clone();
+            let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+
+            // RunEvent 콜백은 동기(non-async)로 호출되므로, 이 스레드에서 직접
+            // block_on하지 않고 별도 태스크에 위임한 뒤 채널로 결과를 기다린다
+            // (같은 런타임에서 이 스레드를 block_on으로 점유하면, 다른 태스크가
+            // 필요한 락을 쥔 채 양보하지 않을 경우 데드락 위험이 있다).
+            tauri::async_runtime::spawn(async move {
+                // 세그먼트 파일 정리(cleanup_on_shutdown)보다 먼저 녹화를 정지해야
+                // 한다 — 그렇지 않으면 FFmpeg가 아직 쓰고 있는 세그먼트 파일을
+                // 정리 로직이 지우려 드는 경쟁 상태가 생긴다.
+                tray::stop_recording_before_exit(&app_handle).await;
+
+                let state = app_handle.state::<AppState>();
+                if let Err(e) = state.cleanup_manager.cleanup_on_shutdown().await {
+                    tracing::error!("Shutdown cleanup failed: {}", e);
+                }
+                let _ = done_tx.send(());
+            });
+
+            // B3 fix: stop_recording_before_exit 내부 상한은 이제
+            // STOP_TIMEOUT(3s) + FFMPEG_PROBE_TIMEOUT(2s) + pid당
+            // FFMPEG_KILL_TIMEOUT(2s)이다(tray.rs 참고) — 예전에는 내부 폴백
+            // (probe 5s + pid당 kill 5s, stop 5s 이후에야 시작)의 합이 이 바깥
+            // 대기(8s)보다 커서, 폴백이 taskkill을 실행하기 전에 바깥 대기가
+            // 먼저 끝나 종료가 진행돼 버릴 수 있었다(예산 역전). 여기 대기를
+            // 15s로 늘려 내부 상한 합 + cleanup_on_shutdown 시간을 항상
+            // 넉넉히 감당하게 한다.
+            if done_rx
+                .recv_timeout(std::time::Duration::from_secs(15))
+                .is_err()
+            {
+                tracing::error!(
+                    "앱 종료 전 녹화 정리가 15초 내에 끝나지 않았습니다 - 종료를 계속 진행합니다"
+                );
+            }
+        }
+    });
+}
+
+/// Show the overlay window (if `overlay_enabled` in settings) for a capture
+/// session started from the global F8 hotkey handler (B4 fix).
+///
+/// Mirrors the `game_start_callback` overlay logic above, but that closure only
+/// fires for auto-detected games — the F8 hotkey path (`CaptureStartMode::Manual`)
+/// previously showed no overlay at all despite emitting `recording-status`, so the
+/// REC indicator/toast events went to a hidden webview. Settings are re-read on
+/// every call (not cached) so a toggle in Settings applies to the very next
+/// capture without a restart.
+async fn apply_overlay_show_for_hotkey(
+    overlay_handle: &Arc<tokio::sync::Mutex<Option<tauri::AppHandle>>>,
+    overlay_settings: &Arc<RwLock<settings::models::RecordingSettings>>,
+) {
+    let overlay_enabled = overlay_settings.read().await.overlay_enabled;
+    if overlay_enabled {
+        if let Some(handle) = overlay_handle.lock().await.as_ref() {
+            overlay::show_overlay(handle);
+        }
+    }
+}
+
+/// Hide the overlay window for a capture session stopped from the F8 hotkey
+/// handler (symmetric counterpart to `apply_overlay_show_for_hotkey`, B4 fix).
+/// Unconditional like `game_end_callback`'s hide call — `hide_overlay` no-ops
+/// harmlessly if the window was never shown.
+async fn apply_overlay_hide_for_hotkey(
+    overlay_handle: &Arc<tokio::sync::Mutex<Option<tauri::AppHandle>>>,
+) {
+    if let Some(handle) = overlay_handle.lock().await.as_ref() {
+        overlay::hide_overlay(handle);
+    }
 }
 
 /// Spawn a monitored background task that logs panics instead of silently crashing.
@@ -784,10 +1015,27 @@ fn validate_redirect_uri(uri: &str, platform: &str) -> bool {
         tracing::info!("{} OAuth disabled (no redirect URI configured)", platform);
         return false;
     }
-    if !uri.starts_with("http://localhost") && !uri.starts_with("http://127.0.0.1") {
+    let Some(rest) = uri.strip_prefix("http://") else {
+        tracing::error!("{} redirect URI must be localhost, got: {}", platform, uri);
+        return false;
+    };
+
+    let authority = rest.split('/').next().unwrap_or_default();
+    let Some((host, port)) = authority.split_once(':') else {
+        if matches!(authority, "localhost" | "127.0.0.1") {
+            return true;
+        }
+        tracing::error!("{} redirect URI must be localhost, got: {}", platform, uri);
+        return false;
+    };
+
+    let valid_host = matches!(host, "localhost" | "127.0.0.1");
+    let valid_port = !port.is_empty() && port.chars().all(|character| character.is_ascii_digit());
+    if !valid_host || !valid_port {
         tracing::error!("{} redirect URI must be localhost, got: {}", platform, uri);
         return false;
     }
+
     true
 }
 
@@ -800,10 +1048,10 @@ async fn init_youtube_manager(storage: Arc<storage::Storage>) -> Arc<youtube::Yo
         .ok()
         .filter(|v| !v.is_empty() && !v.contains("your-client-secret"));
     let youtube_redirect_uri = std::env::var("YOUTUBE_REDIRECT_URI")
-        .unwrap_or_else(|_| "http://localhost:8080/oauth2/callback".to_string());
+        .unwrap_or_else(|_| "http://localhost:9090/oauth/callback".to_string());
 
     let youtube_redirect_uri_valid = validate_redirect_uri(&youtube_redirect_uri, "YouTube");
-    let youtube_disabled_uri = "http://localhost:8080/oauth2/callback".to_string();
+    let youtube_disabled_uri = "http://localhost:9090/oauth/callback".to_string();
 
     let manager = match (youtube_client_id, youtube_client_secret) {
         (Some(client_id), Some(client_secret)) if youtube_redirect_uri_valid => {
@@ -855,4 +1103,41 @@ async fn init_youtube_manager(storage: Arc<storage::Storage>) -> Arc<youtube::Yo
     }
 
     manager
+}
+
+#[cfg(test)]
+mod redirect_uri_tests {
+    use super::validate_redirect_uri;
+
+    #[test]
+    fn accepts_loopback_redirects() {
+        assert!(validate_redirect_uri(
+            "http://localhost:8080/oauth2/callback",
+            "YouTube"
+        ));
+        assert!(validate_redirect_uri(
+            "http://127.0.0.1:8080/oauth2/callback",
+            "YouTube"
+        ));
+    }
+
+    #[test]
+    fn rejects_lookalike_or_non_http_redirects() {
+        assert!(!validate_redirect_uri(
+            "http://localhost.evil.test/oauth2/callback",
+            "YouTube"
+        ));
+        assert!(!validate_redirect_uri(
+            "https://localhost:8080/oauth2/callback",
+            "YouTube"
+        ));
+        assert!(!validate_redirect_uri(
+            "http://127.0.0.1.evil.test/oauth2/callback",
+            "YouTube"
+        ));
+        assert!(!validate_redirect_uri(
+            "http://localhost:abc/oauth2/callback",
+            "YouTube"
+        ));
+    }
 }

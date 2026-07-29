@@ -16,6 +16,7 @@ use super::oauth::{YouTubeCredentials, YouTubeOAuthClient};
 use super::upload::{
     PrivacyStatus, UploadProgress, VideoMetadata, YouTubeUploadClient, YouTubeVideo,
 };
+use crate::auth::command_policy;
 use crate::auth::middleware::require_tier;
 use crate::auth::{AuthManager, SubscriptionTier, User};
 use crate::error::{AppError, AppResult};
@@ -88,6 +89,80 @@ fn youtube_credentials_key(user_id: &str) -> String {
     scoped_youtube_setting_key(YOUTUBE_CREDENTIALS_KEY_PREFIX, user_id)
 }
 
+/// OS keyring "service" name credentials are stored under.
+const KEYRING_SERVICE: &str = "LoLShorts";
+
+/// YouTube `refresh_token`/`access_token` are long-lived secrets. Prefer the OS
+/// keyring (Windows Credential Manager / macOS Keychain via the `keyring` crate)
+/// over the plaintext SQLite `settings` table. SQLite remains a fallback for
+/// environments where no OS keyring backend is available (e.g. some headless
+/// CI/test environments), and as a one-time migration source for credentials
+/// saved before this change.
+fn keyring_entry_for_credentials(credentials_key: &str) -> Result<keyring::Entry, keyring::Error> {
+    keyring::Entry::new(KEYRING_SERVICE, credentials_key)
+}
+
+/// Store `creds_json` in the OS keyring under `credentials_key`.
+/// Returns `true` if the keyring write succeeded, `false` if the OS keyring is
+/// unavailable/failed and the caller should fall back to local storage.
+fn try_store_credentials_in_keyring(credentials_key: &str, creds_json: &str) -> bool {
+    match keyring_entry_for_credentials(credentials_key) {
+        Ok(entry) => match entry.set_password(creds_json) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!(
+                    "Failed to store YouTube credentials in OS keyring, falling back to local storage: {}",
+                    e
+                );
+                false
+            }
+        },
+        Err(e) => {
+            warn!(
+                "OS keyring unavailable, falling back to local storage for YouTube credentials: {}",
+                e
+            );
+            false
+        }
+    }
+}
+
+/// Read credentials JSON from the OS keyring, if present.
+/// Returns `None` both when there is no entry and when the keyring backend
+/// itself is unavailable (caller should fall back to local storage).
+fn try_load_credentials_from_keyring(credentials_key: &str) -> Option<String> {
+    match keyring_entry_for_credentials(credentials_key) {
+        Ok(entry) => match entry.get_password() {
+            Ok(json) => Some(json),
+            Err(keyring::Error::NoEntry) => None,
+            Err(e) => {
+                warn!("Failed to read YouTube credentials from OS keyring: {}", e);
+                None
+            }
+        },
+        Err(e) => {
+            warn!(
+                "OS keyring unavailable, cannot read YouTube credentials from it: {}",
+                e
+            );
+            None
+        }
+    }
+}
+
+/// Best-effort deletion of any OS keyring entry for `credentials_key`.
+fn delete_credentials_from_keyring(credentials_key: &str) {
+    if let Ok(entry) = keyring_entry_for_credentials(credentials_key) {
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => warn!(
+                "Failed to delete YouTube credentials from OS keyring: {}",
+                e
+            ),
+        }
+    }
+}
+
 fn youtube_upload_history_key(user_id: &str) -> String {
     scoped_youtube_setting_key(YOUTUBE_UPLOAD_HISTORY_KEY_PREFIX, user_id)
 }
@@ -105,15 +180,65 @@ fn youtube_quota_key(user_id: &str, date: &str) -> String {
     )
 }
 
-fn require_youtube_pro_access(auth: &Arc<AuthManager>) -> AppResult<User> {
-    require_tier(auth, SubscriptionTier::Pro).map_err(|e| AppError::Auth(e.to_string()))
+/// Verify the current app user has PRO access to invoke `cmd_name`.
+///
+/// Routes through [`command_policy::require_command_access`] — the single source
+/// of truth for command gating — instead of calling `require_tier` directly, so
+/// this module cannot drift from its `COMMAND_POLICIES` declaration.
+///
+/// The YouTube surface is no longer uniformly paid: signing in and uploading a
+/// video are `AuthRequired` (getting your own clip onto YouTube is part of the
+/// free product), while scheduled/batch upload stays `ProRequired`. The tier for
+/// each command therefore comes from the table, not from this function.
+///
+/// The `debug_assert!` still catches the one case the table cannot express: a
+/// call site passing a `cmd_name` that is missing from (or misspelled in)
+/// `COMMAND_POLICIES`. An unregistered command falls back to `AuthRequired` in
+/// `require_command_access`, which for a paid command would be a silent
+/// downgrade — see the fail-closed fallback below.
+fn require_youtube_access(auth: &Arc<AuthManager>, cmd_name: &str) -> AppResult<User> {
+    debug_assert!(
+        command_policy::command_access(cmd_name).is_some(),
+        "YouTube command '{}' must be registered in COMMAND_POLICIES",
+        cmd_name
+    );
+
+    require_youtube_access_fail_closed(auth, cmd_name)
+}
+
+/// Fail-closed core of [`require_youtube_access`], split out so it can be
+/// exercised directly in tests without tripping the `debug_assert_eq!` above
+/// (which is compiled out of release builds — the exact case this fallback
+/// guards against).
+///
+/// `command_policy::require_command_access` treats a policy-table miss as
+/// `CommandAccess::AuthRequired` (`unwrap_or(CommandAccess::AuthRequired)`).
+/// For a command that is supposed to be paid, trusting that default on a table
+/// miss would be a silent downgrade, and a miss is exactly the situation where
+/// we cannot tell which kind it was. So a miss enforces the PRO tier directly
+/// rather than the table's permissive default — wrongly asking a free user to
+/// upgrade is recoverable, silently giving away a paid feature is not.
+fn require_youtube_access_fail_closed(auth: &Arc<AuthManager>, cmd_name: &str) -> AppResult<User> {
+    if command_policy::command_access(cmd_name).is_none() {
+        warn!(
+            "YouTube command '{}' missing from COMMAND_POLICIES; falling back to a hard PRO-tier check",
+            cmd_name
+        );
+        return require_tier(auth, SubscriptionTier::Pro)
+            .map_err(|e| AppError::Auth(e.to_string()));
+    }
+
+    command_policy::require_command_access(auth, cmd_name)
+        .map_err(|e| AppError::Auth(e.to_string()))?
+        .ok_or_else(|| AppError::Auth("YouTube commands require authentication".to_string()))
 }
 
 fn require_same_youtube_pro_user(
     auth: &Arc<AuthManager>,
+    cmd_name: &str,
     expected_user_id: &str,
 ) -> AppResult<User> {
-    let user = require_youtube_pro_access(auth)?;
+    let user = require_youtube_access(auth, cmd_name)?;
 
     if user.id != expected_user_id {
         return Err(AppError::Auth(
@@ -126,10 +251,11 @@ fn require_same_youtube_pro_user(
 
 async fn require_active_pending_youtube_oauth_user(
     auth: &Arc<AuthManager>,
+    cmd_name: &str,
     manager: &YouTubeManager,
     expected_user_id: &str,
 ) -> AppResult<User> {
-    let user = require_same_youtube_pro_user(auth, expected_user_id)?;
+    let user = require_same_youtube_pro_user(auth, cmd_name, expected_user_id)?;
     manager
         .require_pending_oauth_owner_for_user(expected_user_id)
         .await?;
@@ -257,6 +383,15 @@ async fn read_stored_youtube_credentials_for_user(
     user_id: &str,
 ) -> AppResult<Option<YouTubeCredentials>> {
     let credentials_key = youtube_credentials_key(user_id);
+
+    if let Some(creds_json) = try_load_credentials_from_keyring(&credentials_key) {
+        return serde_json::from_str::<YouTubeCredentials>(&creds_json)
+            .map(Some)
+            .map_err(|error| {
+                AppError::Internal(format!("Invalid YouTube credentials: {}", error))
+            });
+    }
+
     let creds_json = match manager.storage.get_setting(&credentials_key).await {
         Ok(json) => json,
         Err(error) if is_missing_setting(&error) => return Ok(None),
@@ -364,7 +499,7 @@ async fn upload_scheduled_video_for_user(
     };
 
     let privacy = parse_privacy_status(&scheduled_upload.privacy_status)?;
-    let metadata = VideoMetadata {
+    let mut metadata = VideoMetadata {
         title: scheduled_upload.title.clone(),
         description: scheduled_upload.description.clone(),
         tags: scheduled_upload.tags.clone(),
@@ -372,6 +507,7 @@ async fn upload_scheduled_video_for_user(
         privacy_status: privacy,
         made_for_kids: false,
     };
+    metadata.ensure_shorts_tag();
 
     let upload_client = {
         let credentials = require_youtube_credentials_for_user(manager, user_id).await?;
@@ -427,6 +563,9 @@ pub struct YouTubeManager {
     pub oauth_client: Arc<YouTubeOAuthClient>,
     pub upload_client: Arc<YouTubeUploadClient>,
     pub storage: Arc<Storage>,
+    /// The configured OAuth2 redirect URI (SSOT for where the local callback
+    /// server must listen — see `CallbackServer::from_redirect_uri`).
+    pub redirect_uri: String,
     pending_oauth_owner: Arc<RwLock<Option<String>>>,
     credential_operation_lock: Arc<Mutex<()>>,
 }
@@ -441,7 +580,7 @@ impl YouTubeManager {
         let oauth_client = Arc::new(YouTubeOAuthClient::new(
             client_id,
             client_secret,
-            redirect_uri,
+            redirect_uri.clone(),
         )?);
         let upload_client = Arc::new(YouTubeUploadClient::new(Arc::clone(&oauth_client))?);
 
@@ -449,6 +588,7 @@ impl YouTubeManager {
             oauth_client,
             upload_client,
             storage,
+            redirect_uri,
             pending_oauth_owner: Arc::new(RwLock::new(None)),
             credential_operation_lock: Arc::new(Mutex::new(())),
         })
@@ -530,6 +670,11 @@ impl YouTubeManager {
     }
 
     /// Load stored credentials for the authenticated app user.
+    ///
+    /// Prefers the OS keyring (encrypted at rest); falls back to the local
+    /// SQLite `settings` table when the keyring is unavailable. Credentials
+    /// found only in SQLite (pre-migration, or keyring-unavailable saves) are
+    /// opportunistically migrated into the keyring on successful load.
     pub async fn load_credentials_for_user(
         &self,
         owner_user_id: &str,
@@ -537,6 +682,23 @@ impl YouTubeManager {
         self.clear_legacy_credentials().await?;
 
         let credentials_key = youtube_credentials_key(owner_user_id);
+
+        if let Some(creds_json) = try_load_credentials_from_keyring(&credentials_key) {
+            return match serde_json::from_str::<YouTubeCredentials>(&creds_json) {
+                Ok(credentials) => {
+                    self.oauth_client.set_credentials(credentials.clone()).await;
+                    info!("YouTube credentials loaded from OS keyring for authenticated app user");
+                    Ok(Some(credentials))
+                }
+                Err(error) => {
+                    self.oauth_client.clear_credentials().await;
+                    delete_credentials_from_keyring(&credentials_key);
+                    warn!("Cleared invalid YouTube credentials from OS keyring for authenticated app user");
+                    Err(error.into())
+                }
+            };
+        }
+
         let creds_json = match self.storage.get_setting(&credentials_key).await {
             Ok(json) => json,
             Err(error) if is_missing_setting(&error) => {
@@ -550,6 +712,19 @@ impl YouTubeManager {
             Ok(credentials) => {
                 self.oauth_client.set_credentials(credentials.clone()).await;
                 info!("YouTube credentials loaded for authenticated app user");
+
+                // One-time migration: move plaintext credentials into the OS keyring.
+                if try_store_credentials_in_keyring(&credentials_key, &creds_json) {
+                    if let Err(e) = self.storage.remove_setting(&credentials_key).await {
+                        warn!(
+                            "Failed to remove migrated plaintext YouTube credentials: {}",
+                            e
+                        );
+                    } else {
+                        info!("Migrated YouTube credentials from local storage to OS keyring");
+                    }
+                }
+
                 Ok(Some(credentials))
             }
             Err(error) => {
@@ -561,7 +736,10 @@ impl YouTubeManager {
         }
     }
 
-    /// Save credentials to storage for the authenticated app user.
+    /// Save credentials for the authenticated app user.
+    ///
+    /// Prefers the OS keyring; falls back to the local SQLite `settings`
+    /// table (with a warning) when the keyring is unavailable.
     pub async fn save_credentials_for_user(
         &self,
         owner_user_id: &str,
@@ -570,30 +748,52 @@ impl YouTubeManager {
         self.clear_legacy_credentials().await?;
 
         let creds_json = serde_json::to_string(credentials)?;
-        self.storage
-            .set_setting(&youtube_credentials_key(owner_user_id), &creds_json)
-            .await?;
-        info!("YouTube credentials saved for authenticated app user");
+        let credentials_key = youtube_credentials_key(owner_user_id);
+
+        if try_store_credentials_in_keyring(&credentials_key, &creds_json) {
+            // Stored securely; remove any stale plaintext copy from a previous fallback save.
+            if let Err(e) = self.storage.remove_setting(&credentials_key).await {
+                warn!(
+                    "Failed to remove stale plaintext YouTube credentials after keyring save: {}",
+                    e
+                );
+            }
+            info!("YouTube credentials saved to OS keyring for authenticated app user");
+        } else {
+            self.storage
+                .set_setting(&credentials_key, &creds_json)
+                .await?;
+            warn!(
+                "YouTube credentials saved to local storage (OS keyring unavailable) for authenticated app user"
+            );
+        }
+
         Ok(())
     }
 
-    /// Clear credentials for the authenticated app user.
+    /// Clear credentials for the authenticated app user (both OS keyring and local storage).
     pub async fn clear_credentials_for_user(&self, owner_user_id: &str) -> anyhow::Result<()> {
         self.oauth_client.clear_credentials().await;
-        self.storage
-            .remove_setting(&youtube_credentials_key(owner_user_id))
-            .await?;
+        let credentials_key = youtube_credentials_key(owner_user_id);
+        delete_credentials_from_keyring(&credentials_key);
+        self.storage.remove_setting(&credentials_key).await?;
         self.clear_legacy_credentials().await?;
         Ok(())
     }
 }
 
-/// Start YouTube OAuth2 authentication flow
+/// Start YouTube OAuth2 authentication flow (manual completion variant).
+///
+/// NOT used by the frontend, which exclusively calls
+/// [`youtube_start_auth_with_server`] for automatic callback handling. This
+/// command exists for headless/test flows that will call
+/// [`youtube_complete_auth`] manually with a code/state pair obtained out of
+/// band (e.g. by copy-pasting the redirect URL).
 ///
 /// Returns the authorization URL that should be opened in a browser
 #[tauri::command]
 pub async fn youtube_start_auth(state: State<'_, AppState>) -> AppResult<String> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_start_auth")?;
     {
         let _credential_guard = state.youtube_manager.credential_operation_lock.lock().await;
         state
@@ -626,16 +826,28 @@ pub async fn youtube_start_auth(state: State<'_, AppState>) -> AppResult<String>
 /// Start YouTube OAuth2 authentication with automatic callback handling
 ///
 /// This command:
-/// 1. Starts a local callback server on port 9090
+/// 1. Starts a local callback server whose port/path are derived from `YOUTUBE_REDIRECT_URI`
+///    (see [`CallbackServer::from_redirect_uri`] — single source of truth).
 /// 2. Generates the OAuth authorization URL
 /// 3. Returns the URL for the frontend to open in a browser
 /// 4. Waits for the callback in the background
 /// 5. Automatically completes authentication when callback is received
 ///
+/// Emits `youtube-auth-completed` on success or `youtube-auth-failed`
+/// (payload: `{ "error": string }`) on failure/timeout so the frontend does
+/// not have to guess when the background flow finishes. If the user declines
+/// consent, Google redirects with `?error=access_denied` (no `code`/`state`);
+/// `CallbackServer` resolves that immediately (see `callback_server.rs`), so
+/// `youtube-auth-failed` fires right away here too instead of only after the
+/// 120-second callback timeout.
+///
 /// Returns the authorization URL that should be opened in a browser
 #[tauri::command]
-pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppResult<String> {
-    let user = require_youtube_pro_access(&state.auth)?;
+pub async fn youtube_start_auth_with_server(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> AppResult<String> {
+    let user = require_youtube_access(&state.auth, "youtube_start_auth_with_server")?;
     {
         let _credential_guard = state.youtube_manager.credential_operation_lock.lock().await;
         state
@@ -646,6 +858,14 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
     }
 
     info!("Starting YouTube OAuth2 flow with automatic callback handling");
+
+    // Fail fast with a clear error if YOUTUBE_REDIRECT_URI is misconfigured, rather than
+    // silently timing out in the background task 2 minutes later.
+    let callback_server = CallbackServer::from_redirect_uri(&state.youtube_manager.redirect_uri)
+        .map_err(|e| {
+            error!("Invalid YOUTUBE_REDIRECT_URI configuration: {}", e);
+            AppError::Internal(format!("Invalid OAuth redirect URI configuration: {}", e))
+        })?;
 
     // Generate auth URL first
     let auth_url = state
@@ -668,7 +888,15 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
     let auth_clone = Arc::clone(&state.auth);
     let starting_user_id = user.id.clone();
     tokio::spawn(async move {
-        let callback_server = CallbackServer::new(9090);
+        use tauri::Emitter;
+
+        let emit_failed = |error: String| {
+            if let Err(e) =
+                app_handle.emit("youtube-auth-failed", serde_json::json!({ "error": error }))
+            {
+                warn!("Failed to emit youtube-auth-failed event: {}", e);
+            }
+        };
 
         match callback_server.start_and_wait().await {
             Ok(callback) => {
@@ -676,6 +904,7 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
 
                 if let Err(e) = require_active_pending_youtube_oauth_user(
                     &auth_clone,
+                    "youtube_start_auth_with_server",
                     &youtube_clone,
                     &starting_user_id,
                 )
@@ -689,6 +918,7 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
                     youtube_clone
                         .clear_pending_oauth_owner_if_matches(&starting_user_id)
                         .await;
+                    emit_failed(e.to_string());
                     return;
                 }
 
@@ -696,6 +926,7 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
                 let _credential_guard = youtube_clone.lock_credential_operations().await;
                 if let Err(e) = require_active_pending_youtube_oauth_user(
                     &auth_clone,
+                    "youtube_start_auth_with_server",
                     &youtube_clone,
                     &starting_user_id,
                 )
@@ -709,6 +940,7 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
                     youtube_clone
                         .clear_pending_oauth_owner_if_matches(&starting_user_id)
                         .await;
+                    emit_failed(e.to_string());
                     return;
                 }
                 match youtube_clone
@@ -719,6 +951,7 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
                     Ok(credentials) => {
                         if let Err(e) = require_active_pending_youtube_oauth_user(
                             &auth_clone,
+                            "youtube_start_auth_with_server",
                             &youtube_clone,
                             &starting_user_id,
                         )
@@ -732,6 +965,7 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
                             youtube_clone
                                 .clear_pending_oauth_owner_if_matches(&starting_user_id)
                                 .await;
+                            emit_failed(e.to_string());
                             return;
                         }
 
@@ -744,11 +978,15 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
                                 .clear_pending_oauth_owner_if_matches(&starting_user_id)
                                 .await;
                             error!("Failed to save credentials after auto-complete: {}", e);
+                            emit_failed(e.to_string());
                         } else {
                             youtube_clone
                                 .clear_pending_oauth_owner_if_matches(&starting_user_id)
                                 .await;
                             info!("YouTube authentication auto-completed successfully");
+                            if let Err(e) = app_handle.emit("youtube-auth-completed", ()) {
+                                warn!("Failed to emit youtube-auth-completed event: {}", e);
+                            }
                         }
                     }
                     Err(e) => {
@@ -759,11 +997,13 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
                             "Failed to exchange authorization code in auto-complete: {}",
                             e
                         );
+                        emit_failed(e.to_string());
                     }
                 }
             }
             Err(e) => {
                 error!("OAuth callback server error: {}", e);
+                emit_failed(e.to_string());
             }
         }
     });
@@ -772,7 +1012,12 @@ pub async fn youtube_start_auth_with_server(state: State<'_, AppState>) -> AppRe
     Ok(auth_url)
 }
 
-/// Complete YouTube OAuth2 authentication
+/// Complete YouTube OAuth2 authentication (manual completion variant).
+///
+/// NOT used by the frontend — pairs with [`youtube_start_auth`] for
+/// headless/test flows only. The frontend's automatic flow
+/// ([`youtube_start_auth_with_server`]) completes authentication itself in
+/// its background callback task and never calls this command.
 ///
 /// # Arguments
 /// * `code` - Authorization code from OAuth2 callback
@@ -783,7 +1028,7 @@ pub async fn youtube_complete_auth(
     code: String,
     state: String,
 ) -> AppResult<()> {
-    let user = require_youtube_pro_access(&app_state.auth)?;
+    let user = require_youtube_access(&app_state.auth, "youtube_complete_auth")?;
 
     info!("Completing YouTube OAuth2 flow");
 
@@ -796,6 +1041,7 @@ pub async fn youtube_complete_auth(
 
     require_active_pending_youtube_oauth_user(
         &app_state.auth,
+        "youtube_complete_auth",
         &app_state.youtube_manager,
         &user.id,
     )
@@ -805,6 +1051,7 @@ pub async fn youtube_complete_auth(
 
     require_active_pending_youtube_oauth_user(
         &app_state.auth,
+        "youtube_complete_auth",
         &app_state.youtube_manager,
         &user.id,
     )
@@ -830,6 +1077,7 @@ pub async fn youtube_complete_auth(
 
     if let Err(e) = require_active_pending_youtube_oauth_user(
         &app_state.auth,
+        "youtube_complete_auth",
         &app_state.youtube_manager,
         &user.id,
     )
@@ -877,7 +1125,7 @@ pub async fn youtube_complete_auth(
 /// Check YouTube authentication status
 #[tauri::command]
 pub async fn youtube_get_auth_status(state: State<'_, AppState>) -> AppResult<AuthStatus> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_get_auth_status")?;
 
     let _credential_guard = state.youtube_manager.credential_operation_lock.lock().await;
     let credentials = load_youtube_credentials_for_user(&state.youtube_manager, &user.id).await?;
@@ -911,7 +1159,7 @@ pub async fn youtube_upload_video(
     privacy_status: String,
     thumbnail_path: Option<String>,
 ) -> AppResult<YouTubeVideo> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_upload_video")?;
     let upload_client = {
         let _credential_guard = state.youtube_manager.credential_operation_lock.lock().await;
         let credentials =
@@ -965,7 +1213,7 @@ pub async fn youtube_upload_video(
     let privacy = parse_privacy_status(&privacy_status)?;
 
     // Create metadata
-    let metadata = VideoMetadata {
+    let mut metadata = VideoMetadata {
         title,
         description,
         tags,
@@ -973,6 +1221,7 @@ pub async fn youtube_upload_video(
         privacy_status: privacy,
         made_for_kids: false,
     };
+    metadata.ensure_shorts_tag();
 
     // Upload video (resumable with multipart fallback), with exponential backoff retry
     let metadata_clone = metadata.clone();
@@ -1017,7 +1266,7 @@ pub async fn youtube_upload_video(
 pub async fn youtube_get_upload_progress(
     state: State<'_, AppState>,
 ) -> AppResult<Option<UploadProgress>> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_get_upload_progress")?;
     read_stored_youtube_credentials_for_user(&state.youtube_manager, &user.id)
         .await?
         .ok_or_else(|| AppError::Auth("YouTube account not authenticated".to_string()))?;
@@ -1031,7 +1280,7 @@ pub async fn youtube_get_video_details(
     state: State<'_, AppState>,
     video_id: String,
 ) -> AppResult<YouTubeVideo> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_get_video_details")?;
     let _credential_guard = state.youtube_manager.credential_operation_lock.lock().await;
     require_youtube_credentials_for_user(&state.youtube_manager, &user.id).await?;
 
@@ -1056,7 +1305,7 @@ pub async fn youtube_get_video_details(
 pub async fn youtube_get_upload_history(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<UploadHistoryEntry>> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_get_upload_history")?;
     let history_key = youtube_upload_history_key(&user.id);
 
     Ok(state
@@ -1075,7 +1324,7 @@ pub async fn youtube_add_to_history(
     state: State<'_, AppState>,
     video: YouTubeVideo,
 ) -> AppResult<()> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_add_to_history")?;
     let history_key = youtube_upload_history_key(&user.id);
 
     let entry = UploadHistoryEntry {
@@ -1119,7 +1368,7 @@ pub async fn youtube_add_to_history(
 /// Get YouTube API quota information (resets daily at midnight PST)
 #[tauri::command]
 pub async fn youtube_get_quota_info(state: State<'_, AppState>) -> AppResult<QuotaInfo> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_get_quota_info")?;
 
     // Load used quota from storage (tracked locally, keyed by PST date)
     let today_pst = Utc::now()
@@ -1142,7 +1391,7 @@ pub async fn youtube_get_quota_info(state: State<'_, AppState>) -> AppResult<Quo
 /// Log out from YouTube (clear credentials)
 #[tauri::command]
 pub async fn youtube_logout(state: State<'_, AppState>) -> AppResult<()> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_logout")?;
 
     info!("Logging out from YouTube");
 
@@ -1163,14 +1412,18 @@ pub async fn youtube_logout(state: State<'_, AppState>) -> AppResult<()> {
 
 /// Schedule a video upload for later processing
 ///
-/// Saves upload metadata to storage queue. The frontend is responsible for
-/// executing queued uploads at the scheduled time using `youtube_upload_video`.
+/// Saves upload metadata to a storage queue. Queued uploads are executed by
+/// the backend's [`start_upload_scheduler`] background loop, which polls the
+/// queue every 60 seconds and fires the real upload once an entry's
+/// `scheduled_at` has passed — this requires the app to be running at (or
+/// after) the scheduled time; it is not YouTube's native `publishAt`
+/// scheduled-publish feature. See [`UploadSchedule`] for details.
 #[tauri::command]
 pub async fn youtube_schedule_upload(
     state: State<'_, AppState>,
     params: ScheduleUploadParams,
 ) -> AppResult<ScheduledUpload> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_schedule_upload")?;
     let _credential_guard = state.youtube_manager.credential_operation_lock.lock().await;
     require_youtube_credentials_for_user(&state.youtube_manager, &user.id).await?;
     let queue_key = youtube_upload_queue_key(&user.id);
@@ -1244,7 +1497,7 @@ pub async fn youtube_schedule_upload(
 pub async fn youtube_get_upload_queue(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<ScheduledUpload>> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_get_upload_queue")?;
     let _credential_guard = state.youtube_manager.credential_operation_lock.lock().await;
     require_youtube_credentials_for_user(&state.youtube_manager, &user.id).await?;
     let queue_key = youtube_upload_queue_key(&user.id);
@@ -1258,7 +1511,7 @@ pub async fn youtube_cancel_scheduled_upload(
     state: State<'_, AppState>,
     id: String,
 ) -> AppResult<()> {
-    let user = require_youtube_pro_access(&state.auth)?;
+    let user = require_youtube_access(&state.auth, "youtube_cancel_scheduled_upload")?;
     let _credential_guard = state.youtube_manager.credential_operation_lock.lock().await;
     require_youtube_credentials_for_user(&state.youtube_manager, &user.id).await?;
     let queue_key = youtube_upload_queue_key(&user.id);
@@ -1310,9 +1563,16 @@ pub async fn youtube_cancel_scheduled_upload(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
-    use crate::auth::User;
+    use crate::auth::{SubscriptionTier, User};
+
+    /// OS keyring(Windows Credential Manager)은 프로세스 전역 외부 자원이라,
+    /// 실제 항목을 읽고 쓰는 테스트들이 병렬로 돌면 간헐적으로 서로 간섭해
+    /// 실패한다(플레이키). 해당 테스트들만 이 락으로 직렬화한다.
+    static KEYRING_TEST_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
+        once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
 
     fn test_user(tier: SubscriptionTier) -> User {
         test_user_with_id("test-user", tier)
@@ -1371,15 +1631,15 @@ mod tests {
         let auth = Arc::new(AuthManager::new());
         auth.login(test_user(SubscriptionTier::Pro)).unwrap();
 
-        assert!(require_youtube_pro_access(&auth).is_ok());
+        assert!(require_youtube_access(&auth, "youtube_start_auth").is_ok());
     }
 
     #[test]
-    fn youtube_pro_access_blocks_free_users() {
+    fn youtube_scheduling_blocks_free_users() {
         let auth = Arc::new(AuthManager::new());
         auth.login(test_user(SubscriptionTier::Free)).unwrap();
 
-        let error = require_youtube_pro_access(&auth).unwrap_err();
+        let error = require_youtube_access(&auth, "youtube_schedule_upload").unwrap_err();
 
         assert!(matches!(
             error,
@@ -1387,11 +1647,32 @@ mod tests {
         ));
     }
 
+    /// Signing in and uploading a single video are part of the free product;
+    /// only scheduled/batch upload is paid. See
+    /// `command_policy::local_export_stays_free_for_signed_in_users` for the
+    /// reasoning behind the split.
+    #[test]
+    fn youtube_upload_is_free_for_signed_in_users() {
+        let auth = Arc::new(AuthManager::new());
+        auth.login(test_user(SubscriptionTier::Free)).unwrap();
+
+        for cmd_name in [
+            "youtube_start_auth",
+            "youtube_complete_auth",
+            "youtube_upload_video",
+        ] {
+            assert!(
+                require_youtube_access(&auth, cmd_name).is_ok(),
+                "{cmd_name} must be usable by a signed-in FREE user"
+            );
+        }
+    }
+
     #[test]
     fn youtube_pro_access_requires_authentication() {
         let auth = Arc::new(AuthManager::new());
 
-        let error = require_youtube_pro_access(&auth).unwrap_err();
+        let error = require_youtube_access(&auth, "youtube_start_auth").unwrap_err();
 
         assert!(matches!(
             error,
@@ -1400,17 +1681,86 @@ mod tests {
     }
 
     #[test]
+    fn youtube_pro_access_fail_closed_blocks_free_users_on_policy_miss() {
+        // Regression guard: a `cmd_name` missing from `COMMAND_POLICIES` must
+        // still hard-enforce PRO, not silently fall back to `AuthRequired`
+        // (release builds compile out the `debug_assert_eq!` that would
+        // otherwise catch this at the call site).
+        let auth = Arc::new(AuthManager::new());
+        auth.login(test_user(SubscriptionTier::Free)).unwrap();
+
+        let error =
+            require_youtube_access_fail_closed(&auth, "totally_unregistered_command").unwrap_err();
+
+        assert!(matches!(
+            error,
+            AppError::Auth(message) if message.contains("PRO subscription required")
+        ));
+    }
+
+    #[test]
+    fn youtube_pro_access_fail_closed_allows_pro_users_on_policy_miss() {
+        let auth = Arc::new(AuthManager::new());
+        auth.login(test_user(SubscriptionTier::Pro)).unwrap();
+
+        assert!(require_youtube_access_fail_closed(&auth, "totally_unregistered_command").is_ok());
+    }
+
+    #[test]
+    fn youtube_commands_are_all_registered_and_split_correctly() {
+        // The gate falls back to `AuthRequired` for an unregistered command, so a
+        // missing entry would silently downgrade a paid command. Every name this
+        // module gates must be in the table, and the paid half must stay paid.
+        const PAID: [&str; 3] = [
+            "youtube_schedule_upload",
+            "youtube_get_upload_queue",
+            "youtube_cancel_scheduled_upload",
+        ];
+        const FREE_FOR_SIGNED_IN: [&str; 11] = [
+            "youtube_start_auth",
+            "youtube_start_auth_with_server",
+            "youtube_complete_auth",
+            "youtube_get_auth_status",
+            "youtube_upload_video",
+            "youtube_get_upload_progress",
+            "youtube_get_video_details",
+            "youtube_get_upload_history",
+            "youtube_add_to_history",
+            "youtube_get_quota_info",
+            "youtube_logout",
+        ];
+
+        for cmd_name in PAID {
+            assert_eq!(
+                command_policy::command_access(cmd_name),
+                Some(command_policy::CommandAccess::ProRequired),
+                "{cmd_name} must stay PRO-gated"
+            );
+        }
+        for cmd_name in FREE_FOR_SIGNED_IN {
+            assert_eq!(
+                command_policy::command_access(cmd_name),
+                Some(command_policy::CommandAccess::AuthRequired),
+                "{cmd_name} must be usable without PRO"
+            );
+        }
+    }
+
+    #[test]
     fn youtube_callback_validation_rejects_different_active_user() {
         let auth = Arc::new(AuthManager::new());
         auth.login(test_user_with_id("starting-user", SubscriptionTier::Pro))
             .unwrap();
 
-        assert!(require_same_youtube_pro_user(&auth, "starting-user").is_ok());
+        assert!(
+            require_same_youtube_pro_user(&auth, "youtube_complete_auth", "starting-user").is_ok()
+        );
 
         auth.login(test_user_with_id("different-user", SubscriptionTier::Pro))
             .unwrap();
 
-        let error = require_same_youtube_pro_user(&auth, "starting-user").unwrap_err();
+        let error = require_same_youtube_pro_user(&auth, "youtube_complete_auth", "starting-user")
+            .unwrap_err();
 
         assert!(matches!(
             error,
@@ -1419,21 +1769,29 @@ mod tests {
     }
 
     #[test]
-    fn youtube_callback_validation_rejects_downgraded_active_user() {
+    fn youtube_callback_validation_accepts_same_free_user() {
+        // `youtube_complete_auth` is free now, so a FREE user finishing their own
+        // sign-in must succeed. The identity check below is what this guard is for.
         let auth = Arc::new(AuthManager::new());
         auth.login(test_user_with_id("starting-user", SubscriptionTier::Free))
             .unwrap();
 
-        let error = require_same_youtube_pro_user(&auth, "starting-user").unwrap_err();
+        assert!(
+            require_same_youtube_pro_user(&auth, "youtube_complete_auth", "starting-user").is_ok()
+        );
+
+        let error = require_same_youtube_pro_user(&auth, "youtube_complete_auth", "someone-else")
+            .unwrap_err();
 
         assert!(matches!(
             error,
-            AppError::Auth(message) if message.contains("PRO subscription required")
+            AppError::Auth(message) if message.contains("Authenticated user changed")
         ));
     }
 
     #[tokio::test]
     async fn unowned_legacy_credentials_are_cleared_not_loaded() {
+        let _keyring_guard = KEYRING_TEST_LOCK.lock().await;
         let temp_dir = tempfile::tempdir().expect("temp dir should be created");
         let storage = Arc::new(Storage::new(temp_dir.path()).expect("storage should initialize"));
         let manager = test_youtube_manager(Arc::clone(&storage));
@@ -1461,6 +1819,7 @@ mod tests {
 
     #[tokio::test]
     async fn collision_prone_user_ids_do_not_share_credentials() {
+        let _keyring_guard = KEYRING_TEST_LOCK.lock().await;
         let temp_dir = tempfile::tempdir().expect("temp dir should be created");
         let storage = Arc::new(Storage::new(temp_dir.path()).expect("storage should initialize"));
         let manager = test_youtube_manager(Arc::clone(&storage));
@@ -1491,10 +1850,15 @@ mod tests {
             loaded_for_slash_user.access_token,
             "slash-user-access-token"
         );
+
+        // The load above may have migrated the plaintext SQLite row into the OS
+        // keyring; clean it up so repeated local test runs don't accumulate entries.
+        delete_credentials_from_keyring(&youtube_credentials_key("a/b"));
     }
 
     #[tokio::test]
     async fn credentials_for_one_user_are_unavailable_to_another_user() {
+        let _keyring_guard = KEYRING_TEST_LOCK.lock().await;
         let temp_dir = tempfile::tempdir().expect("temp dir should be created");
         let storage = Arc::new(Storage::new(temp_dir.path()).expect("storage should initialize"));
         let manager = test_youtube_manager(Arc::clone(&storage));
@@ -1522,6 +1886,43 @@ mod tests {
             .expect("owner credentials should exist");
 
         assert_eq!(loaded_for_user_a.access_token, "user-a-access-token");
+
+        // The load above may have migrated the plaintext SQLite row into the OS
+        // keyring; clean it up so repeated local test runs don't accumulate entries.
+        delete_credentials_from_keyring(&youtube_credentials_key("user-a"));
+    }
+
+    #[tokio::test]
+    async fn saved_credentials_round_trip_and_clear_via_manager() {
+        let _keyring_guard = KEYRING_TEST_LOCK.lock().await;
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let storage = Arc::new(Storage::new(temp_dir.path()).expect("storage should initialize"));
+        let manager = test_youtube_manager(Arc::clone(&storage));
+        let creds = test_credentials("round-trip-access-token");
+
+        manager
+            .save_credentials_for_user("round-trip-user", &creds)
+            .await
+            .expect("credentials should save");
+
+        let loaded = manager
+            .load_credentials_for_user("round-trip-user")
+            .await
+            .expect("credentials should load")
+            .expect("credentials should exist");
+        assert_eq!(loaded.access_token, "round-trip-access-token");
+        assert_eq!(loaded.refresh_token, creds.refresh_token);
+
+        manager
+            .clear_credentials_for_user("round-trip-user")
+            .await
+            .expect("credentials should clear");
+
+        let cleared = manager
+            .load_credentials_for_user("round-trip-user")
+            .await
+            .expect("load after clear should succeed");
+        assert!(cleared.is_none());
     }
 
     #[tokio::test]
@@ -1605,11 +2006,14 @@ mod tests {
             .set_pending_oauth_owner_for_user("starting-user")
             .await;
 
-        assert!(
-            require_active_pending_youtube_oauth_user(&auth, &manager, "starting-user")
-                .await
-                .is_ok()
-        );
+        assert!(require_active_pending_youtube_oauth_user(
+            &auth,
+            "youtube_complete_auth",
+            &manager,
+            "starting-user"
+        )
+        .await
+        .is_ok());
     }
 
     #[tokio::test]
@@ -1627,9 +2031,14 @@ mod tests {
         auth.login(test_user_with_id("different-user", SubscriptionTier::Pro))
             .unwrap();
 
-        let error = require_active_pending_youtube_oauth_user(&auth, &manager, "starting-user")
-            .await
-            .unwrap_err();
+        let error = require_active_pending_youtube_oauth_user(
+            &auth,
+            "youtube_complete_auth",
+            &manager,
+            "starting-user",
+        )
+        .await
+        .unwrap_err();
 
         assert!(matches!(
             error,
@@ -1651,9 +2060,14 @@ mod tests {
             .await;
         manager.clear_pending_oauth_owner().await;
 
-        let error = require_active_pending_youtube_oauth_user(&auth, &manager, "starting-user")
-            .await
-            .unwrap_err();
+        let error = require_active_pending_youtube_oauth_user(
+            &auth,
+            "youtube_complete_auth",
+            &manager,
+            "starting-user",
+        )
+        .await
+        .unwrap_err();
 
         assert!(matches!(
             error,
@@ -1680,9 +2094,14 @@ mod tests {
             .await;
         manager.clear_app_auth_oauth_state().await;
 
-        let error = require_active_pending_youtube_oauth_user(&auth, &manager, "starting-user")
-            .await
-            .unwrap_err();
+        let error = require_active_pending_youtube_oauth_user(
+            &auth,
+            "youtube_complete_auth",
+            &manager,
+            "starting-user",
+        )
+        .await
+        .unwrap_err();
 
         assert!(matches!(
             error,
@@ -1794,7 +2213,10 @@ pub async fn start_upload_scheduler(app_handle: tauri::AppHandle) {
 
         let state = app_handle.state::<crate::AppState>();
         let youtube = Arc::clone(&state.youtube_manager);
-        let user = match require_youtube_pro_access(&state.auth) {
+        // Not itself a `#[tauri::command]` entry point — this background loop resumes
+        // the scheduled-upload queue created by `youtube_schedule_upload`, so it's
+        // gated as that command for COMMAND_POLICIES purposes.
+        let user = match require_youtube_access(&state.auth, "youtube_schedule_upload") {
             Ok(user) => user,
             Err(_) => continue,
         };

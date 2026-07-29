@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -184,11 +185,11 @@ export function ClipLibrary() {
   };
 
   const handlePlayClip = (clip: ClipMetadata) => {
-    const videoSrc = clip.file_path.startsWith('file://')
-      ? clip.file_path
-      : `file://${clip.file_path}`;
-
-    setCurrentVideoSrc(videoSrc);
+    // `file://` 은 WebView2 에서 로드되지 않는다 — Tauri 는 로컬 파일을 asset
+    // protocol 로만 내주고, 그 변환이 `convertFileSrc` 다. 이 화면만 직접
+    // `file://` 를 조립하고 있어서 썸네일은 회색 사각형, 재생은 빈 플레이어였다
+    // (ClipCard/VideoPreview/TimelineClip 은 모두 convertFileSrc 를 쓴다).
+    setCurrentVideoSrc(convertFileSrc(clip.file_path));
     const eventLabel = typeof clip.event_type === 'string' ? clip.event_type : Object.keys(clip.event_type)[0];
     setCurrentVideoTitle(`${eventLabel} ${t('clips.at')} ${formatTime(clip.event_time)}`);
     setIsVideoModalOpen(true);
@@ -381,7 +382,7 @@ export function ClipLibrary() {
                 {/* Video thumbnail or placeholder */}
                 {clip.thumbnail_path ? (
                   <img
-                    src={`file://${clip.thumbnail_path}`}
+                    src={convertFileSrc(clip.thumbnail_path)}
                     alt={`${typeof clip.event_type === 'string' ? clip.event_type : Object.keys(clip.event_type)[0]} thumbnail`}
                     className="absolute inset-0 w-full h-full object-cover"
                     onError={(e) => {

@@ -3,7 +3,7 @@
 
 use lolshorts::recording::audio::AudioConfig;
 use lolshorts::recording::integration_backend::{
-    RecordingConfig, RecordingStatus, VideoEncoder, WindowsCaptureRecorder,
+    RecordingConfig, RecordingStatus, SegmentRecorder, VideoEncoder, WindowsCaptureRecorder,
 };
 use lolshorts::storage::GameMetadata;
 use std::path::PathBuf;
@@ -36,6 +36,7 @@ fn create_test_audio_config() -> AudioConfig {
         system_audio_volume: 100,
         sample_rate: 44100,
         bitrate: 128,
+        audio_device_id: None,
     }
 }
 
@@ -97,10 +98,7 @@ async fn test_windows_capture_recorder_start_stop() {
         assert!(status == RecordingStatus::Recording || status == RecordingStatus::Buffering);
 
         // Test stopping recording
-        let stop_result = recorder.stop_recording().await;
-        if stop_result.is_ok() {
-            let output_path = stop_result.unwrap();
-
+        if let Ok(output_path) = recorder.stop_recording().await {
             // Verify output path is valid
             assert!(output_path.to_str().is_some());
         }
@@ -240,6 +238,41 @@ async fn test_windows_capture_recorder_audio_config() {
 }
 
 #[tokio::test]
+async fn test_windows_capture_recorder_microphone_enabled_config() {
+    // A microphone-enabled config must build a recorder without panicking. Mic
+    // capture only starts at start_recording() time (and, per spec, never blocks
+    // recording on failure), so construction here is CI-safe with no audio hardware.
+    let temp_dir = TempDir::new().unwrap();
+
+    let audio_config = AudioConfig {
+        record_microphone: true,
+        microphone_device: None,
+        microphone_volume: 120,
+        record_system_audio: false,
+        system_audio_device: None,
+        system_audio_volume: 100,
+        sample_rate: 48000,
+        bitrate: 192,
+        audio_device_id: None,
+    };
+
+    let config = RecordingConfig {
+        output_dir: temp_dir.path().to_path_buf(),
+        audio_config: Some(audio_config),
+        ..create_test_config()
+    };
+
+    let recorder = WindowsCaptureRecorder::new(config).await.unwrap();
+
+    let status = recorder.get_status().await;
+    assert_eq!(status, RecordingStatus::Idle);
+
+    // Before any recording starts nothing is captured, so system audio is inactive.
+    let stats = recorder.get_stats().await;
+    assert!(!stats.audio_active);
+}
+
+#[tokio::test]
 async fn test_windows_capture_recorder_concurrent_access() {
     use tokio::task;
 
@@ -299,6 +332,77 @@ async fn test_windows_capture_recorder_concurrent_access() {
 }
 
 #[tokio::test]
+async fn save_event_clip_while_idle_errors_and_writes_no_file() {
+    // The auto-clip pipeline treats `Ok(path)` as proof that a playable clip exists and
+    // writes a metadata row for it, so a save attempted while nothing is recording must
+    // fail loudly and leave nothing behind.
+    let temp_dir = TempDir::new().unwrap();
+    let config = RecordingConfig {
+        output_dir: temp_dir.path().to_path_buf(),
+        ..create_test_config()
+    };
+
+    let recorder = WindowsCaptureRecorder::new(config).await.unwrap();
+    assert_eq!(recorder.get_status().await, RecordingStatus::Idle);
+
+    let event_wall_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+
+    let result = recorder
+        .save_event_clip(event_wall_secs, 10.0, 3.0, "idle_event")
+        .await;
+
+    assert!(
+        result.is_err(),
+        "idle recorder must not report a saved clip"
+    );
+    assert!(
+        !temp_dir
+            .path()
+            .join("clips")
+            .join("idle_event.mp4")
+            .exists(),
+        "no clip file may be created for a failed save"
+    );
+}
+
+#[tokio::test]
+async fn clip_extraction_runs_without_holding_the_recorder() {
+    // The extraction path works off a snapshot (`ClipExtractionContext`) so the caller can
+    // release the recorder lock before the coverage wait / verify / export, which together
+    // can run for minutes and used to starve every status poll behind the health monitor's
+    // periodic `write()`. Proof by construction: the context carries no handle back to the
+    // recorder, so a save can still be driven after the recorder itself is gone.
+    let temp_dir = TempDir::new().unwrap();
+    let config = RecordingConfig {
+        output_dir: temp_dir.path().to_path_buf(),
+        ..create_test_config()
+    };
+
+    let ctx = {
+        let recorder = SegmentRecorder::new(config).expect("segment recorder");
+        recorder.extraction_context()
+    };
+
+    let output_path = temp_dir.path().join("clip.mp4");
+    let error = ctx
+        // Duration::ZERO skips the coverage wait; there is no footage at all, so the
+        // export must bail before creating anything.
+        .save_clip_anchored(&output_path, 10.0, None, Duration::ZERO)
+        .await
+        .expect_err("a save with no segments must fail");
+
+    assert!(
+        error.to_string().contains("세그먼트"),
+        "unexpected error: {}",
+        error
+    );
+    assert!(!output_path.exists(), "no file may be written on failure");
+}
+
+#[tokio::test]
 async fn test_recording_config_defaults() {
     // Test default configuration
     let default_config = RecordingConfig::default();
@@ -307,7 +411,7 @@ async fn test_recording_config_defaults() {
     assert_eq!(default_config.bitrate, 15_000_000);
     assert_eq!(default_config.resolution, (1920, 1080));
     assert!(matches!(default_config.encoder, VideoEncoder::H264));
-    assert_eq!(default_config.buffer_duration_secs, 60);
+    assert_eq!(default_config.buffer_duration_secs, 90);
     assert!(default_config.audio_config.is_some());
 }
 

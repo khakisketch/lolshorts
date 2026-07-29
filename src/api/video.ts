@@ -84,6 +84,13 @@ function normalizeAutoEditProgress(progress: BackendAutoEditProgress): AutoEditP
   };
 }
 
+export interface ComposeShortsV2Clip {
+  path: string;
+  trim_start?: number;
+  /** Seconds to cut from the *end* of the clip (backend converts to an absolute duration). */
+  trim_end?: number;
+}
+
 export const videoApi = {
   getClips: (gameId: string) =>
     cmd<ClipMetadata[]>('get_clips', { game_id: gameId }),
@@ -91,8 +98,24 @@ export const videoApi = {
   extractClip: (inputPath: string, outputPath: string, startTime: number, duration: number) =>
     cmd<string>('extract_clip', { input_path: inputPath, output_path: outputPath, start_time: startTime, duration }),
 
+  /** @deprecated Use composeShortsV2, which honors per-clip trim, aspect ratio, and transitions. */
   composeShorts: (clipPaths: string[], outputPath: string) =>
     cmd<string>('compose_shorts', { clip_paths: clipPaths, output_path: outputPath }),
+
+  composeShortsV2: (
+    clips: ComposeShortsV2Clip[],
+    aspectRatio: string,
+    transitionType: string,
+    transitionDuration: number,
+    outputPath: string,
+  ) =>
+    cmd<string>('compose_shorts_v2', {
+      clips,
+      aspect_ratio: aspectRatio,
+      transition_type: transitionType,
+      transition_duration: transitionDuration,
+      output_path: outputPath,
+    }),
 
   generateThumbnail: (inputPath: string, outputPath: string, timeOffset: number) =>
     cmd<string>('generate_thumbnail', { input_path: inputPath, output_path: outputPath, time_offset: timeOffset }),

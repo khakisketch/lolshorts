@@ -33,10 +33,14 @@ import {
   Search,
   Filter,
   Folder,
+  Scissors,
+  Share2,
 } from 'lucide-react';
 import { AutoEditResultMetadata } from '@/types/autoEdit';
 import { logger } from '@/lib/logger';
 import { utilsApi } from '@/api/utils';
+import { useEditorStore } from '@/stores/editorStore';
+import { ShareDialog } from './ShareDialog';
 
 export function ResultsViewer() {
   const { t } = useTranslation();
@@ -44,19 +48,26 @@ export function ResultsViewer() {
   const [results, setResults] = useState<AutoEditResultMetadata[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [shareTarget, setShareTarget] = useState<AutoEditResultMetadata | null>(null);
   const { getAllResults, deleteResult, isLoading, error } = useAutoEditResults();
   const { confirm, ConfirmDialog } = useConfirmDialog();
+  const setSelectedGameId = useEditorStore((state) => state.setSelectedGameId);
 
   const loadResults = useCallback(async () => {
     try {
       const fetchedResults = await getAllResults();
-      setResults(fetchedResults);
+      // Never trust the IPC return shape. A command that fails, is missing, or
+      // returns `None` hands back null/undefined, and assigning that straight to
+      // state made the whole screen throw `null.filter` on first paint — an empty
+      // library is the normal cold-start state, so that crash was the default
+      // experience for a new install.
+      setResults(Array.isArray(fetchedResults) ? fetchedResults : []);
     } catch (err) {
       logger.error('Failed to load results:', err);
     }
   }, [getAllResults]);
 
-  const filteredResults = results.filter(result => {
+  const filteredResults = (results ?? []).filter(result => {
     const searchLower = searchQuery.toLowerCase();
     const matchesSearch = 
       result.result_id.toLowerCase().includes(searchLower) ||
@@ -119,14 +130,24 @@ export function ResultsViewer() {
     }
   };
 
-  const handlePublish = (result: AutoEditResultMetadata) => {
-    navigate({
-      to: '/youtube',
-      search: {
-        path: result.output_path,
-        resultId: result.result_id,
-      },
-    });
+  /** "공유" — the YouTube upload UI opens on top of the library, not as a screen. */
+  const handleShare = (result: AutoEditResultMetadata) => {
+    setShareTarget(result);
+  };
+
+  /**
+   * "다듬기" — hand the finished short back to the editor. The editor works on a
+   * game's clips, so we preselect the game this short was built from before
+   * navigating; without it the editor would open on an empty selection.
+   */
+  const handlePolish = (result: AutoEditResultMetadata) => {
+    const gameId = result.game_ids?.[0];
+    if (gameId) {
+      setSelectedGameId(gameId);
+      navigate({ to: '/editor', search: { gameId } });
+      return;
+    }
+    navigate({ to: '/editor' });
   };
 
   const formatDate = (dateString: string): string => {
@@ -163,12 +184,14 @@ export function ResultsViewer() {
   };
 
   return (
-    <div className="flex flex-col h-full p-6 space-y-6 overflow-auto">
+    <div className="flex flex-col space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div>
-          <h1 className="text-3xl font-bold">{t('results.title')}</h1>
-          <p className="text-muted-foreground">{t('results.description')}</p>
+          <h2 className="text-xl font-bold">{t('results.highlights.title')}</h2>
+          <p className="text-sm text-muted-foreground" style={{ wordBreak: 'keep-all' }}>
+            {t('results.highlights.description')}
+          </p>
         </div>
         <Button onClick={loadResults} disabled={isLoading}>
           {isLoading ? <Spinner size="sm" className="mr-2" /> : <Film className="w-4 h-4 mr-2" />}
@@ -184,26 +207,27 @@ export function ResultsViewer() {
         </Alert>
       )}
 
-      {/* Filters */}
-      <div className="bg-black/40 rounded-lg border border-white/5 p-4 mb-6">
-        <div className="flex gap-4">
+      {/* Filters — only worth showing once there is something to filter. */}
+      {results.length > 0 && (
+      <div className="bg-black/40 rounded-lg border border-white/5 p-4">
+        <div className="flex flex-col sm:flex-row gap-3">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder={t('results.searchPlaceholder', 'Search by result or job ID...')}
+              placeholder={t('results.searchPlaceholder')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9"
             />
           </div>
           <div className="flex items-center gap-2">
-            <Filter className="h-4 w-4 text-muted-foreground" />
+            <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
             <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder={t('results.filterStatusPlaceholder', 'All Statuses')} />
+              <SelectTrigger className="w-full sm:w-[180px]">
+                <SelectValue placeholder={t('results.filterStatusPlaceholder')} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">{t('results.filter.allStatuses', 'All Statuses')}</SelectItem>
+                <SelectItem value="all">{t('results.filter.allStatuses')}</SelectItem>
                 <SelectItem value="Completed">{t('results.completed')}</SelectItem>
                 <SelectItem value="Queued">{t('results.queued')}</SelectItem>
                 <SelectItem value="Uploading">{t('results.uploading')}</SelectItem>
@@ -215,23 +239,29 @@ export function ResultsViewer() {
           </div>
         </div>
       </div>
+      )}
 
       {/* Loading State */}
       {isLoading && results.length === 0 && (
         <SpinnerCenter size="lg" label={t('results.loading')} />
       )}
 
-      {/* Empty State */}
+      {/* Empty State — nothing recorded yet, so point back at the one thing the
+          user actually has to do: play a game. */}
       {!isLoading && results.length === 0 && (
-        <div className="gaming-panel p-6">
+        <div className="gaming-panel p-6" data-testid="results-empty">
           <div>
             <EmptyState
               icon={Sparkles}
-              title={t('results.empty.title')}
-              description={t('results.empty.description')}
+              title={t('results.empty.noVideosTitle')}
+              description={
+                <span style={{ wordBreak: 'keep-all' }}>
+                  {t('results.empty.noVideosDescription')}
+                </span>
+              }
               action={{
-                label: t('results.goToAutoEdit'),
-                onClick: () => navigate({ to: '/auto-edit' }),
+                label: t('results.empty.goHome'),
+                onClick: () => navigate({ to: '/' }),
               }}
               size="lg"
             />
@@ -243,10 +273,10 @@ export function ResultsViewer() {
         <div className="gaming-panel p-6">
           <EmptyState
             icon={Search}
-            title={t('results.noResultsMatchFilters', 'No results match your filters')}
-            description={t('results.tryDifferentFilters', 'Try adjusting your search or filter criteria.')}
+            title={t('results.noResultsMatchFilters')}
+            description={t('results.tryDifferentFilters')}
             action={{
-              label: t('results.clearFilters', 'Clear Filters'),
+              label: t('results.clearFilters'),
               onClick: () => {
                 setSearchQuery('');
                 setFilterStatus('all');
@@ -266,7 +296,7 @@ export function ResultsViewer() {
                 {result.thumbnail_path ? (
                   <img
                     src={convertFileSrc(result.thumbnail_path)}
-                    alt="Result thumbnail"
+                    alt={t('results.thumbnailAlt')}
                     className="absolute inset-0 w-full h-full object-cover"
                     onError={(e) => {
                       e.currentTarget.style.display = 'none';
@@ -293,8 +323,8 @@ export function ResultsViewer() {
                         <Calendar className="w-3 h-3" />
                         {formatDate(result.created_at)}
                       </p>
-                      <Badge variant="outline" className="text-[10px] uppercase tracking-wider opacity-70">
-                        AutoEdit Result
+                      <Badge variant="outline" className="text-[10px] tracking-wider opacity-70">
+                        {t('results.badge.autoEdit')}
                       </Badge>
                     </div>
                   </div>
@@ -332,52 +362,66 @@ export function ResultsViewer() {
                   )}
                 </div>
 
-                {/* Action Buttons */}
+                {/* Action Buttons — 재생 / 다듬기 / 공유 are the three things a
+                    user can do with a finished short; file access and delete
+                    stay available as secondary actions. */}
                 <div className="flex flex-col gap-2">
-                  <div className="flex gap-2">
+                  <div className="grid grid-cols-3 gap-2">
                     <Button
-                      onClick={() => handlePublish(result)}
-                      className="flex-1"
-                      variant="default"
+                      onClick={() => handlePlay(result.output_path)}
+                      variant="outline"
+                      className="min-h-[44px]"
+                      data-testid={`result-play-${result.result_id}`}
                     >
-                      <Upload className="w-4 h-4 mr-2" />
-                      {t('results.publish', 'Publish')}
+                      <Play className="w-4 h-4 mr-2" />
+                      {t('results.play')}
                     </Button>
                     <Button
-                      onClick={() => handleDelete(result.result_id)}
-                      variant="destructive"
-                      size="icon"
+                      onClick={() => handlePolish(result)}
+                      variant="outline"
+                      className="min-h-[44px]"
+                      data-testid={`result-polish-${result.result_id}`}
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Scissors className="w-4 h-4 mr-2" />
+                      {t('results.polish')}
+                    </Button>
+                    <Button
+                      onClick={() => handleShare(result)}
+                      variant="default"
+                      className="min-h-[44px]"
+                      data-testid={`result-share-${result.result_id}`}
+                    >
+                      <Share2 className="w-4 h-4 mr-2" />
+                      {t('results.share')}
                     </Button>
                   </div>
                   <div className="flex gap-2">
                     <Button
-                      onClick={() => handlePlay(result.output_path)}
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                    >
-                      <Play className="w-3 h-3 mr-2" />
-                      {t('results.play')}
-                    </Button>
-                    <Button
                       onClick={() => handleOpenFile(result.output_path)}
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
                       className="flex-1"
                     >
                       <Film className="w-3 h-3 mr-2" />
-                      {t('results.openFile', 'Open File')}
+                      {t('results.openFile')}
                     </Button>
                     <Button
                       onClick={() => handleShowInFolder(result.output_path)}
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
                       className="flex-1"
                     >
                       <Folder className="w-3 h-3 mr-2" />
-                      {t('results.showInFolder', 'Folder')}
+                      {t('results.showInFolder')}
+                    </Button>
+                    <Button
+                      onClick={() => handleDelete(result.result_id)}
+                      variant="ghost"
+                      size="sm"
+                      className="text-gaming-magenta hover:text-gaming-magenta hover:bg-gaming-magenta/10"
+                      aria-label={t('results.delete')}
+                    >
+                      <Trash2 className="w-3 h-3" />
                     </Button>
                   </div>
                 </div>
@@ -388,6 +432,15 @@ export function ResultsViewer() {
       )}
 
       <ConfirmDialog />
+
+      <ShareDialog
+        open={shareTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setShareTarget(null);
+        }}
+        videoPath={shareTarget?.output_path}
+        resultId={shareTarget?.result_id}
+      />
     </div>
   );
 }

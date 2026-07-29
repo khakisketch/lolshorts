@@ -109,6 +109,17 @@
     @apply border-border;
   }
 
+  /* The overlay window is created with `transparent: true`, but `body` paints an
+     opaque dark background over the whole window — which is why the in-game REC
+     badge showed up as a black box instead of floating over the game. Clear the
+     background for that window only; `App.tsx` stamps `.overlay-window` on <html>
+     when the /overlay route loads. */
+  html.overlay-window,
+  html.overlay-window body,
+  html.overlay-window #root {
+    background: transparent !important;
+  }
+
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);

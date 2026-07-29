@@ -13,10 +13,13 @@ use crate::utils::process::command_output_with_timeout;
 pub enum FFmpegError {
     #[error("FFmpeg not found in bundled binaries or system PATH")]
     NotFound,
+    #[error("FFprobe not found in bundled binaries or system PATH")]
+    FFprobeNotFound,
 }
 
 // Global cache for FFmpeg path - initialized once per application lifetime
 static FFMPEG_PATH: OnceLock<PathBuf> = OnceLock::new();
+static FFPROBE_PATH: OnceLock<PathBuf> = OnceLock::new();
 const FFMPEG_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn get_ffmpeg_path() -> Result<PathBuf, FFmpegError> {
@@ -32,7 +35,7 @@ pub fn get_ffmpeg_path() -> Result<PathBuf, FFmpegError> {
         let binaries_dir = PathBuf::from(resource_dir).join("binaries");
         debug!("Checking bundled FFmpeg directory: {:?}", binaries_dir);
 
-        if let Some(ffmpeg_path) = check_ffmpeg_in_dir(&binaries_dir) {
+        if let Some(ffmpeg_path) = check_usable_ffmpeg_in_dir(&binaries_dir) {
             info!("Found bundled FFmpeg at: {:?}", ffmpeg_path);
             // Cache the path for future calls
             let _ = FFMPEG_PATH.set(ffmpeg_path.clone());
@@ -40,13 +43,26 @@ pub fn get_ffmpeg_path() -> Result<PathBuf, FFmpegError> {
         }
     }
 
-    // 2. Try the common binary location for Tauri apps (production)
+    // 2. Try the Tauri externalBin sidecar location: installed flat next to the
+    //    executable itself (no trailing "binaries" folder) — this is where
+    //    tauri-build's copy_binaries actually places sidecars in production.
     if let Ok(mut exe_path) = env::current_exe() {
         exe_path.pop(); // Remove executable name
-        let binaries_dir = exe_path.join("binaries");
 
+        debug!(
+            "Checking executable directory for FFmpeg sidecar: {:?}",
+            exe_path
+        );
+        if let Some(ffmpeg_path) = check_usable_ffmpeg_in_dir(&exe_path) {
+            info!("Found sidecar FFmpeg at: {:?}", ffmpeg_path);
+            let _ = FFMPEG_PATH.set(ffmpeg_path.clone());
+            return Ok(ffmpeg_path);
+        }
+
+        // 2b. Legacy/alternate layout: exe_dir/binaries
+        let binaries_dir = exe_path.join("binaries");
         debug!("Checking production FFmpeg directory: {:?}", binaries_dir);
-        if let Some(ffmpeg_path) = check_ffmpeg_in_dir(&binaries_dir) {
+        if let Some(ffmpeg_path) = check_usable_ffmpeg_in_dir(&binaries_dir) {
             info!("Found production FFmpeg at: {:?}", ffmpeg_path);
             let _ = FFMPEG_PATH.set(ffmpeg_path.clone());
             return Ok(ffmpeg_path);
@@ -64,20 +80,27 @@ pub fn get_ffmpeg_path() -> Result<PathBuf, FFmpegError> {
                 .join("ffmpeg.exe");
 
             debug!("Checking system FFmpeg at: {:?}", system_ffmpeg);
-            if system_ffmpeg.exists() {
+            if is_usable_ffmpeg_binary(&system_ffmpeg) {
                 info!("Found system FFmpeg at: {:?}", system_ffmpeg);
                 let _ = FFMPEG_PATH.set(system_ffmpeg.clone());
                 return Ok(system_ffmpeg);
             }
         }
 
-        // Check Chocolatey package manager
-        let choco_ffmpeg = PathBuf::from("C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe");
-        debug!("Checking Chocolatey FFmpeg at: {:?}", choco_ffmpeg);
-        if choco_ffmpeg.exists() {
-            info!("Found Chocolatey FFmpeg at: {:?}", choco_ffmpeg);
-            let _ = FFMPEG_PATH.set(choco_ffmpeg.clone());
-            return Ok(choco_ffmpeg);
+        // Check Chocolatey package manager. Prefer the real package binary over
+        // the shim because the shim can fail if the package payload was moved.
+        for choco_ffmpeg in [
+            PathBuf::from(
+                "C:\\ProgramData\\chocolatey\\lib\\ffmpeg\\tools\\ffmpeg\\bin\\ffmpeg.exe",
+            ),
+            PathBuf::from("C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe"),
+        ] {
+            debug!("Checking Chocolatey FFmpeg at: {:?}", choco_ffmpeg);
+            if is_usable_ffmpeg_binary(&choco_ffmpeg) {
+                info!("Found Chocolatey FFmpeg at: {:?}", choco_ffmpeg);
+                let _ = FFMPEG_PATH.set(choco_ffmpeg.clone());
+                return Ok(choco_ffmpeg);
+            }
         }
     }
 
@@ -96,19 +119,116 @@ pub fn get_ffmpeg_path() -> Result<PathBuf, FFmpegError> {
     {
         if output.status.success() {
             let path_str = String::from_utf8_lossy(&output.stdout);
-            if let Some(first_line) = path_str.lines().next() {
-                let path = PathBuf::from(first_line.trim());
-                if path.exists() {
-                    info!("Found FFmpeg in PATH: {:?}", path);
-                    let _ = FFMPEG_PATH.set(path.clone());
-                    return Ok(path);
-                }
+            if let Some(path) =
+                pick_first_usable_from_path_output(&path_str, is_usable_ffmpeg_binary)
+            {
+                info!("Found FFmpeg in PATH: {:?}", path);
+                let _ = FFMPEG_PATH.set(path.clone());
+                return Ok(path);
             }
         }
     }
 
     warn!("FFmpeg not found in any location");
     Err(FFmpegError::NotFound)
+}
+
+pub fn get_ffprobe_path() -> Result<PathBuf, FFmpegError> {
+    if let Some(path) = FFPROBE_PATH.get() {
+        return Ok(path.clone());
+    }
+
+    info!("Searching for FFprobe binary...");
+
+    if let Ok(resource_dir) = env::var("CARGO_MANIFEST_DIR") {
+        let binaries_dir = PathBuf::from(resource_dir).join("binaries");
+        debug!("Checking bundled FFprobe directory: {:?}", binaries_dir);
+
+        if let Some(ffprobe_path) = check_usable_ffprobe_in_dir(&binaries_dir) {
+            info!("Found bundled FFprobe at: {:?}", ffprobe_path);
+            let _ = FFPROBE_PATH.set(ffprobe_path.clone());
+            return Ok(ffprobe_path);
+        }
+    }
+
+    if let Ok(mut exe_path) = env::current_exe() {
+        exe_path.pop();
+
+        debug!(
+            "Checking executable directory for FFprobe sidecar: {:?}",
+            exe_path
+        );
+        if let Some(ffprobe_path) = check_usable_ffprobe_in_dir(&exe_path) {
+            info!("Found sidecar FFprobe at: {:?}", ffprobe_path);
+            let _ = FFPROBE_PATH.set(ffprobe_path.clone());
+            return Ok(ffprobe_path);
+        }
+
+        // Legacy/alternate layout: exe_dir/binaries
+        let binaries_dir = exe_path.join("binaries");
+        debug!("Checking production FFprobe directory: {:?}", binaries_dir);
+        if let Some(ffprobe_path) = check_usable_ffprobe_in_dir(&binaries_dir) {
+            info!("Found production FFprobe at: {:?}", ffprobe_path);
+            let _ = FFPROBE_PATH.set(ffprobe_path.clone());
+            return Ok(ffprobe_path);
+        }
+    }
+
+    if let Ok(ffmpeg_path) = get_ffmpeg_path() {
+        if let Some(ffprobe_path) = find_usable_ffprobe_for_ffmpeg(&ffmpeg_path) {
+            info!("Found FFprobe next to FFmpeg at: {:?}", ffprobe_path);
+            let _ = FFPROBE_PATH.set(ffprobe_path.clone());
+            return Ok(ffprobe_path);
+        }
+    }
+
+    let path_cmd = if cfg!(target_os = "windows") {
+        "where"
+    } else {
+        "which"
+    };
+    debug!("Checking system PATH for FFprobe using: {}", path_cmd);
+
+    let mut path_lookup = Command::new(path_cmd);
+    path_lookup.arg("ffprobe");
+    if let Ok(output) =
+        command_output_with_timeout(path_lookup, FFMPEG_PROBE_TIMEOUT, "FFprobe PATH lookup")
+    {
+        if output.status.success() {
+            let path_str = String::from_utf8_lossy(&output.stdout);
+            if let Some(path) =
+                pick_first_usable_from_path_output(&path_str, is_usable_ffprobe_binary)
+            {
+                info!("Found FFprobe in PATH: {:?}", path);
+                let _ = FFPROBE_PATH.set(path.clone());
+                return Ok(path);
+            }
+        }
+    }
+
+    warn!("FFprobe not found in any location");
+    Err(FFmpegError::FFprobeNotFound)
+}
+
+/// Walk every line of a `where`/`which` PATH lookup output and return the first
+/// candidate that passes the given usability predicate. This ensures a broken
+/// or shadowed binary earlier in PATH doesn't cause us to give up before
+/// trying later, valid candidates.
+fn pick_first_usable_from_path_output(
+    output: &str,
+    is_usable: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(trimmed);
+        if is_usable(&path) {
+            return Some(path);
+        }
+    }
+    None
 }
 
 #[allow(dead_code)]
@@ -136,6 +256,119 @@ fn check_ffmpeg_in_dir(dir: &Path) -> Option<PathBuf> {
     }
 
     None
+}
+
+fn check_usable_ffmpeg_in_dir(dir: &Path) -> Option<PathBuf> {
+    check_ffmpeg_in_dir(dir).filter(|path| is_usable_ffmpeg_binary(path))
+}
+
+fn check_ffprobe_in_dir(dir: &Path) -> Option<PathBuf> {
+    let candidates = if cfg!(target_os = "windows") {
+        vec!["ffprobe.exe", "ffprobe-x86_64-pc-windows-msvc.exe"]
+    } else {
+        vec!["ffprobe"]
+    };
+
+    for candidate in candidates {
+        let path = dir.join(candidate);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+fn check_usable_ffprobe_in_dir(dir: &Path) -> Option<PathBuf> {
+    check_ffprobe_in_dir(dir).filter(|path| is_usable_ffprobe_binary(path))
+}
+
+pub fn find_usable_ffprobe_for_ffmpeg(ffmpeg_path: &Path) -> Option<PathBuf> {
+    let parent = ffmpeg_path.parent()?;
+    for candidate in ffprobe_candidate_names_for_ffmpeg(ffmpeg_path) {
+        let path = parent.join(candidate);
+        if is_usable_ffprobe_binary(&path) {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+fn ffprobe_candidate_names_for_ffmpeg(ffmpeg_path: &Path) -> Vec<String> {
+    let mut candidates = if cfg!(target_os = "windows") {
+        vec![
+            "ffprobe.exe".to_string(),
+            "ffprobe-x86_64-pc-windows-msvc.exe".to_string(),
+        ]
+    } else {
+        vec!["ffprobe".to_string()]
+    };
+
+    if let Some(file_name) = ffmpeg_path.file_name().and_then(|name| name.to_str()) {
+        if let Some(sidecar_name) = file_name.strip_prefix("ffmpeg") {
+            candidates.insert(0, format!("ffprobe{}", sidecar_name));
+        }
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn is_usable_ffmpeg_binary(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    let mut version_cmd = Command::new(path);
+    version_cmd.arg("-version");
+
+    match command_output_with_timeout(version_cmd, FFMPEG_PROBE_TIMEOUT, "FFmpeg usability probe") {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            debug!(
+                "FFmpeg candidate did not pass -version probe: {:?}; status={:?}",
+                path, output.status
+            );
+            false
+        }
+        Err(error) => {
+            debug!(
+                "FFmpeg candidate could not be executed: {:?}; {}",
+                path, error
+            );
+            false
+        }
+    }
+}
+
+fn is_usable_ffprobe_binary(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    let mut version_cmd = Command::new(path);
+    version_cmd.arg("-version");
+
+    match command_output_with_timeout(version_cmd, FFMPEG_PROBE_TIMEOUT, "FFprobe usability probe")
+    {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            debug!(
+                "FFprobe candidate did not pass -version probe: {:?}; status={:?}",
+                path, output.status
+            );
+            false
+        }
+        Err(error) => {
+            debug!(
+                "FFprobe candidate could not be executed: {:?}; {}",
+                path, error
+            );
+            false
+        }
+    }
 }
 
 // ============================================================================
@@ -521,6 +754,13 @@ mod tests {
         assert!(!msg.is_empty());
     }
 
+    #[test]
+    fn ffprobe_error_not_found_display_is_non_empty() {
+        let err = FFmpegError::FFprobeNotFound;
+        let msg = err.to_string();
+        assert!(!msg.is_empty());
+    }
+
     // ---- get_ffmpeg_executable_name (tested via cfg!) ----
 
     #[test]
@@ -587,6 +827,171 @@ mod tests {
 
         assert!(result.is_some());
         assert_eq!(result.unwrap(), fake_ffmpeg);
+    }
+
+    #[test]
+    fn check_usable_ffmpeg_in_dir_rejects_non_executable_candidate() {
+        let tmp = std::env::temp_dir().join("lolshorts_test_ffmpeg_usability_detection");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        let ffmpeg_name = if cfg!(target_os = "windows") {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
+        let fake_ffmpeg = tmp.join(ffmpeg_name);
+        std::fs::write(&fake_ffmpeg, b"").expect("should write fake ffmpeg");
+
+        let result = check_usable_ffmpeg_in_dir(&tmp);
+
+        let _ = std::fs::remove_file(&fake_ffmpeg);
+        let _ = std::fs::remove_dir(&tmp);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn check_ffprobe_in_dir_finds_tauri_sidecar_name() {
+        let tmp = std::env::temp_dir().join("lolshorts_test_ffprobe_detection");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        let ffprobe_name = if cfg!(target_os = "windows") {
+            "ffprobe-x86_64-pc-windows-msvc.exe"
+        } else {
+            "ffprobe"
+        };
+        let fake_ffprobe = tmp.join(ffprobe_name);
+        std::fs::write(&fake_ffprobe, b"").expect("should write fake ffprobe");
+
+        let result = check_ffprobe_in_dir(&tmp);
+
+        let _ = std::fs::remove_file(&fake_ffprobe);
+        let _ = std::fs::remove_dir(&tmp);
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), fake_ffprobe);
+    }
+
+    // ---- exe_dir-flat sidecar layout (Tauri v2 externalBin) ----
+    //
+    // Tauri v2 externalBin sidecars are installed flat next to the executable
+    // (no "binaries" subfolder), using the target-triple-suffixed name. These
+    // tests confirm check_ffmpeg_in_dir/check_ffprobe_in_dir - which
+    // get_ffmpeg_path/get_ffprobe_path now call directly on the exe directory
+    // - recognize that layout.
+
+    #[test]
+    fn check_ffmpeg_in_dir_finds_flat_sidecar_triple_name() {
+        let tmp = std::env::temp_dir().join("lolshorts_test_ffmpeg_flat_sidecar");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        let ffmpeg_name = if cfg!(target_os = "windows") {
+            "ffmpeg-x86_64-pc-windows-msvc.exe"
+        } else {
+            "ffmpeg"
+        };
+        let fake_ffmpeg = tmp.join(ffmpeg_name);
+        std::fs::write(&fake_ffmpeg, b"").expect("should write fake ffmpeg sidecar");
+
+        // Simulates get_ffmpeg_path step 2: checking the exe directory itself
+        // (not exe_dir/binaries) for the sidecar binary.
+        let result = check_ffmpeg_in_dir(&tmp);
+
+        let _ = std::fs::remove_file(&fake_ffmpeg);
+        let _ = std::fs::remove_dir(&tmp);
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), fake_ffmpeg);
+    }
+
+    #[test]
+    fn check_ffprobe_in_dir_finds_flat_sidecar_triple_name() {
+        let tmp = std::env::temp_dir().join("lolshorts_test_ffprobe_flat_sidecar");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        let ffprobe_name = if cfg!(target_os = "windows") {
+            "ffprobe-x86_64-pc-windows-msvc.exe"
+        } else {
+            "ffprobe"
+        };
+        let fake_ffprobe = tmp.join(ffprobe_name);
+        std::fs::write(&fake_ffprobe, b"").expect("should write fake ffprobe sidecar");
+
+        // Simulates get_ffprobe_path step 2: checking the exe directory itself
+        // (not exe_dir/binaries) for the sidecar binary.
+        let result = check_ffprobe_in_dir(&tmp);
+
+        let _ = std::fs::remove_file(&fake_ffprobe);
+        let _ = std::fs::remove_dir(&tmp);
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), fake_ffprobe);
+    }
+
+    // ---- pick_first_usable_from_path_output ----
+    //
+    // The `where`/`which` PATH fallback must not give up after the first
+    // line: a shadowed or corrupt binary earlier in PATH should be skipped in
+    // favor of a later, usable candidate.
+
+    #[test]
+    fn pick_first_usable_from_path_output_skips_unusable_earlier_lines() {
+        let output = "C:\\broken\\ffmpeg.exe\nC:\\shadowed\\ffmpeg.exe\nC:\\good\\ffmpeg.exe\n";
+
+        let good_path = PathBuf::from("C:\\good\\ffmpeg.exe");
+        let good_path_for_closure = good_path.clone();
+        let result =
+            pick_first_usable_from_path_output(output, move |path| path == good_path_for_closure);
+
+        assert_eq!(result, Some(good_path));
+    }
+
+    #[test]
+    fn pick_first_usable_from_path_output_returns_first_match_in_order() {
+        let output = "/usr/local/bin/ffmpeg\n/opt/ffmpeg/bin/ffmpeg\n";
+
+        // Both candidates are "usable" - the helper must return the first one
+        // encountered, not the last.
+        let result = pick_first_usable_from_path_output(output, |_path| true);
+
+        assert_eq!(result, Some(PathBuf::from("/usr/local/bin/ffmpeg")));
+    }
+
+    #[test]
+    fn pick_first_usable_from_path_output_returns_none_when_all_unusable() {
+        let output = "C:\\broken\\ffmpeg.exe\nC:\\also_broken\\ffmpeg.exe\n";
+
+        let result = pick_first_usable_from_path_output(output, |_path| false);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn pick_first_usable_from_path_output_skips_blank_lines() {
+        let output = "\n\nC:\\good\\ffmpeg.exe\n\n";
+
+        let result = pick_first_usable_from_path_output(output, |_path| true);
+
+        assert_eq!(result, Some(PathBuf::from("C:\\good\\ffmpeg.exe")));
+    }
+
+    #[test]
+    fn ffprobe_candidate_names_follow_ffmpeg_sidecar_suffix() {
+        let ffmpeg_name = if cfg!(target_os = "windows") {
+            "ffmpeg-x86_64-pc-windows-msvc.exe"
+        } else {
+            "ffmpeg"
+        };
+        let ffmpeg_path = std::path::Path::new(ffmpeg_name);
+        let candidates = ffprobe_candidate_names_for_ffmpeg(ffmpeg_path);
+
+        if cfg!(target_os = "windows") {
+            assert!(candidates
+                .iter()
+                .any(|candidate| candidate == "ffprobe-x86_64-pc-windows-msvc.exe"));
+        } else {
+            assert!(candidates.iter().any(|candidate| candidate == "ffprobe"));
+        }
     }
 
     // ---- is_hardware_encoder (via parse path) ----

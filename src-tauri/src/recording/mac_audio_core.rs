@@ -3,10 +3,12 @@
 //! Provides direct access to macOS audio hardware through Core Audio APIs
 //! when system_profiler is not available or insufficient
 
+use crate::utils::ffmpeg::get_ffmpeg_path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
+use std::path::PathBuf;
 
 // Core Audio imports (these would need to be bound properly)
 #[allow(dead_code)]
@@ -267,7 +269,8 @@ impl CoreAudioManager {
 
     /// Get devices using FFmpeg
     fn get_ffmpeg_devices(&self) -> Result<Vec<CoreAudioDevice>> {
-        let ffmpeg_result = std::process::Command::new("ffmpeg")
+        let ffmpeg_path = get_ffmpeg_path().unwrap_or_else(|_| PathBuf::from("ffmpeg"));
+        let ffmpeg_result = std::process::Command::new(ffmpeg_path)
             .args(["-f", "avfoundation", "-list_devices", "true", "-i", ""])
             .output();
 

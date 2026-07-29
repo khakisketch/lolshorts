@@ -3,11 +3,11 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
 use tokio::time;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // ============================================================================
 // Task 30: Configurable constants for steal / kill-retention detection windows
@@ -63,21 +63,41 @@ pub struct LiveClientBasicInfo {
     pub game_mode: String,
 }
 
-/// Check Live Client API (port 2999) directly for game detection.
-/// Returns `None` if the game is not running or still loading.
-/// Timeout is fixed at 2000ms for reliability.
-pub async fn check_live_client_basic() -> Option<LiveClientBasicInfo> {
-    let client = match reqwest::Client::builder()
+/// Shared HTTP client for the lightweight `check_live_client_basic` probe.
+///
+/// This function runs on the 1s game-monitor poll loop and the 2s frontend
+/// `get_unified_game_status` poll, so building a fresh reqwest client (with a
+/// full TLS context) on every call is wasteful. Reuse a single self-signed-cert
+/// accepting client for the lifetime of the process.
+static LIVE_CLIENT_HTTP: OnceLock<Client> = OnceLock::new();
+
+fn live_client_http() -> Option<&'static Client> {
+    if let Some(client) = LIVE_CLIENT_HTTP.get() {
+        return Some(client);
+    }
+    match reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(Duration::from_millis(2000))
         .build()
     {
-        Ok(c) => c,
+        Ok(client) => {
+            // Ignore the error if another thread initialized it first; either way
+            // `get()` below returns a valid client.
+            let _ = LIVE_CLIENT_HTTP.set(client);
+            LIVE_CLIENT_HTTP.get()
+        }
         Err(e) => {
             tracing::debug!("Failed to build HTTP client: {}", e);
-            return None;
+            None
         }
-    };
+    }
+}
+
+/// Check Live Client API (port 2999) directly for game detection.
+/// Returns `None` if the game is not running or still loading.
+/// Timeout is fixed at 2000ms for reliability.
+pub async fn check_live_client_basic() -> Option<LiveClientBasicInfo> {
+    let client = live_client_http()?;
 
     let response = match client
         .get("https://127.0.0.1:2999/liveclientdata/allgamedata")
@@ -326,14 +346,44 @@ pub struct GameEvent {
     pub event_name: String,
     #[serde(rename = "EventTime", default)]
     pub event_time: f32,
+    /// The acting player for this event.
+    ///
+    /// Aliased because the Live Client API does not use `KillerName` uniformly:
+    /// `FirstBlood` carries the credited player under `Recipient`, and `Ace`
+    /// carries the player whose kill completed the ace under `Acer`. Reusing
+    /// this field (instead of adding new ones) keeps `GameEvent`'s shape
+    /// unchanged for the other construction sites in `auto_clip_manager.rs`
+    /// that build it as a plain struct literal.
     #[serde(rename = "KillerName", default)]
     pub killer_name: Option<String>,
+    /// `Acer` — Ace 이벤트에서 에이스를 완성한 플레이어.
+    ///
+    /// `killer_name` 에 alias 로 얹지 않는다: serde 는 같은 필드를 두 번 채우면
+    /// `duplicate field` 로 **역직렬화 전체를 실패**시키고, 이벤트는 `Events` 배열로
+    /// 한꺼번에 파싱되므로 이런 이벤트 하나가 그 배치의 모든 이벤트를 날린다.
+    /// (실측: `{"KillerName":"A","Acer":"B"}` → `duplicate field \`KillerName\``)
+    #[serde(rename = "Acer", default)]
+    pub acer: Option<String>,
+    /// `Recipient` — FirstBlood 이벤트에서 퍼블을 딴 플레이어. 위와 같은 이유로 별도 필드.
+    #[serde(rename = "Recipient", default)]
+    pub recipient: Option<String>,
     #[serde(rename = "VictimName", default)]
     pub victim_name: Option<String>,
     #[serde(rename = "Assisters", default)]
     pub assisters: Option<Vec<String>>,
     #[serde(rename = "DragonType", default)]
     pub dragon_type: Option<String>,
+    /// `GameEnd` 이벤트가 실어 보내는 승패(`"Win"` / `"Lose"`).
+    ///
+    /// 이 값을 받기 전까지 `GameMetadata::result` 는 **모든 생성 지점에서
+    /// `None`** 이었고(`auto_clip_manager` 3곳, `commands`, `game_lifecycle`),
+    /// 유일한 쓰기는 "5분 미만이면 Remake" 라는 길이 추정뿐이었다. 즉 이긴 판과
+    /// 진 판을 앱이 구분하지 못했다.
+    ///
+    /// 없을 수도 있다고 보고 `Option` 으로 받는다 — 이 필드가 안 오면 예전처럼
+    /// 길이 추정으로 떨어질 뿐, 파싱이 깨지지는 않는다.
+    #[serde(rename = "Result", default)]
+    pub result: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -420,13 +470,25 @@ pub struct LiveClientMonitor {
     recent_champion_kills: Arc<tokio::sync::Mutex<Vec<(SystemTime, String)>>>,
     /// Circuit breaker to stop hammering the API after repeated failures
     circuit_breaker: CircuitBreaker,
-    /// Task 34: Session ID scoping — set to SystemTime epoch at session start, cleared on GameEnd.
-    /// Prevents stale event IDs from carrying over between games.
-    session_id: Arc<tokio::sync::Mutex<Option<u64>>>,
     /// Recent solo kills by the player for 1vX outplay detection: (game_time, victim_name)
     recent_solo_kills: Arc<tokio::sync::Mutex<Vec<(f32, String)>>>,
     /// Recent player kills for tower dive detection: (game_time, victim_name)
     recent_player_kills_for_dive: Arc<tokio::sync::Mutex<Vec<(f32, String)>>>,
+    /// `GameEnd` 순간에 찍어 두는 내 전적. 게임이 끝나면 Live Client API 는 곧
+    /// 사라지므로, 그 뒤에 조회해서는 챔피언도 KDA 도 알 수 없다. 세션을 마무리하는
+    /// 쪽(`finish_auto_capture_session`)이 나중에 읽어 가도록 여기 남긴다.
+    last_game_summary: Arc<RwLock<Option<PlayerSummary>>>,
+}
+
+/// `GameEnd` 시점에 찍은 내 전적 — 판 카드에 보여줄 값들.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerSummary {
+    pub champion: String,
+    pub kills: u32,
+    pub deaths: u32,
+    pub assists: u32,
+    /// `"Win"` / `"Lose"` 를 그대로. 해석은 저장 계층에서.
+    pub result: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -505,12 +567,76 @@ impl Default for EventStreamConfig {
     }
 }
 
+impl EventStreamConfig {
+    /// Build a config from user-tunable event-filter settings, overriding only the
+    /// steal-detection contest window. Polling intervals / timeouts keep their
+    /// tuned defaults. (Task 30 wiring — previously `contest_window_secs` was
+    /// defined in settings but never reached this config.)
+    pub fn from_settings(contest_window_secs: u32) -> Self {
+        Self {
+            contest_window_secs: contest_window_secs as u64,
+            ..Self::default()
+        }
+    }
+}
+
+/// Whether two Live Client player names refer to the same person.
+///
+/// The Live Client API is not consistent about Riot ID shape: `activePlayer
+/// .summonerName` and `allPlayers[].summonerName` carry the tagged form
+/// (`RIVEN1#KR1`), while the event feed's `KillerName` / `VictimName` /
+/// `Assisters` have carried the bare game name (`RIVEN1`). Comparing them with
+/// `==` silently dropped EVERY player-related event: in a field test with a
+/// 4/4/13 scoreline, zero ChampionKill/Death/Assist triggers fired while `Ace`
+/// — the one trigger that does no player matching — fired six times. The app
+/// looked perfectly healthy and produced no highlight of the player at all.
+///
+/// Tag-insensitive matching is only applied when exactly one side carries a
+/// `#TAG`. Two tagged names that differ only by tag are different people
+/// (game names are not unique on their own), so those still compare unequal.
+fn same_player(a: &str, b: &str) -> bool {
+    let a = a.trim();
+    let b = b.trim();
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a.eq_ignore_ascii_case(b) {
+        return true;
+    }
+    let (a_name, a_tag) = split_riot_id(a);
+    let (b_name, b_tag) = split_riot_id(b);
+    if a_tag.is_some() != b_tag.is_some() {
+        return a_name.eq_ignore_ascii_case(b_name);
+    }
+    false
+}
+
+/// Split `Name#TAG` into its parts. Returns `(name, None)` when untagged.
+fn split_riot_id(value: &str) -> (&str, Option<&str>) {
+    match value.split_once('#') {
+        Some((name, tag)) => (name.trim(), Some(tag.trim())),
+        None => (value, None),
+    }
+}
+
 impl LiveClientMonitor {
     pub fn new() -> Result<Self> {
-        Self::with_config(EventStreamConfig::default())
+        Self::with_config(EventStreamConfig::default(), Arc::new(RwLock::new(None)))
     }
 
-    pub fn with_config(config: EventStreamConfig) -> Result<Self> {
+    /// 요약 슬롯을 **필수 인자**로 받는다.
+    ///
+    /// 처음에는 `share_summary_slot()` 이라는 선택적 setter 로 두었는데, 두 개의
+    /// 모니터 생성 경로(수동: `auto_clip_manager`, 자동 감지: `game_monitor`) 중
+    /// **한 곳에서만 부르는 바람에 주 동선인 자동 감지에서 요약이 통째로
+    /// 버려졌다**. 컴파일은 통과했고 테스트 594개도 전부 green 이었다.
+    ///
+    /// 그래서 "부르는 걸 잊을 수 있는 API" 자체를 없앴다. 새 생성 경로가 생기면
+    /// 슬롯을 어디서 가져올지 정하지 않고는 컴파일되지 않는다.
+    pub fn with_config(
+        config: EventStreamConfig,
+        summary_slot: Arc<RwLock<Option<PlayerSummary>>>,
+    ) -> Result<Self> {
         // Create HTTP client that accepts self-signed certificates
         let client = Client::builder()
             .danger_accept_invalid_certs(true)
@@ -529,9 +655,9 @@ impl LiveClientMonitor {
             recent_champion_kills: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             // Open after 5 consecutive failures; reset after 30s cooldown
             circuit_breaker: CircuitBreaker::new(5, Duration::from_secs(30)),
-            session_id: Arc::new(tokio::sync::Mutex::new(None)),
             recent_solo_kills: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             recent_player_kills_for_dive: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            last_game_summary: summary_slot,
         })
     }
 
@@ -542,15 +668,10 @@ impl LiveClientMonitor {
     {
         info!("Starting optimized Live Client monitor...");
 
-        // Task 34: Assign a new session ID and reset last_event_id to prevent stale carryover
+        // Reset last_event_id so a previous game's events don't carry over into this session.
         {
-            let session_ts = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or(Duration::from_secs(0))
-                .as_secs();
-            *self.session_id.lock().await = Some(session_ts);
             *self.last_event_id.lock().await = 0;
-            info!("New monitoring session started: session_id={}", session_ts);
+            info!("New monitoring session started");
         }
 
         let mut event_interval = time::interval(self.config.event_poll_interval);
@@ -829,8 +950,6 @@ impl LiveClientMonitor {
         // Reset session state after GameEnd. Set last_event_id to MAX to prevent
         // the polling loop from re-processing all past events before it stops.
         if game_ended {
-            *self.session_id.lock().await = None;
-            info!("Session ended — clearing session_id");
             *self.last_event_id.lock().await = u32::MAX;
             info!("GameEnd: setting last_event_id to MAX to block re-processing");
         }
@@ -885,8 +1004,6 @@ impl LiveClientMonitor {
         // Reset session state after GameEnd. Set last_event_id to MAX to prevent
         // the polling loop from re-processing all past events before it stops.
         if game_ended {
-            *self.session_id.lock().await = None;
-            info!("Session ended — clearing session_id");
             *self.last_event_id.lock().await = u32::MAX;
             info!("GameEnd: setting last_event_id to MAX to block re-processing");
         }
@@ -897,7 +1014,22 @@ impl LiveClientMonitor {
     /// Detect if an event should trigger recording
     async fn detect_trigger(&self, event: &GameEvent, player_name: &str) -> Option<EventTrigger> {
         match event.event_name.as_str() {
-            "FirstBlood" => Some(EventTrigger::FirstBlood),
+            "FirstBlood" => {
+                // FirstBlood credits the killer in `Recipient`; some payloads also
+                // carry `KillerName`. Trigger only when that's us — the victim side is
+                // already covered by the ChampionKill/Death branch below (gated by
+                // `record_deaths`), so firing here too would double the clip up.
+                if event
+                    .recipient
+                    .as_deref()
+                    .or(event.killer_name.as_deref())
+                    .is_some_and(|k| same_player(k, player_name))
+                {
+                    Some(EventTrigger::FirstBlood)
+                } else {
+                    None
+                }
+            }
             "ChampionKill" => {
                 // Track kill streaks for shutdown detection
                 let mut streaks = self.kill_streak_tracker.lock().await;
@@ -922,8 +1054,10 @@ impl LiveClientMonitor {
                 if let Some(killer) = &event.killer_name {
                     let cache = self.game_state_cache.read().await;
                     if let Some(ref data) = cache.data {
-                        if let Some(killer_player) =
-                            data.all_players.iter().find(|p| &p.summoner_name == killer)
+                        if let Some(killer_player) = data
+                            .all_players
+                            .iter()
+                            .find(|p| same_player(&p.summoner_name, killer))
                         {
                             let mut recent = self.recent_champion_kills.lock().await;
                             let now = SystemTime::now();
@@ -939,11 +1073,11 @@ impl LiveClientMonitor {
                 }
 
                 if let Some(killer) = &event.killer_name {
-                    if killer == player_name {
+                    if same_player(killer, player_name) {
                         // Player got a kill - determine the best trigger
 
                         // Track this kill for 1vX and tower dive detection
-                        let is_solo = event.assisters.as_ref().map_or(true, |a| a.is_empty());
+                        let is_solo = event.assisters.as_ref().is_none_or(|a| a.is_empty());
                         {
                             let mut solo_kills = self.recent_solo_kills.lock().await;
                             if is_solo {
@@ -997,7 +1131,11 @@ impl LiveClientMonitor {
                         }
 
                         Some(EventTrigger::ChampionKill)
-                    } else if event.victim_name.as_deref() == Some(player_name) {
+                    } else if event
+                        .victim_name
+                        .as_deref()
+                        .is_some_and(|v| same_player(v, player_name))
+                    {
                         // Player died - check for trade kill (player killed someone recently then died)
                         let dive_detected = {
                             let dive_kills = self.recent_player_kills_for_dive.lock().await;
@@ -1012,7 +1150,7 @@ impl LiveClientMonitor {
                             Some(EventTrigger::Death)
                         }
                     } else if let Some(assisters) = &event.assisters {
-                        if assisters.contains(&player_name.to_string()) {
+                        if assisters.iter().any(|a| same_player(a, player_name)) {
                             // Player got an assist
                             Some(EventTrigger::Assist)
                         } else {
@@ -1026,7 +1164,11 @@ impl LiveClientMonitor {
                 }
             }
             "DragonKill" => {
-                if event.killer_name.as_deref() == Some(player_name) {
+                if event
+                    .killer_name
+                    .as_deref()
+                    .is_some_and(|k| same_player(k, player_name))
+                {
                     let is_contested = self.check_contested_objective(player_name).await;
                     if is_contested {
                         Some(EventTrigger::Steal)
@@ -1045,7 +1187,11 @@ impl LiveClientMonitor {
                 }
             }
             "BaronKill" => {
-                if event.killer_name.as_deref() == Some(player_name) {
+                if event
+                    .killer_name
+                    .as_deref()
+                    .is_some_and(|k| same_player(k, player_name))
+                {
                     let is_contested = self.check_contested_objective(player_name).await;
                     if is_contested {
                         Some(EventTrigger::Steal)
@@ -1058,7 +1204,7 @@ impl LiveClientMonitor {
             }
             "TurretKilled" => {
                 if let Some(killer) = &event.killer_name {
-                    if killer == player_name {
+                    if same_player(killer, player_name) {
                         Some(EventTrigger::TurretKill)
                     } else {
                         None
@@ -1069,7 +1215,7 @@ impl LiveClientMonitor {
             }
             "InhibKilled" => {
                 if let Some(killer) = &event.killer_name {
-                    if killer == player_name {
+                    if same_player(killer, player_name) {
                         Some(EventTrigger::InhibitorKill)
                     } else {
                         None
@@ -1079,27 +1225,99 @@ impl LiveClientMonitor {
                 }
             }
             "HeraldKill" => {
-                if event.killer_name.as_deref() == Some(player_name) {
+                if event
+                    .killer_name
+                    .as_deref()
+                    .is_some_and(|k| same_player(k, player_name))
+                {
                     Some(EventTrigger::HeraldKill)
                 } else {
                     None
                 }
             }
             "HordeKill" => {
-                if event.killer_name.as_deref() == Some(player_name) {
+                if event
+                    .killer_name
+                    .as_deref()
+                    .is_some_and(|k| same_player(k, player_name))
+                {
                     Some(EventTrigger::VoidgrubsKill)
                 } else {
                     None
                 }
             }
             "AtakhanKill" => {
-                if event.killer_name.as_deref() == Some(player_name) {
+                if event
+                    .killer_name
+                    .as_deref()
+                    .is_some_and(|k| same_player(k, player_name))
+                {
                     Some(EventTrigger::AtakhanKill)
                 } else {
                     None
                 }
             }
-            "Ace" => Some(EventTrigger::Ace),
+            "Ace" => {
+                // Field test finding: the previous code fired on every Ace event
+                // unconditionally, so the enemy team's ace (i.e. the moment *we*
+                // got wiped) was recorded as a priority-4 "highlight" alongside
+                // our own. The Live Client API's Ace event has no documented,
+                // stable field that names the acing team directly, so team
+                // membership is inferred from state already tracked elsewhere:
+                //
+                // 1. Preferred: the API's `Acer` field — the player whose kill
+                //    completed the ace. Look their team up
+                //    in the cached `allPlayers` roster and compare to ours.
+                // 2. Fallback: if the acer can't be resolved (name missing, or
+                //    not present in the last roster snapshot), use the most
+                //    recently recorded champion-kill's team from
+                //    `recent_champion_kills` — that kill (the one that wiped
+                //    the last enemy) fired its own ChampionKill event, and the
+                //    branch above already recorded the killer's team.
+                // 3. If neither signal resolves, do NOT trigger. An unrelated
+                //    Ace being kept is worse than a real one being dropped.
+                let my_team = {
+                    let cache = self.game_state_cache.read().await;
+                    cache.data.as_ref().and_then(|data| {
+                        data.all_players
+                            .iter()
+                            .find(|p| same_player(&p.summoner_name, player_name))
+                            .map(|p| p.team.clone())
+                    })
+                };
+                let my_team = match my_team {
+                    Some(t) => t,
+                    // Can't even tell which team the local player is on yet.
+                    None => return None,
+                };
+
+                let mut acing_team = match event.killer_name.as_deref() {
+                    Some(acer) => {
+                        let cache = self.game_state_cache.read().await;
+                        cache.data.as_ref().and_then(|data| {
+                            data.all_players
+                                .iter()
+                                .find(|p| same_player(&p.summoner_name, acer))
+                                .map(|p| p.team.clone())
+                        })
+                    }
+                    None => None,
+                };
+
+                if acing_team.is_none() {
+                    let recent = self.recent_champion_kills.lock().await;
+                    acing_team = recent
+                        .iter()
+                        .max_by_key(|(ts, _)| *ts)
+                        .map(|(_, team)| team.clone());
+                }
+
+                match acing_team {
+                    Some(team) if team == my_team => Some(EventTrigger::Ace),
+                    // Enemy team's ace, or undeterminable -> don't trigger.
+                    _ => None,
+                }
+            }
             "GameEnd" => {
                 // Task 29: Infer game result from duration at GameEnd
                 let cache = self.game_state_cache.read().await;
@@ -1108,15 +1326,44 @@ impl LiveClientMonitor {
                     .as_ref()
                     .map(|d| d.game_data.game_time as f64)
                     .unwrap_or(0.0);
+                // 승패·챔피언·KDA 는 지금 찍어 두지 않으면 영영 못 얻는다 —
+                // 게임이 끝나면 Live Client API 자체가 응답을 멈춘다.
+                let summary = cache.data.as_ref().and_then(|data| {
+                    data.all_players
+                        .iter()
+                        .find(|p| same_player(&p.summoner_name, player_name))
+                        .map(|me| PlayerSummary {
+                            champion: me.champion_name.clone(),
+                            kills: me.scores.kills,
+                            deaths: me.scores.deaths,
+                            assists: me.scores.assists,
+                            result: event.result.clone(),
+                        })
+                });
                 drop(cache);
+
+                if let Some(ref s) = summary {
+                    info!(
+                        "GameEnd summary: {} {}/{}/{} result={:?}",
+                        s.champion, s.kills, s.deaths, s.assists, s.result
+                    );
+                } else {
+                    warn!("GameEnd: 내 전적을 찾지 못했습니다 (캐시 비었거나 이름 불일치)");
+                }
+                // `None` 으로 덮지 않는다. 이름 불일치나 캐시 공백으로 요약을
+                // 못 만든 두 번째 GameEnd 가 앞서 제대로 찍힌 값을 지워서는 안 된다.
+                if summary.is_some() {
+                    *self.last_game_summary.write().await = summary;
+                }
+
                 let result = infer_game_result(game_time);
                 info!(
                     "GameEnd detected: game_time={:.0}s, inferred_result={:?}",
                     game_time, result
                 );
-                // Task 34: session_id and last_event_id reset is performed by the
-                // callers (process_events / process_event_list) after this function
-                // returns and the last_event_id lock is dropped, to avoid deadlock.
+                // last_event_id reset is performed by the callers
+                // (process_events / process_event_list) after this function returns
+                // and the last_event_id lock is dropped, to avoid deadlock.
                 Some(EventTrigger::GameEnd)
             }
             _ => None,
@@ -1162,7 +1409,7 @@ impl LiveClientMonitor {
                 match data
                     .all_players
                     .iter()
-                    .find(|p| p.summoner_name == player_name)
+                    .find(|p| same_player(&p.summoner_name, player_name))
                 {
                     Some(player) => player.team.clone(),
                     None => return false,
@@ -1203,7 +1450,7 @@ impl LiveClientMonitor {
             if let Some(player) = data
                 .all_players
                 .iter()
-                .find(|p| p.summoner_name == player_name)
+                .find(|p| same_player(&p.summoner_name, player_name))
             {
                 let max_hp = player.champion_stats.max_health;
                 let current_hp = player.champion_stats.current_health;
@@ -1271,7 +1518,7 @@ impl LiveClientMonitor {
         let is_participant = data
             .all_players
             .iter()
-            .any(|p| &p.summoner_name == active_player_name);
+            .any(|p| same_player(&p.summoner_name, active_player_name));
 
         if !is_participant {
             info!(
@@ -1315,6 +1562,91 @@ impl LiveClientMonitor {
     }
 
     /// Get all players in the current game
+    /// 이벤트가 일어난 순간의 상황을 한 번에 찍는다.
+    ///
+    /// `highlight_score` 의 배수는 전부 이 값들에 걸려 있는데, 채우지 않으면
+    /// 모든 배수가 1.0 이 되어 점수 모델이 예전(종류만 보는 5단계)과 똑같아진다.
+    /// 즉 이 함수가 없으면 새 점수 모델은 껍데기다.
+    ///
+    /// 캐시를 **한 번만** 읽는다 — 신호마다 따로 읽으면 그 사이에 캐시가 갱신되어
+    /// 서로 다른 순간의 값이 한 점수에 섞일 수 있다.
+    pub async fn capture_moment(
+        &self,
+        event: &GameEvent,
+        player_name: &str,
+    ) -> crate::recording::highlight_score::MomentContext {
+        use crate::recording::highlight_score::MomentContext;
+
+        let cache = self.game_state_cache.read().await;
+        let Some(ref data) = cache.data else {
+            // 캐시가 비었으면 시간만이라도 남긴다. 이벤트 자체가 게임 시각을 안다.
+            return MomentContext {
+                game_time_secs: Some(event.event_time as f64),
+                ..Default::default()
+            };
+        };
+
+        let me = data
+            .all_players
+            .iter()
+            .find(|p| same_player(&p.summoner_name, player_name));
+
+        let my_health_ratio = me.and_then(|p| {
+            let max = p.champion_stats.max_health;
+            if max > 0.0 {
+                Some((p.champion_stats.current_health / max).clamp(0.0, 1.0) as f64)
+            } else {
+                // 최대 체력이 0 이면 아직 안 받은 값이다. 0 으로 나누지 않고 비운다.
+                None
+            }
+        });
+
+        // 어시스트 수는 이벤트가 직접 알려준다. 내가 죽은 이벤트(Death)에서는
+        // 상대편 어시스트라 의미가 다르므로, 킬러가 나일 때만 센다.
+        let assist_count = match event.killer_name.as_deref() {
+            Some(killer) if same_player(killer, player_name) => {
+                Some(event.assisters.as_ref().map_or(0, |a| a.len() as u32))
+            }
+            _ => None,
+        };
+
+        // 양 팀 생존 수. 내 팀을 알아야 세므로 나를 못 찾으면 비운다.
+        let (allies_alive, enemies_alive) = match me {
+            Some(me) => {
+                let mut allies = 0u32;
+                let mut enemies = 0u32;
+                for p in &data.all_players {
+                    if p.is_dead {
+                        continue;
+                    }
+                    if p.team == me.team {
+                        allies += 1;
+                    } else {
+                        enemies += 1;
+                    }
+                }
+                (Some(allies), Some(enemies))
+            }
+            None => (None, None),
+        };
+
+        let game_time_secs = if data.game_data.game_time > 0.0 {
+            Some(data.game_data.game_time as f64)
+        } else {
+            Some(event.event_time as f64)
+        };
+
+        MomentContext {
+            my_health_ratio,
+            assist_count,
+            allies_alive,
+            enemies_alive,
+            game_time_secs,
+            // 게임이 언제 끝날지는 그 순간에 알 수 없다. 마무리 단계에서 채운다.
+            secs_before_game_end: None,
+        }
+    }
+
     pub async fn get_all_players(&self) -> Result<Vec<String>> {
         let data = self.fetch_game_data().await?;
         Ok(data
@@ -1397,6 +1729,45 @@ mod tests {
         let trigger = EventTrigger::Steal;
         assert_eq!(trigger.pre_duration(), 20);
         assert_eq!(trigger.post_duration(), 3);
+    }
+
+    /// `Result` 필드의 **와이어 계약**을 고정한다.
+    ///
+    /// 이 파일에는 `Acer` 를 alias 로 얹었다가 `duplicate field` 로 **그 배치의
+    /// 이벤트 전체를 날린** 전례가 있다. 이벤트는 배열로 한꺼번에 파싱되므로
+    /// 필드 하나의 실수가 그 폴링의 모든 이벤트를 죽인다. 그래서 새 필드를 넣을
+    /// 때는 실제 JSON 으로 왕복을 확인한다.
+    #[test]
+    fn game_end_result_parses_and_is_optional() {
+        let with_result = r#"{"Events":[
+            {"EventID":42,"EventName":"GameEnd","EventTime":1800.0,"Result":"Win"}
+        ]}"#;
+        let parsed: Events = serde_json::from_str(with_result).expect("Result 가 있어도 파싱된다");
+        assert_eq!(parsed.events[0].result.as_deref(), Some("Win"));
+
+        // Riot 공식 샘플 페이로드에는 GameEnd 이벤트 자체가 없다. 즉 이 필드가
+        // 항상 온다는 보장이 없으므로, 없을 때도 반드시 성공해야 한다.
+        let without_result = r#"{"Events":[
+            {"EventID":42,"EventName":"GameEnd","EventTime":1800.0}
+        ]}"#;
+        let parsed: Events = serde_json::from_str(without_result).expect("없어도 파싱된다");
+        assert_eq!(parsed.events[0].result, None);
+    }
+
+    /// 한 이벤트의 파싱 실패가 배치 전체를 죽이지 않는지는 이 파일의 다른
+    /// 테스트가 다루지만, `Result` 가 문자열이 아닌 타입으로 오는 경우는 새 위험이다.
+    #[test]
+    fn a_non_string_result_does_not_take_down_the_whole_batch() {
+        // 현재 구현은 `Option<String>` 이라 이 페이로드에서 배치가 통째로 실패한다.
+        // 이 테스트는 그 사실을 **기록**한다 — 실제로 이런 페이로드가 관측되면
+        // `serde_json::Value` 로 받아 `as_str()` 하는 관대한 파싱으로 바꿔야 한다.
+        let odd =
+            r#"{"Events":[{"EventID":1,"EventName":"GameEnd","EventTime":1.0,"Result":true}]}"#;
+        let parsed: std::result::Result<Events, _> = serde_json::from_str(odd);
+        assert!(
+            parsed.is_err(),
+            "지금은 실패한다. 이 단언이 깨지면 관대한 파싱이 들어왔다는 뜻이니 주석을 갱신할 것"
+        );
     }
 
     #[tokio::test]
@@ -1540,7 +1911,8 @@ mod tests {
 
     /// Helper to create a LiveClientMonitor for testing
     fn create_test_monitor() -> LiveClientMonitor {
-        LiveClientMonitor::with_config(EventStreamConfig::default()).unwrap()
+        LiveClientMonitor::with_config(EventStreamConfig::default(), Arc::new(RwLock::new(None)))
+            .unwrap()
     }
 
     /// Helper to create a GameEvent for testing
@@ -1559,6 +1931,28 @@ mod tests {
             victim_name: Some(victim.to_string()),
             assisters: Some(assisters),
             dragon_type: None,
+            ..Default::default()
+        }
+    }
+
+    /// Helper for events whose only relevant field is the actor bound into
+    /// `killer_name` (FirstBlood's `Recipient`, Ace's `Acer` — see the alias
+    /// on the struct field).
+    fn make_named_event(
+        event_id: u32,
+        event_time: f32,
+        event_name: &str,
+        actor: Option<&str>,
+    ) -> GameEvent {
+        GameEvent {
+            event_id,
+            event_name: event_name.to_string(),
+            event_time,
+            killer_name: actor.map(|a| a.to_string()),
+            victim_name: None,
+            assisters: None,
+            dragon_type: None,
+            ..Default::default()
         }
     }
 
@@ -1760,10 +2154,285 @@ mod tests {
         assert_eq!(trigger, Some(EventTrigger::Death));
     }
 
+    // ---- FirstBlood: must be player-relevant, not unconditional ----
+
+    #[tokio::test]
+    async fn test_first_blood_triggers_when_player_is_recipient() {
+        let monitor = create_test_monitor();
+        let player_name = "TestPlayer";
+
+        let event = make_named_event(1, 90.0, "FirstBlood", Some(player_name));
+        let trigger = monitor.detect_trigger(&event, player_name).await;
+        assert_eq!(trigger, Some(EventTrigger::FirstBlood));
+    }
+
+    #[tokio::test]
+    async fn test_first_blood_none_when_another_player_is_recipient() {
+        let monitor = create_test_monitor();
+        let player_name = "TestPlayer";
+
+        let event = make_named_event(1, 90.0, "FirstBlood", Some("Enemy"));
+        let trigger = monitor.detect_trigger(&event, player_name).await;
+        assert_eq!(trigger, None);
+    }
+
+    #[tokio::test]
+    async fn test_first_blood_none_when_recipient_missing() {
+        let monitor = create_test_monitor();
+        let player_name = "TestPlayer";
+
+        let event = make_named_event(1, 90.0, "FirstBlood", None);
+        let trigger = monitor.detect_trigger(&event, player_name).await;
+        assert_eq!(trigger, None);
+    }
+
+    // ---- Ace: must be OUR team's ace, not unconditional ----
+    //
+    // Field-test regression: a 4/4/13 scoreline (i.e. the player's team got
+    // wiped) still produced an "Ace" highlight, because the old code fired on
+    // every Ace event with no player/team relevance check at all.
+
+    #[tokio::test]
+    async fn test_ace_triggers_for_my_teams_ace_via_roster_lookup() {
+        let monitor = create_test_monitor();
+        let player_name = "TestPlayer";
+        {
+            let mut cache = monitor.game_state_cache.write().await;
+            cache.update(AllGameData {
+                active_player: ActivePlayer {
+                    summoner_name: player_name.to_string(),
+                    ..Default::default()
+                },
+                all_players: vec![
+                    Player {
+                        summoner_name: player_name.to_string(),
+                        team: "ORDER".to_string(),
+                        ..Default::default()
+                    },
+                    Player {
+                        summoner_name: "Ally".to_string(),
+                        team: "ORDER".to_string(),
+                        ..Default::default()
+                    },
+                    Player {
+                        summoner_name: "Enemy".to_string(),
+                        team: "CHAOS".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                events: Events::default(),
+                game_data: GameData::default(),
+            });
+        }
+
+        // Ally (same team) landed the ace-clinching kill.
+        let event = make_named_event(1, 700.0, "Ace", Some("Ally"));
+        let trigger = monitor.detect_trigger(&event, player_name).await;
+        assert_eq!(trigger, Some(EventTrigger::Ace));
+    }
+
+    #[tokio::test]
+    async fn test_ace_none_for_enemy_teams_ace_via_roster_lookup() {
+        let monitor = create_test_monitor();
+        let player_name = "TestPlayer";
+        {
+            let mut cache = monitor.game_state_cache.write().await;
+            cache.update(AllGameData {
+                active_player: ActivePlayer {
+                    summoner_name: player_name.to_string(),
+                    ..Default::default()
+                },
+                all_players: vec![
+                    Player {
+                        summoner_name: player_name.to_string(),
+                        team: "ORDER".to_string(),
+                        ..Default::default()
+                    },
+                    Player {
+                        summoner_name: "Enemy".to_string(),
+                        team: "CHAOS".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                events: Events::default(),
+                game_data: GameData::default(),
+            });
+        }
+
+        // Enemy team landed the ace-clinching kill -> this is the opposing
+        // team's ace (we were the ones wiped). Must NOT trigger.
+        let event = make_named_event(1, 700.0, "Ace", Some("Enemy"));
+        let trigger = monitor.detect_trigger(&event, player_name).await;
+        assert_eq!(trigger, None);
+    }
+
+    #[tokio::test]
+    async fn test_ace_falls_back_to_recent_kill_team_when_acer_not_in_roster() {
+        let monitor = create_test_monitor();
+        let player_name = "TestPlayer";
+        {
+            let mut cache = monitor.game_state_cache.write().await;
+            cache.update(AllGameData {
+                active_player: ActivePlayer {
+                    summoner_name: player_name.to_string(),
+                    ..Default::default()
+                },
+                all_players: vec![Player {
+                    summoner_name: player_name.to_string(),
+                    team: "ORDER".to_string(),
+                    ..Default::default()
+                }],
+                events: Events::default(),
+                game_data: GameData::default(),
+            });
+        }
+
+        // Player's own kill moments earlier records "ORDER" into
+        // recent_champion_kills.
+        let kill_event = make_kill_event(1, 699.0, player_name, "Enemy", vec![]);
+        let _ = monitor.detect_trigger(&kill_event, player_name).await;
+
+        // Ace event names an acer that isn't in the roster snapshot (e.g.
+        // stale cache) -> falls back to the recent-kill-team heuristic.
+        let ace_event = make_named_event(2, 700.0, "Ace", Some("UnknownAlly"));
+        let trigger = monitor.detect_trigger(&ace_event, player_name).await;
+        assert_eq!(trigger, Some(EventTrigger::Ace));
+    }
+
+    #[tokio::test]
+    async fn test_ace_none_when_undeterminable() {
+        let monitor = create_test_monitor();
+        let player_name = "TestPlayer";
+        {
+            let mut cache = monitor.game_state_cache.write().await;
+            cache.update(AllGameData {
+                active_player: ActivePlayer {
+                    summoner_name: player_name.to_string(),
+                    ..Default::default()
+                },
+                all_players: vec![Player {
+                    summoner_name: player_name.to_string(),
+                    team: "ORDER".to_string(),
+                    ..Default::default()
+                }],
+                events: Events::default(),
+                game_data: GameData::default(),
+            });
+        }
+
+        // No acer name and no recent champion kills recorded -> can't tell
+        // which team was aced. Must default to NOT triggering.
+        let event = make_named_event(1, 700.0, "Ace", None);
+        let trigger = monitor.detect_trigger(&event, player_name).await;
+        assert_eq!(trigger, None);
+    }
+
     #[test]
     fn test_champion_stats_default() {
         let stats = ChampionStats::default();
         assert_eq!(stats.current_health, 0.0);
         assert_eq!(stats.max_health, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod riot_id_matching_tests {
+    use super::{same_player, split_riot_id};
+
+    #[test]
+    fn tagged_active_player_matches_untagged_event_name() {
+        // The exact field-test case: activePlayer was "RIVEN1#KR1" while the event
+        // feed reported "RIVEN1", and every kill/death/assist was discarded.
+        assert!(same_player("RIVEN1#KR1", "RIVEN1"));
+        assert!(same_player("RIVEN1", "RIVEN1#KR1"));
+    }
+
+    #[test]
+    fn identical_names_match_in_either_shape() {
+        assert!(same_player("RIVEN1", "RIVEN1"));
+        assert!(same_player("RIVEN1#KR1", "RIVEN1#KR1"));
+    }
+
+    #[test]
+    fn same_game_name_with_different_tags_are_different_people() {
+        // Game names are not unique on their own; only the tag separates them.
+        assert!(!same_player("RIVEN1#KR1", "RIVEN1#NA1"));
+    }
+
+    #[test]
+    fn different_names_never_match() {
+        assert!(!same_player("RIVEN1#KR1", "Faker"));
+        assert!(!same_player("RIVEN1", "RIVEN2"));
+        assert!(!same_player("RIVEN1", "RIVEN1X"));
+    }
+
+    #[test]
+    fn empty_or_whitespace_never_matches() {
+        assert!(!same_player("", "RIVEN1"));
+        assert!(!same_player("RIVEN1", ""));
+        assert!(!same_player("   ", "RIVEN1"));
+    }
+
+    #[test]
+    fn comparison_is_case_and_whitespace_insensitive() {
+        assert!(same_player(" riven1#KR1 ", "RIVEN1"));
+    }
+
+    #[test]
+    fn korean_game_names_round_trip() {
+        assert!(same_player("소환사#KR1", "소환사"));
+        assert!(!same_player("소환사#KR1", "소환사2"));
+    }
+
+    #[test]
+    fn split_riot_id_separates_name_and_tag() {
+        assert_eq!(split_riot_id("RIVEN1#KR1"), ("RIVEN1", Some("KR1")));
+        assert_eq!(split_riot_id("RIVEN1"), ("RIVEN1", None));
+    }
+}
+
+#[cfg(test)]
+mod event_payload_parsing_tests {
+    use super::GameEvent;
+
+    /// The whole Ace/FirstBlood fix rides on these JSON keys actually landing in the
+    /// struct. Asserting on hand-built `GameEvent` values would prove nothing about
+    /// that, so these go through serde exactly as the Live Client feed does.
+    #[test]
+    fn acer_and_recipient_deserialize_into_their_own_fields() {
+        let ace: GameEvent =
+            serde_json::from_str(r#"{"EventName":"Ace","Acer":"RIVEN1#KR1"}"#).unwrap();
+        assert_eq!(ace.acer.as_deref(), Some("RIVEN1#KR1"));
+        assert_eq!(ace.killer_name, None);
+
+        let fb: GameEvent =
+            serde_json::from_str(r#"{"EventName":"FirstBlood","Recipient":"RIVEN1"}"#).unwrap();
+        assert_eq!(fb.recipient.as_deref(), Some("RIVEN1"));
+    }
+
+    /// Regression guard for a real trap: binding `Acer`/`Recipient` as serde *aliases* of
+    /// `killer_name` made any payload carrying both keys fail with `duplicate field`, and
+    /// because the feed is parsed as one `Events` array, a single such event would take
+    /// every other event in the batch down with it — clip detection would go completely dead
+    /// with nothing but a parse error in the log.
+    #[test]
+    fn an_event_carrying_both_keys_still_parses() {
+        let json = r#"{"EventName":"Ace","KillerName":"A#KR1","Acer":"B#KR1"}"#;
+        let parsed: GameEvent = serde_json::from_str(json).expect("both keys must coexist");
+        assert_eq!(parsed.killer_name.as_deref(), Some("A#KR1"));
+        assert_eq!(parsed.acer.as_deref(), Some("B#KR1"));
+    }
+
+    #[test]
+    fn a_batch_survives_an_event_with_every_optional_key() {
+        let json = r#"[
+            {"EventID":1,"EventName":"ChampionKill","KillerName":"A","VictimName":"B"},
+            {"EventID":2,"EventName":"Ace","Acer":"A","KillerName":"A"},
+            {"EventID":3,"EventName":"FirstBlood","Recipient":"A"}
+        ]"#;
+        let events: Vec<GameEvent> = serde_json::from_str(json).expect("batch must parse");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[1].acer.as_deref(), Some("A"));
+        assert_eq!(events[2].recipient.as_deref(), Some("A"));
     }
 }

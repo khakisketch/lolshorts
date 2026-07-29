@@ -32,6 +32,7 @@ export function AutoEditPanel() {
     availableGames,
     selectedGameIds,
     targetDuration,
+    enableEventZoom,
     currentTemplate,
     backgroundMusic,
     audioLevels,
@@ -42,6 +43,7 @@ export function AutoEditPanel() {
     setAvailableGames,
     toggleGameSelection,
     setTargetDuration,
+    setEnableEventZoom,
     setCurrentTemplate,
     setBackgroundMusic,
     setAudioLevels,
@@ -208,6 +210,7 @@ export function AutoEditPanel() {
             availableGames={availableGames}
             selectedGameIds={selectedGameIds}
             targetDuration={targetDuration}
+            enableEventZoom={enableEventZoom}
             currentTemplate={currentTemplate}
             backgroundMusic={backgroundMusic}
             audioLevels={audioLevels}
@@ -217,6 +220,7 @@ export function AutoEditPanel() {
             isFreeTier={!hasProEntitlement}
             onToggleGame={toggleGameSelection}
             onSetDuration={setTargetDuration}
+            onToggleEventZoom={setEnableEventZoom}
             onTemplateChange={(tpl) => setCurrentTemplate(tpl)}
             onBackgroundMusicChange={setBackgroundMusic}
             onAudioLevelsChange={setAudioLevels}

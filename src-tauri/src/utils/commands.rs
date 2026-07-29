@@ -1,3 +1,4 @@
+use crate::auth::command_policy::require_command_access;
 use crate::error::{AppError, AppResult};
 use crate::utils::health::{DiagnosticCheck, DiagnosticState, DiagnosticsStatus};
 use crate::utils::metrics::{HealthStatus, RecordingMetrics, SystemMetrics};
@@ -114,7 +115,7 @@ async fn collect_diagnostics_status(state: &AppState) -> AppResult<DiagnosticsSt
         }),
     }
 
-    let recording_readiness = crate::recording::commands::collect_recording_readiness(&state).await;
+    let recording_readiness = crate::recording::commands::collect_recording_readiness(state).await;
     diagnostics.checks.push(DiagnosticCheck {
         key: "recording_readiness",
         label: "Recording readiness",
@@ -148,11 +149,7 @@ async fn collect_diagnostics_status(state: &AppState) -> AppResult<DiagnosticsSt
     diagnostics.checks.push(DiagnosticCheck {
         key: "youtube_config",
         label: "YouTube configuration",
-        status: if youtube_client_id_present && youtube_client_secret_present {
-            DiagnosticState::Warning
-        } else {
-            DiagnosticState::Warning
-        },
+        status: DiagnosticState::Warning,
         message: if youtube_client_id_present && youtube_client_secret_present {
             "YouTube OAuth configuration is present; production account behavior still requires real test-account Field QA.".to_string()
         } else {
@@ -465,7 +462,9 @@ fn validate_path(file_path: &str) -> AppResult<std::path::PathBuf> {
 
 /// Show file/folder in system file explorer
 #[tauri::command]
-pub async fn show_in_folder(file_path: String) -> AppResult<()> {
+pub async fn show_in_folder(state: State<'_, AppState>, file_path: String) -> AppResult<()> {
+    require_command_access(&state.auth, "show_in_folder")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
     let canonical = validate_path(&file_path)?;
 
     #[cfg(target_os = "windows")]
@@ -501,7 +500,12 @@ pub async fn show_in_folder(file_path: String) -> AppResult<()> {
 
 /// Open file with default system application
 #[tauri::command]
-pub async fn open_file_with_default_app(file_path: String) -> AppResult<()> {
+pub async fn open_file_with_default_app(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> AppResult<()> {
+    require_command_access(&state.auth, "open_file_with_default_app")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
     let canonical = validate_path(&file_path)?;
     if !canonical.exists() {
         return Err(AppError::NotFound("File does not exist".to_string()));
@@ -537,7 +541,9 @@ pub async fn open_file_with_default_app(file_path: String) -> AppResult<()> {
 
 /// Check if file exists at given path
 #[tauri::command]
-pub async fn check_file_exists(file_path: String) -> AppResult<bool> {
+pub async fn check_file_exists(state: State<'_, AppState>, file_path: String) -> AppResult<bool> {
+    require_command_access(&state.auth, "check_file_exists")
+        .map_err(|e| AppError::Auth(e.to_string()))?;
     Ok(std::path::Path::new(&file_path).exists())
 }
 

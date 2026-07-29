@@ -1,6 +1,15 @@
 #![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::time::Duration;
+
+/// Timeout for the one-shot FFmpeg encoder capability probes used by `HwAccel::Auto`.
+const ENCODER_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Cache of the auto-selected concrete encoder names (probed once per process).
+static AUTO_H264_ENCODER: OnceLock<&'static str> = OnceLock::new();
+static AUTO_H265_ENCODER: OnceLock<&'static str> = OnceLock::new();
 
 /// 녹화 설정
 #[derive(Debug, Clone)]
@@ -39,7 +48,9 @@ impl Default for RecordingConfig {
             encoder: VideoEncoder::H264,
             hw_accel: HwAccel::Auto,
             output_dir: PathBuf::from("./recordings"),
-            buffer_duration_secs: 60,
+            // 90s buffer (was 60s) gives headroom over the 30s max merge window
+            // (MAX_EVENT_WINDOW_SECS) so end-of-fight clips still fit in the buffer.
+            buffer_duration_secs: 90,
             segment_duration_secs: 10,
             audio_config: Some(crate::recording::audio::AudioConfig::default()),
             capture_target,
@@ -239,7 +250,35 @@ impl VideoEncoder {
                 VideoEncoder::H265 => "hevc_amf",
             },
             HwAccel::Software => self.to_software_fallback(),
-            HwAccel::Auto => self.to_ffmpeg_name(),
+            HwAccel::Auto => self.to_auto_ffmpeg_name(),
+        }
+    }
+
+    /// Resolve `HwAccel::Auto` to a concrete encoder that actually works on this
+    /// machine. A compiled-in hardware encoder (e.g. `h264_nvenc` is present in
+    /// virtually every Windows FFmpeg build) does NOT imply usable hardware, so we
+    /// probe each candidate with a 1-frame null encode and pick the first that
+    /// succeeds, preferring NVENC → AMF → QSV → software libx264/libx265.
+    ///
+    /// The old behaviour hard-coded `h264_nvenc`/`hevc_nvenc` on Windows, which made
+    /// recording fail silently for AMD/Intel users who left the encoder on "Auto".
+    fn to_auto_ffmpeg_name(self) -> &'static str {
+        #[cfg(target_os = "windows")]
+        {
+            match self {
+                VideoEncoder::H264 => AUTO_H264_ENCODER.get_or_init(|| {
+                    auto_select_encoder(&["h264_nvenc", "h264_amf", "h264_qsv"], "libx264")
+                }),
+                VideoEncoder::H265 => AUTO_H265_ENCODER.get_or_init(|| {
+                    auto_select_encoder(&["hevc_nvenc", "hevc_amf", "hevc_qsv"], "libx265")
+                }),
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            // macOS/Linux keep their platform-native default (videotoolbox / libx264).
+            self.to_ffmpeg_name()
         }
     }
 
@@ -257,6 +296,80 @@ impl VideoEncoder {
             VideoEncoder::H265 => "mp4",
         }
     }
+}
+
+/// Probe whether FFmpeg can actually encode a frame with `encoder` on this machine.
+/// Runs a fast 1-frame null encode; returns false if the encoder is missing or the
+/// hardware is not present/usable.
+#[cfg(target_os = "windows")]
+fn ffmpeg_can_encode(ffmpeg: &std::path::Path, encoder: &str) -> bool {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=128x128:r=30:d=0.1",
+        "-frames:v",
+        "1",
+        "-c:v",
+        encoder,
+        "-f",
+        "null",
+        "-",
+    ]);
+    // CREATE_NO_WINDOW: don't flash a console window during the probe.
+    cmd.creation_flags(0x08000000);
+
+    match crate::utils::process::command_output_with_timeout(
+        cmd,
+        ENCODER_PROBE_TIMEOUT,
+        "encoder capability probe",
+    ) {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
+}
+
+/// Return the first encoder in `candidates` that this machine can actually use,
+/// falling back to `fallback` (a software encoder) if none work.
+#[cfg(target_os = "windows")]
+fn auto_select_encoder(candidates: &[&'static str], fallback: &'static str) -> &'static str {
+    let ffmpeg = match crate::utils::ffmpeg::get_ffmpeg_path() {
+        Ok(path) => path,
+        Err(_) => {
+            tracing::warn!(
+                "Auto encoder selection: FFmpeg not found, using software fallback {}",
+                fallback
+            );
+            return fallback;
+        }
+    };
+
+    for &encoder in candidates {
+        if ffmpeg_can_encode(&ffmpeg, encoder) {
+            tracing::info!(
+                "Auto encoder selection: using {} (probe succeeded)",
+                encoder
+            );
+            return encoder;
+        }
+        tracing::debug!(
+            "Auto encoder selection: {} not usable on this machine, trying next",
+            encoder
+        );
+    }
+
+    tracing::info!(
+        "Auto encoder selection: no hardware encoder usable, using software {}",
+        fallback
+    );
+    fallback
 }
 
 /// 하드웨어 가속 옵션
@@ -288,6 +401,14 @@ pub struct RecordingStats {
     pub total_frames: u64,
     pub uptime_seconds: f64,
     pub current_fps: f64,
+    /// Whether system audio is actually being captured this session (WASAPI loopback
+    /// or DirectShow). `false` while `record_system_audio` is requested signals that
+    /// the recording is silent so the UI can warn the user.
+    #[serde(default)]
+    pub audio_active: bool,
+    /// Whether the microphone is actually being captured this session.
+    #[serde(default)]
+    pub mic_active: bool,
 }
 
 /// 시스템 상태 정보
@@ -346,9 +467,9 @@ mod tests {
     }
 
     #[test]
-    fn recording_config_default_has_buffer_duration_60s() {
+    fn recording_config_default_has_buffer_duration_90s() {
         let config = RecordingConfig::default();
-        assert_eq!(config.buffer_duration_secs, 60);
+        assert_eq!(config.buffer_duration_secs, 90);
     }
 
     #[test]

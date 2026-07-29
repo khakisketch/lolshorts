@@ -66,14 +66,14 @@ CREATE TABLE IF NOT EXISTS public.user_licenses (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES public.user_profiles(id) ON DELETE CASCADE NOT NULL,
     tier TEXT REFERENCES public.license_tiers(tier) NOT NULL DEFAULT 'FREE',
-    status TEXT NOT NULL DEFAULT 'active', -- active | cancelled | expired
+    status TEXT NOT NULL DEFAULT 'active', -- active | inactive | cancelled | expired | past_due
     started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     expires_at TIMESTAMP WITH TIME ZONE, -- NULL = lifetime/free tier
     cancelled_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
-    CONSTRAINT valid_status CHECK (status IN ('active', 'cancelled', 'expired'))
+    CONSTRAINT user_licenses_status_check CHECK (status IN ('active', 'inactive', 'cancelled', 'expired', 'past_due'))
 );
 
 -- Ensure one active license per user
@@ -96,14 +96,25 @@ CREATE TABLE IF NOT EXISTS public.subscriptions (
     license_id UUID REFERENCES public.user_licenses(id) ON DELETE CASCADE NOT NULL,
     period TEXT NOT NULL, -- MONTHLY | YEARLY
     amount INTEGER NOT NULL, -- in KRW (₩)
-    status TEXT NOT NULL DEFAULT 'pending', -- pending | active | cancelled | failed
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | active | cancelled | failed | expired | past_due
     billing_key TEXT, -- Toss Payments billing key for auto-renewal
+    provider TEXT NOT NULL DEFAULT 'toss',
+    provider_subscription_id TEXT,
+    provider_customer_id TEXT,
+    provider_order_id TEXT,
     next_billing_date DATE,
+    current_period_start TIMESTAMP WITH TIME ZONE,
+    current_period_end TIMESTAMP WITH TIME ZONE,
+    cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
+    cancelled_at TIMESTAMP WITH TIME ZONE,
+    last_payment_id UUID,
+    failure_reason TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
     CONSTRAINT valid_period CHECK (period IN ('MONTHLY', 'YEARLY')),
-    CONSTRAINT valid_status CHECK (status IN ('pending', 'active', 'cancelled', 'failed'))
+    CONSTRAINT subscriptions_status_check CHECK (status IN ('pending', 'active', 'cancelled', 'failed', 'expired', 'past_due'))
 );
 
 -- Enable Row Level Security
@@ -124,24 +135,33 @@ CREATE TABLE IF NOT EXISTS public.payments (
     order_id TEXT UNIQUE NOT NULL,
     payment_key TEXT,
     amount INTEGER NOT NULL, -- in KRW (₩)
-    status TEXT NOT NULL DEFAULT 'pending', -- pending | completed | failed | cancelled | refunded
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | completed | failed | cancelled | refunded | partially_refunded
     method TEXT, -- card | bank_transfer | mobile | etc
     provider TEXT DEFAULT 'toss', -- toss | other
+    currency TEXT NOT NULL DEFAULT 'KRW',
+    idempotency_key TEXT,
+    provider_event_id TEXT,
     provider_data JSONB, -- Raw payment provider response
     requested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     completed_at TIMESTAMP WITH TIME ZONE,
     failed_at TIMESTAMP WITH TIME ZONE,
+    refunded_at TIMESTAMP WITH TIME ZONE,
+    cancelled_at TIMESTAMP WITH TIME ZONE,
     failure_reason TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
-    CONSTRAINT valid_status CHECK (status IN ('pending', 'completed', 'failed', 'cancelled', 'refunded'))
+    CONSTRAINT payments_status_check CHECK (status IN ('pending', 'completed', 'failed', 'cancelled', 'refunded', 'partially_refunded'))
 );
 
 -- Create index for faster order_id lookups
 CREATE INDEX idx_payments_order_id ON public.payments(order_id);
 CREATE INDEX idx_payments_user_id ON public.payments(user_id);
 CREATE INDEX idx_payments_status ON public.payments(status);
+CREATE UNIQUE INDEX idx_payments_provider_order ON public.payments(provider, order_id);
+CREATE UNIQUE INDEX idx_payments_idempotency_key ON public.payments(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX idx_payments_provider_event_id ON public.payments(provider_event_id) WHERE provider_event_id IS NOT NULL;
 
 -- Enable Row Level Security
 ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
@@ -150,6 +170,51 @@ ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can view own payments"
     ON public.payments FOR SELECT
     USING (auth.uid() = user_id);
+
+ALTER TABLE public.subscriptions
+    ADD CONSTRAINT subscriptions_last_payment_id_fkey
+    FOREIGN KEY (last_payment_id) REFERENCES public.payments(id) ON DELETE SET NULL;
+
+CREATE INDEX idx_subscriptions_provider_subscription_id
+    ON public.subscriptions(provider_subscription_id)
+    WHERE provider_subscription_id IS NOT NULL;
+CREATE INDEX idx_subscriptions_current_period_end
+    ON public.subscriptions(current_period_end)
+    WHERE current_period_end IS NOT NULL;
+
+-- =============================================================================
+-- Billing Events Table
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS public.billing_events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    provider TEXT NOT NULL DEFAULT 'toss',
+    event_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    user_id UUID REFERENCES public.user_profiles(id) ON DELETE SET NULL,
+    payment_id UUID REFERENCES public.payments(id) ON DELETE SET NULL,
+    order_id TEXT,
+    payment_key TEXT,
+    status TEXT NOT NULL DEFAULT 'received',
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error_message TEXT,
+    received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    processed_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT billing_events_status_check CHECK (status IN ('received', 'processed', 'ignored', 'failed')),
+    CONSTRAINT billing_events_provider_event_unique UNIQUE (provider, event_id)
+);
+
+ALTER TABLE public.billing_events ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view own billing events"
+    ON public.billing_events FOR SELECT
+    USING (auth.uid() = user_id);
+
+CREATE INDEX idx_billing_events_user_id ON public.billing_events(user_id);
+CREATE INDEX idx_billing_events_order_id ON public.billing_events(order_id) WHERE order_id IS NOT NULL;
+CREATE INDEX idx_billing_events_payment_key ON public.billing_events(payment_key) WHERE payment_key IS NOT NULL;
+CREATE INDEX idx_billing_events_received_at ON public.billing_events(received_at DESC);
 
 -- =============================================================================
 -- Game Statistics Table (Optional - for analytics)
@@ -196,6 +261,7 @@ CREATE OR REPLACE FUNCTION public.get_user_license_tier(user_uuid UUID)
 RETURNS TEXT
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     current_tier TEXT;
@@ -216,6 +282,7 @@ CREATE OR REPLACE FUNCTION public.update_expired_licenses()
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 BEGIN
     UPDATE public.user_licenses
@@ -232,6 +299,7 @@ CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, auth, pg_temp
 AS $$
 BEGIN
     INSERT INTO public.user_profiles (id, email, created_at)

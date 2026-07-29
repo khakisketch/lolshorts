@@ -7,7 +7,6 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useRecordingStore } from "@/stores/recordingStore";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -92,7 +91,6 @@ const getDiagnosticBadgeVariant = (
 
 export function StatusDashboard() {
   const { t } = useTranslation();
-  const { readiness } = useRecordingStore();
   const [recordingMetrics, setRecordingMetrics] =
     useState<RecordingMetrics | null>(null);
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(
@@ -222,96 +220,6 @@ export function StatusDashboard() {
 
   return (
     <div data-testid="status-dashboard" className="space-y-4">
-      {/* Pre-flight Readiness Check */}
-      <div className="gaming-panel p-6">
-        <div className="mb-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5 text-gaming-cyan" />
-              {t("statusDashboard.readiness.title", "Pre-flight Readiness")}
-            </h3>
-            <Badge variant={readiness?.ready ? "default" : "destructive"}>
-              {readiness?.ready
-                ? t("statusDashboard.readiness.ready")
-                : t("statusDashboard.readiness.notReady")}
-            </Badge>
-          </div>
-        </div>
-
-        {readiness ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <p className="text-xs font-bold uppercase text-muted-foreground mb-2">
-                {t("statusDashboard.readiness.components")}
-              </p>
-              <div className="grid grid-cols-1 gap-1">
-                {Object.entries(readiness.component_statuses).map(
-                  ([comp, data]) => (
-                    <div
-                      key={comp}
-                      className="flex items-center justify-between text-xs p-2 bg-black/20 rounded border border-white/5"
-                    >
-                      <span className="capitalize">{comp}</span>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={
-                            data.status === "ok"
-                              ? "text-green-400"
-                              : data.status === "warning"
-                                ? "text-yellow-400"
-                                : "text-red-400"
-                          }
-                        >
-                          {data.status}
-                        </span>
-                        <div
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            data.status === "ok"
-                              ? "bg-green-500"
-                              : data.status === "warning"
-                                ? "bg-yellow-500"
-                                : "bg-red-500"
-                          }`}
-                        />
-                      </div>
-                    </div>
-                  ),
-                )}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <p className="text-xs font-bold uppercase text-muted-foreground mb-2">
-                {t("statusDashboard.readiness.blockers")}
-              </p>
-              {readiness.blockers.length > 0 ? (
-                <div className="space-y-2">
-                  {readiness.blockers.map((b, i) => (
-                    <div
-                      key={i}
-                      className={`text-xs p-2 rounded border ${
-                        b.severity === "critical"
-                          ? "bg-red-500/10 border-red-500/20 text-red-400"
-                          : "bg-yellow-500/10 border-yellow-500/20 text-yellow-400"
-                      }`}
-                    >
-                      {b.message}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs p-4 text-center bg-green-500/10 border border-green-500/20 text-green-400 rounded">
-                  {t("statusDashboard.readiness.noBlockers")}
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center justify-center p-8">
-            <Spinner size="sm" />
-          </div>
-        )}
-      </div>
-
       {/* Commercial Readiness Diagnostics */}
       <div className="gaming-panel p-6">
         <div className="mb-4">
@@ -651,19 +559,19 @@ export function StatusDashboard() {
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
             <span className="text-muted-foreground">
-              {t("statusDashboard.toggleAutoCapture")}
+              {t("dashboard.hotkeys.toggleRecording")}
             </span>
             <kbd className="px-2 py-1 bg-muted rounded">F8</kbd>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">
-              {t("statusDashboard.save60sReplay")}
+              {t("dashboard.hotkeys.manualSave")}
             </span>
             <kbd className="px-2 py-1 bg-muted rounded">F9</kbd>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">
-              {t("statusDashboard.save30sReplay")}
+              {t("dashboard.hotkeys.deleteLast")}
             </span>
             <kbd className="px-2 py-1 bg-muted rounded">F10</kbd>
           </div>

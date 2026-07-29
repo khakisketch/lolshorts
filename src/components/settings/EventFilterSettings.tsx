@@ -4,6 +4,11 @@ import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  applyHighlightPreset,
+  SELECTABLE_HIGHLIGHT_PRESETS,
+  type SelectableHighlightPreset,
+} from "./highlightPreset";
 
 interface EventFilterSettings {
   record_kills: boolean;
@@ -36,76 +41,11 @@ export function EventFilterSettings({ settings, onChange }: EventFilterSettingsP
     onChange({ ...settings, [key]: value });
   };
 
-  const applyPreset = (preset: "highlights" | "everything" | "minimal") => {
-    let newSettings: EventFilterSettings;
-
-    switch (preset) {
-      case "highlights":
-        newSettings = {
-          record_kills: true,
-          record_multikills: true,
-          record_first_blood: true,
-          record_deaths: false,
-          record_shutdown: false,
-          record_assists: false,
-          record_dragon: true,
-          record_baron: true,
-          record_elder: true,
-          record_herald: true,
-          record_turret: false,
-          record_inhibitor: true,
-          record_nexus: true,
-          record_ace: true,
-          record_game_end: true,
-          record_steal: true,
-          min_priority: 2, // Important events and above
-        };
-        break;
-      case "everything":
-        newSettings = {
-          record_kills: true,
-          record_multikills: true,
-          record_first_blood: true,
-          record_deaths: true,
-          record_shutdown: true,
-          record_assists: true,
-          record_dragon: true,
-          record_baron: true,
-          record_elder: true,
-          record_herald: true,
-          record_turret: true,
-          record_inhibitor: true,
-          record_nexus: true,
-          record_ace: true,
-          record_game_end: true,
-          record_steal: true,
-          min_priority: 1, // All events
-        };
-        break;
-      case "minimal":
-        newSettings = {
-          record_kills: false,
-          record_multikills: true,
-          record_first_blood: true,
-          record_deaths: false,
-          record_shutdown: false,
-          record_assists: false,
-          record_dragon: false,
-          record_baron: true,
-          record_elder: true,
-          record_herald: false,
-          record_turret: false,
-          record_inhibitor: true,
-          record_nexus: true,
-          record_ace: true,
-          record_game_end: true,
-          record_steal: true,
-          min_priority: 3, // High priority only
-        };
-        break;
-    }
-
-    onChange(newSettings);
+  // 빠른 프리셋은 기본 화면의 "어떤 장면을 담을까"와 같은 조합을 쓴다.
+  // 여기서만 다른 조합을 쓰면 고급에서 프리셋을 눌러도 기본 화면은 "직접 설정"이
+  // 되어버려, 같은 앱이 두 가지 언어로 말하게 된다.
+  const applyPreset = (preset: SelectableHighlightPreset) => {
+    onChange(applyHighlightPreset(preset, settings));
   };
 
   const getPriorityLabel = (priority: number): string => {
@@ -125,30 +65,17 @@ export function EventFilterSettings({ settings, onChange }: EventFilterSettingsP
       <div>
         <h3 className="text-sm font-semibold mb-3">{t('settings.recordingConfig.eventFilter.quickPresets')}</h3>
         <div className="flex gap-2 flex-wrap">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => applyPreset("highlights")}
-            data-testid="preset-highlights"
-          >
-            {t('settings.recordingConfig.eventFilter.highlightsOnly')}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => applyPreset("everything")}
-            data-testid="preset-everything"
-          >
-            {t('settings.recordingConfig.eventFilter.everything')}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => applyPreset("minimal")}
-            data-testid="preset-minimal"
-          >
-            {t('settings.recordingConfig.eventFilter.minimal')}
-          </Button>
+          {SELECTABLE_HIGHLIGHT_PRESETS.map((preset) => (
+            <Button
+              key={preset}
+              variant="outline"
+              size="sm"
+              onClick={() => applyPreset(preset)}
+              data-testid={`preset-${preset}`}
+            >
+              {t(`settings.basic.highlights.options.${preset}.label`)}
+            </Button>
+          ))}
         </div>
       </div>
 
