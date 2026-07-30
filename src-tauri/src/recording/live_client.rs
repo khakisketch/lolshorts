@@ -172,9 +172,15 @@ pub async fn check_live_client_basic() -> Option<LiveClientBasicInfo> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventTrigger {
     ChampionKill,
-    Death,         // Player death
-    Assist,        // Player assist (without kill)
-    FirstBlood,    // First blood
+    Death,      // Player death
+    Assist,     // Player assist (without kill)
+    FirstBlood, // First blood
+    /// 내가 퍼블을 **당한** 것.
+    ///
+    /// Live Client API 의 `FirstBlood` 이벤트는 퍼블을 딴 쪽(`Recipient`)만 싣고
+    /// 당한 쪽은 알려주지 않는다. 그래서 이건 그 이벤트가 아니라 **그 판의 첫
+    /// `ChampionKill` 에서 내가 희생자인 경우**로 판정한다(`first_kill_seen`).
+    FirstBloodVictim,
     Multikill(u8), // Double, Triple, Quadra, Penta
     DragonKill,
     BaronKill,
@@ -201,6 +207,8 @@ impl EventTrigger {
             EventTrigger::Death => 1,
             EventTrigger::Assist => 1,
             EventTrigger::FirstBlood => 3,
+            // 퍼블을 당한 것도 판을 가르는 순간이라 일반 데스(1)보다 높다.
+            EventTrigger::FirstBloodVictim => 3,
             EventTrigger::Multikill(2) => 2, // Double
             EventTrigger::Multikill(3) => 3, // Triple
             EventTrigger::Multikill(4) => 4, // Quadra
@@ -227,6 +235,54 @@ impl EventTrigger {
             EventTrigger::TradeKill => 2, // Trade kill (less impressive than former tower dive)
             EventTrigger::LowHpOutplay => 4,
             _ => 1,
+        }
+    }
+
+    /// 이 트리거가 **승격의 결과**라면, 승격 전의 상위(부모) 트리거.
+    ///
+    /// # 왜 필요한가
+    ///
+    /// `detect_trigger` 는 게임 이벤트 하나당 트리거를 **하나만** 만든다. 그래서
+    /// 킬 하나가 셧다운이거나 더블킬이면 그 순간은 더 이상 `ChampionKill` 이
+    /// 아니다. 이 성질 때문에 "킬 켜기 + 셧다운 끄기" 조합에서 **셧다운 킬이
+    /// 통째로 사라졌다** — 사용자는 킬을 담겠다고 했는데 가장 좋은 킬이 빠졌고,
+    /// 화면은 아무 말도 하지 않았다. 기본 프리셋이 정확히 그 조합이었다.
+    ///
+    /// 부모를 알면 그 상태에서 클립을 버리는 대신 한 단계 내려 다시 판정할 수
+    /// 있다(`resolve_recordable_trigger`). 그러면 설정 화면이 약속하는 "부모를
+    /// 켜면 그 계열은 반드시 담긴다"가 실제로 참이 된다.
+    ///
+    /// 부모는 **더 일반적인 쪽**이다. 반대 방향(킬 → 셧다운)으로는 올라가지
+    /// 않는다 — 승격은 감지가 하는 일이지 설정이 하는 일이 아니다.
+    ///
+    /// `event` 를 받는 이유는 스틸 때문이다. 스틸은 드래곤에서도 바론에서도
+    /// 나오므로, 원본 이벤트를 보지 않으면 어느 쪽으로 내려야 할지 알 수 없다.
+    pub fn parent(&self, event: &GameEvent) -> Option<EventTrigger> {
+        match self {
+            // `ChampionKill` 이벤트에서 더 특별한 이름을 얻은 것들.
+            EventTrigger::Shutdown
+            | EventTrigger::Multikill(_)
+            | EventTrigger::Outplay1vX(_)
+            | EventTrigger::LowHpOutplay => Some(EventTrigger::ChampionKill),
+            // 둘 다 "내가 죽은" 이벤트다. 데스를 껐다면 이것들도 빠져야 한다 —
+            // 예전에는 `record_trade_kill` 이 기본 on 이라 데스를 꺼 둔 사용자의
+            // 클립에 죽는 장면이 섞여 들어갔다.
+            EventTrigger::TradeKill | EventTrigger::FirstBloodVictim => Some(EventTrigger::Death),
+            EventTrigger::ElderDragonKill => Some(EventTrigger::DragonKill),
+            EventTrigger::Steal => match event.event_name.as_str() {
+                "BaronKill" => Some(EventTrigger::BaronKill),
+                // 장로를 스틸했으면 장로로 내려간다. 장로도 꺼져 있으면 그 다음
+                // 단계에서 일반 드래곤까지 내려간다(강등은 반복된다).
+                _ if event
+                    .dragon_type
+                    .as_deref()
+                    .is_some_and(|t| t.contains("Elder")) =>
+                {
+                    Some(EventTrigger::ElderDragonKill)
+                }
+                _ => Some(EventTrigger::DragonKill),
+            },
+            _ => None,
         }
     }
 
@@ -384,6 +440,17 @@ pub struct GameEvent {
     /// 길이 추정으로 떨어질 뿐, 파싱이 깨지지는 않는다.
     #[serde(rename = "Result", default)]
     pub result: Option<String>,
+    /// 이 이벤트가 일어난 **순간의 상황** — 하이라이트 점수의 배수가 전부 여기 걸린다.
+    ///
+    /// API 가 주는 값이 아니라 트리거를 감지한 직후 우리가 캐시에서 찍어 넣는다
+    /// (`capture_moment`). 게임이 끝나면 Live Client API 는 사라지므로 나중에는
+    /// 다시 구할 수 없고, 클립 저장 시점까지 이벤트에 실어 나르는 편이 콜백
+    /// 시그니처를 바꾸는 것보다 파급이 작다.
+    ///
+    /// `skip` 인 이유: API 응답에는 없는 필드라 역직렬화 대상이 아니고, 이벤트가
+    /// 프론트로 나갈 때도 점수는 클립 메타데이터 쪽에서 따로 나간다.
+    #[serde(skip)]
+    pub moment: Option<crate::recording::highlight_score::MomentContext>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -474,6 +541,11 @@ pub struct LiveClientMonitor {
     recent_solo_kills: Arc<tokio::sync::Mutex<Vec<(f32, String)>>>,
     /// Recent player kills for tower dive detection: (game_time, victim_name)
     recent_player_kills_for_dive: Arc<tokio::sync::Mutex<Vec<(f32, String)>>>,
+    /// 이 판에서 `ChampionKill` 을 하나라도 처리했는가.
+    ///
+    /// 퍼블을 **당한** 쪽을 알아내는 유일한 방법이다 — `FirstBlood` 이벤트는
+    /// 딴 사람(`Recipient`)만 싣는다. 첫 킬의 희생자가 나면 그게 퍼블 데스다.
+    first_kill_seen: Arc<tokio::sync::Mutex<bool>>,
     /// `GameEnd` 순간에 찍어 두는 내 전적. 게임이 끝나면 Live Client API 는 곧
     /// 사라지므로, 그 뒤에 조회해서는 챔피언도 KDA 도 알 수 없다. 세션을 마무리하는
     /// 쪽(`finish_auto_capture_session`)이 나중에 읽어 가도록 여기 남긴다.
@@ -657,6 +729,7 @@ impl LiveClientMonitor {
             circuit_breaker: CircuitBreaker::new(5, Duration::from_secs(30)),
             recent_solo_kills: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             recent_player_kills_for_dive: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            first_kill_seen: Arc::new(tokio::sync::Mutex::new(false)),
             last_game_summary: summary_slot,
         })
     }
@@ -671,6 +744,9 @@ impl LiveClientMonitor {
         // Reset last_event_id so a previous game's events don't carry over into this session.
         {
             *self.last_event_id.lock().await = 0;
+            // 퍼블 데스 판정은 "이 판의 첫 킬"에 걸려 있다. 리셋하지 않으면 두 번째
+            // 판부터는 첫 킬이 첫 킬로 보이지 않아 퍼블 데스가 영영 잡히지 않는다.
+            *self.first_kill_seen.lock().await = false;
             info!("New monitoring session started");
         }
 
@@ -939,7 +1015,11 @@ impl LiveClientMonitor {
                     if matches!(trigger, EventTrigger::GameEnd) {
                         game_ended = true;
                     }
-                    on_event(trigger, event.clone());
+                    // 상황은 지금 찍어야 한다 — 게임이 끝나면 Live Client API 가
+                    // 사라져서 체력도 생존 인원도 되돌아가 물어볼 수 없다.
+                    let mut enriched = event.clone();
+                    enriched.moment = Some(self.capture_moment(&event, &player_name).await);
+                    on_event(trigger, enriched);
                 }
 
                 *last_id = event.event_id;
@@ -993,7 +1073,9 @@ impl LiveClientMonitor {
                     if matches!(trigger, EventTrigger::GameEnd) {
                         game_ended = true;
                     }
-                    on_event(trigger, event.clone());
+                    let mut enriched = event.clone();
+                    enriched.moment = Some(self.capture_moment(event, &player_name).await);
+                    on_event(trigger, enriched);
                 }
 
                 *last_id = event.event_id;
@@ -1031,6 +1113,16 @@ impl LiveClientMonitor {
                 }
             }
             "ChampionKill" => {
+                // 이 판의 첫 킬인가. `FirstBlood` 이벤트는 퍼블을 딴 쪽만 실어 보내므로,
+                // 당한 쪽을 알 수 있는 곳은 여기뿐이다. 킬을 딴 경우든 당한 경우든
+                // 첫 킬을 통과하면 표시가 서고, 판이 바뀌면 `start_monitoring` 이 지운다.
+                let is_first_kill = {
+                    let mut seen = self.first_kill_seen.lock().await;
+                    let first = !*seen;
+                    *seen = true;
+                    first
+                };
+
                 // Track kill streaks for shutdown detection
                 let mut streaks = self.kill_streak_tracker.lock().await;
 
@@ -1146,6 +1238,11 @@ impl LiveClientMonitor {
                         };
                         if dive_detected {
                             Some(EventTrigger::TradeKill)
+                        } else if is_first_kill {
+                            // 판의 첫 킬에서 내가 희생자 = 내가 퍼블을 당했다.
+                            // (트레이드킬과는 겹칠 수 없다 — 먼저 킬을 냈다면 그쪽이
+                            // 첫 킬이 되므로 여기 도달할 때는 이미 표시가 서 있다.)
+                            Some(EventTrigger::FirstBloodVictim)
                         } else {
                             Some(EventTrigger::Death)
                         }

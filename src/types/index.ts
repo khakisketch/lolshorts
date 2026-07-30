@@ -1,17 +1,37 @@
 // Event Filter Settings
+//
+// 백엔드 `EventFilterSettings`(settings/models.rs)의 화면쪽 대응물. 전체 필드
+// 미러는 `components/settings/highlightPreset.ts` 의 `CanonicalEventFilter` 이고,
+// 이 타입은 **화면이 실제로 읽고 쓰는 것**만 담는다.
 export interface EventFilterSettings {
   record_kills: boolean;
   record_multikills: boolean;
   record_first_blood: boolean;
-  record_deaths: boolean;
+  /** 연속킬 중인 상대를 잡은 것 — 내가 딴 킬이다(데스 계열이 아니다). */
   record_shutdown: boolean;
+  /** 10초 안에 솔로킬 2개 이상 — 1vX. */
+  record_outplay: boolean;
+  /** 체력이 바닥인 채로 따낸 킬. */
+  record_low_hp: boolean;
+  record_deaths: boolean;
+  /** 킬 직후 5초 안에 죽은 것. 죽는 이벤트라 `record_deaths` 가 부모다. */
+  record_trade_kill: boolean;
+  /** 내가 퍼블을 당한 것. 마찬가지로 `record_deaths` 가 부모다. */
+  record_first_blood_victim: boolean;
   record_assists: boolean;
   record_dragon: boolean;
   record_baron: boolean;
   record_elder: boolean;
   record_herald: boolean;
+  record_voidgrubs: boolean;
+  record_atakhan: boolean;
   record_turret: boolean;
   record_inhibitor: boolean;
+  /**
+   * 백엔드에 **소비처가 없다** — 어떤 트리거도 이 플래그를 보지 않는다.
+   * 화면에 노출하지 않는 이유는 `settingSpecs.ts` 의 `SCENE_FLAGS` 주석 참조.
+   * 설정 파일 왕복에서 값을 잃지 않으려고 타입에는 남긴다.
+   */
   record_nexus: boolean;
   record_ace: boolean;
   record_game_end: boolean;

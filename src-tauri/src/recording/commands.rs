@@ -1065,6 +1065,10 @@ pub async fn persist_manual_replay_metadata(
         duration: measured_duration_secs,
         created_at: chrono::Utc::now(),
         usage_count: 0,
+        // 사람이 직접 고른 장면이라 중간 이상은 준다(`HighlightKind::ManualSave`).
+        // 게임 상황을 찍을 수 없는 경로이므로 배수 없이 기본점 그대로.
+        highlight_score: Some(crate::recording::highlight_score::HighlightKind::ManualSave.base()),
+        score_reasons: Vec::new(),
     };
 
     // B5 fix: this used to call `storage.save_clip_metadata` directly, bypassing

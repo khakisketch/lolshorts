@@ -365,7 +365,11 @@ impl AutoComposer {
         // 값이라, 한 번 쓴 펜타킬은 안 쓴 트리플킬과 겨루게 된다.
         const REUSE_DECAY: f64 = 0.6;
         let effective_score = |c: &ClipInfo| -> f64 {
-            let base = c.priority as f64;
+            // 하이라이트 점수가 있으면 그것으로, 없으면(예전 클립) `priority` 를
+            // 같은 눈금으로 올려서 쓴다. 두 세대의 클립이 한 라이브러리에 섞여도
+            // 순서가 뒤집히지 않아야 한다 — priority 5 = 100, 1 = 20 으로 놓으면
+            // 점수 눈금(펜타 100 · 킬 25)과 대체로 겹친다.
+            let base = c.highlight_score.unwrap_or((c.priority as f64) * 20.0);
             if config.allow_duplicates {
                 base
             } else {
@@ -477,6 +481,7 @@ impl AutoComposer {
                     thumbnail_path: clip.thumbnail_path,
                     duration: Some(duration),
                     usage_count: clip.usage_count,
+                    highlight_score: clip.highlight_score,
                 });
 
                 clip_id_counter += 1;

@@ -137,13 +137,29 @@ impl StorageSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventFilterSettings {
     // 킬 관련
+    //
+    // 여기 있는 것들은 전부 `record_kills` 의 **하위 상황**이다. 감지는 킬 하나에
+    // 가장 특별한 이름 하나만 붙이므로(`detect_trigger`), 하위를 끄면 그 킬은
+    // 부모인 `record_kills` 로 내려가 판정된다(`EventTrigger::parent`).
     pub record_kills: bool,
     pub record_multikills: bool,
     pub record_first_blood: bool,
+    /// 연속킬 중인 상대를 잡은 것 — **내가 딴** 킬이다.
+    ///
+    /// 예전에는 이 줄이 "데스 관련" 묶음에 있었고 기본값이 `false` 였다. 이름만
+    /// 보고 "내가 셧다운 당한 것"으로 분류한 것인데, 감지 코드는 `killer_name ==
+    /// 나` 일 때만 이 트리거를 만든다(`live_client.rs`). 그래서 기본 설정에서
+    /// **가장 값진 킬 중 하나가 조용히 빠지고 있었다**.
+    pub record_shutdown: bool,
 
     // 데스 관련
     pub record_deaths: bool,
-    pub record_shutdown: bool,
+    /// 내가 퍼블을 **당한** 것. 데스의 하위 상황이라 `record_deaths` 가 부모다.
+    ///
+    /// "죽는 장면은 됐고 퍼블 당한 것만" 이 성립하도록 따로 둔다 — 라인전에서
+    /// 갱을 당한 순간은 복기 가치가 다른 데스와 다르다.
+    #[serde(default)]
+    pub record_first_blood_victim: bool,
 
     // 어시스트 관련
     pub record_assists: bool,
@@ -221,7 +237,7 @@ impl HighlightPreset {
             Self::Custom => return None,
             Self::Everything => EventFilterSettings {
                 record_deaths: true,
-                record_shutdown: true,
+                record_first_blood_victim: true,
                 record_assists: true,
                 record_turret: true,
                 ..base
@@ -260,6 +276,48 @@ impl HighlightPreset {
     }
 }
 
+impl EventFilterSettings {
+    /// 부모가 켜져 있는 하위 상황을 함께 켠다.
+    ///
+    /// # 왜 저장된 값을 고치나
+    ///
+    /// 설정 화면은 부모가 켜져 있는 동안 하위 스위치를 **감춘다** — 강등 덕분에
+    /// 그 스위치가 결과를 바꾸지 못하기 때문이다(`EventTrigger::parent`). 그래서
+    /// 예전 설정 파일에 남아 있는 "킬 켜짐 + 셧다운 꺼짐" 같은 조합은 사용자가
+    /// 화면에서 되돌릴 수 없는 상태가 된다.
+    ///
+    /// 담기는 순간은 어느 쪽이든 같다(강등되어 킬로 남는다). 달라지는 것은
+    /// **이름과 점수**다: 켜 두면 셧다운은 셧다운으로 저장되어 자동 편집에서
+    /// 제 값(55점)을 받고, 꺼 두면 평범한 킬(25점)로 묻힌다. 사용자가 고를 수
+    /// 없는 축이라면 손해 보지 않는 쪽으로 맞춰 두는 것이 맞다.
+    ///
+    /// 표는 `EventTrigger::parent()` 와 같은 계층이어야 한다 — 어긋나면
+    /// `hierarchy_table_matches_trigger_parents` 가 깨진다.
+    pub fn reconcile_hierarchy(&mut self) {
+        if self.record_kills {
+            self.record_multikills = true;
+            self.record_shutdown = true;
+            self.record_outplay = true;
+            self.record_low_hp = true;
+            // 퍼블은 별개 이벤트라 백엔드 부모가 없지만, 킬을 켜 두면 그 순간은
+            // 어차피 담긴다. 화면도 같은 이유로 킬의 하위에 놓는다.
+            self.record_first_blood = true;
+        }
+        if self.record_deaths {
+            self.record_trade_kill = true;
+            self.record_first_blood_victim = true;
+        }
+        if self.record_dragon {
+            self.record_elder = true;
+        }
+        // 스틸은 드래곤에서도 바론에서도 나온다. 둘 중 하나라도 꺼져 있으면
+        // "그래도 스틸은 담을까"가 사용자에게 열려 있는 질문이므로 건드리지 않는다.
+        if self.record_dragon && self.record_baron {
+            self.record_steal = true;
+        }
+    }
+}
+
 impl Default for EventFilterSettings {
     fn default() -> Self {
         Self {
@@ -268,8 +326,12 @@ impl Default for EventFilterSettings {
             record_multikills: true,
             record_first_blood: true,
 
+            // 셧다운은 킬 계열이고 기본으로 담는다. `false` 이던 동안 기본 설정의
+            // 사용자는 "킬을 담겠다"고 켜 둔 채로 연속킬 저지 장면을 잃었다.
+            record_shutdown: true,
+
             record_deaths: false, // 데스는 기본적으로 OFF
-            record_shutdown: false,
+            record_first_blood_victim: false,
 
             // `HighlightPreset::Balanced`(= `#[default]`) 와 같은 값이어야 한다.
             //

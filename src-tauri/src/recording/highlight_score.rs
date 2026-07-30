@@ -58,6 +58,8 @@ pub enum HighlightKind {
     Kill,
     TradeKill,
     Assist,
+    /// 내가 퍼블을 당한 것. 죽는 장면이지만 판의 첫 사건이라 복기 가치가 있다.
+    FirstBloodVictim,
     Death,
     /// 게임 종료. 이긴 판의 마지막 장면은 볼 이유가 있지만 진 판은 덜하다.
     GameEnd {
@@ -98,6 +100,7 @@ impl HighlightKind {
             HighlightKind::GameEnd { won: false } => 25.0,
             HighlightKind::Voidgrubs => 22.0,
             HighlightKind::TradeKill => 20.0,
+            HighlightKind::FirstBloodVictim => 18.0,
             HighlightKind::Turret => 15.0,
             HighlightKind::Assist => 12.0,
             HighlightKind::Death => 10.0,
@@ -191,10 +194,16 @@ fn outnumbered_multiplier(allies: u32, enemies: u32) -> (f64, Option<ScoreReason
 /// 시점 배수. 초반 킬은 흔하고 판을 가르지 않는다.
 ///
 /// 퍼스트블러드는 예외다 — 정의상 초반에만 일어나므로 감점하면 항상 깎인다.
+/// (당한 쪽도 같은 순간이므로 같이 예외로 둔다.)
 fn timing_multiplier(kind: HighlightKind, secs: f64) -> (f64, Option<ScoreReason>) {
     if secs >= 20.0 * 60.0 {
         (1.15, Some(ScoreReason::LateGame))
-    } else if secs < 5.0 * 60.0 && !matches!(kind, HighlightKind::FirstBlood) {
+    } else if secs < 5.0 * 60.0
+        && !matches!(
+            kind,
+            HighlightKind::FirstBlood | HighlightKind::FirstBloodVictim
+        )
+    {
         (0.90, None)
     } else {
         (1.0, None)
@@ -217,7 +226,10 @@ pub fn score(kind: HighlightKind, ctx: &MomentContext) -> HighlightScore {
     };
 
     // 죽는 장면은 체력이 언제나 0 이므로 클러치 판정에서 제외한다.
-    if !matches!(kind, HighlightKind::Death) {
+    if !matches!(
+        kind,
+        HighlightKind::Death | HighlightKind::FirstBloodVictim
+    ) {
         if let Some(ratio) = ctx.my_health_ratio {
             apply(clutch_multiplier(ratio), &mut value, &mut reasons);
         }

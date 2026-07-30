@@ -109,8 +109,12 @@ export const test = base.extend({
                 record_kills: true,
                 record_multikills: true,
                 record_first_blood: true,
+                // 셧다운은 킬 계열이라 기본 on. 이 줄이 `false` 이던 동안 mock 은
+                // 어떤 프리셋과도 맞지 않아, e2e 가 보는 설정 화면은 첫 화면부터
+                // "직접 설정" 배지를 달고 카드가 하나도 안 골라진 상태였다.
+                record_shutdown: true,
                 record_deaths: false,
-                record_shutdown: false,
+                record_first_blood_victim: false,
                 record_assists: true,
                 record_dragon: true,
                 record_baron: true,

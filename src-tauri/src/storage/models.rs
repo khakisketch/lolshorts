@@ -106,6 +106,20 @@ pub struct ClipMetadata {
     pub created_at: DateTime<Utc>,
     #[serde(default)]
     pub usage_count: u32, // Number of times this clip has been used in auto-edits
+    /// 이 클립의 하이라이트 점수(`recording::highlight_score`).
+    ///
+    /// 자동 편집이 무엇을 먼저 쓸지 정하는 값이다. 그 전까지 정렬 기준은
+    /// `priority` (1~5) 뿐이었는데, 그 눈금으로는 **퍼블·바론·게임종료가 전부
+    /// 3점으로 동급**이라 순서가 사실상 무작위였다. 점수 눈금은 0~100 이고
+    /// 상황 배수(체력·단독·열세·시점)가 곱해지므로 상한은 없다.
+    ///
+    /// 예전 클립에는 없다(`None`). 소비하는 쪽이 `priority` 로 되돌아간다.
+    #[serde(default)]
+    pub highlight_score: Option<f64>,
+    /// 점수가 그렇게 나온 이유. 숫자가 아니라 이쪽이 화면에 나갈 값이다
+    /// ("혼자서 · 1v3 · 체력 8%").
+    #[serde(default)]
+    pub score_reasons: Vec<crate::recording::highlight_score::ScoreReason>,
 }
 
 // ============================================================================

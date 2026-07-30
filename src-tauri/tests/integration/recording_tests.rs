@@ -97,8 +97,11 @@ async fn test_clip_metadata_validation() {
         event_time: 180.5,
         priority: 3,
         duration: 15.0,
+        event_offset_secs: Some(10.0),
         created_at: chrono::Utc::now(),
         usage_count: 0,
+        highlight_score: None,
+        score_reasons: Vec::new(),
     };
 
     // Verify required fields are present

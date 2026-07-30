@@ -30,6 +30,40 @@ const SIMPLE_LABELS: Record<string, string> = {
   first_blood: "firstBlood",
 };
 
+/**
+ * `Custom("...")` 로 오는 트리거 이름 → i18n 키.
+ *
+ * `EventType` 열거형에는 변형이 아홉 개뿐이라, 감지가 가르는 나머지 트리거는
+ * 전부 `Custom` 에 이름 문자열로 실려 온다(`trigger_to_event_type`). 그 문자열은
+ * `"Shutdown"` 같은 영어 식별자라서, 매핑이 없으면 `events.custom` 을 타고 화면에
+ * **코드값 그대로** 나간다 — 한국어 UI 에서 클립 이름이 "Shutdown" 이 된다.
+ *
+ * 백엔드 열거형을 늘리는 대신 여기서 받는 이유는, 이 이름들이 저장된 클립에도
+ * 이미 그 문자열로 들어가 있어서 어차피 화면이 알아들어야 하기 때문이다.
+ */
+const CUSTOM_LABELS: Record<string, string> = {
+  Shutdown: "shutdown",
+  Death: "death",
+  FirstBloodVictim: "firstBloodVictim",
+  Assist: "assist",
+  Steal: "steal",
+  GameEnd: "gameEnd",
+  HeraldKill: "heraldKill",
+  ElderDragonKill: "elderDragonKill",
+  VoidgrubsKill: "voidgrubsKill",
+  AtakhanKill: "atakhanKill",
+  TradeKill: "tradeKill",
+  LowHpOutplay: "lowHpOutplay",
+  ManualReplay: "manualReplay",
+  ManualSave: "manualReplay",
+};
+
+/**
+ * 1vX 아웃플레이는 인원수가 이름에 박혀서 온다(`Outplay1v3`). 정확 매칭이 안 되므로
+ * 접두사로 받고 숫자를 보간 값으로 넘긴다.
+ */
+const OUTPLAY_PATTERN = /^Outplay1v(\d+)$/;
+
 /** 멀티킬은 숫자가 아니라 이름으로 부른다 — "3 멀티킬" 이라고 말하는 사람은 없다. */
 const MULTIKILL_NAMES: Record<number, string> = {
   2: "double",
@@ -62,9 +96,22 @@ export function eventLabel(eventType: EventType | null | undefined): EventLabel 
 
   if ("custom" in eventType) {
     const text = String(eventType.custom).trim();
-    return text
-      ? { key: "events.custom", params: { name: text } }
-      : { key: "events.unknown", unknown: true };
+    if (!text) return { key: "events.unknown", unknown: true };
+
+    const known = CUSTOM_LABELS[text];
+    if (known) return { key: `events.${known}` };
+
+    const outplay = OUTPLAY_PATTERN.exec(text);
+    if (outplay) {
+      return {
+        key: "events.outplay",
+        params: { count: Number(outplay[1]) },
+      };
+    }
+
+    // 매핑에 없는 이름은 원문 그대로 흘린다. 영어 코드가 보이는 편이 "하이라이트"
+    // 라고 뭉뚱그리는 것보다 낫다 — 무엇이 빠졌는지 화면에서 바로 드러난다.
+    return { key: "events.custom", params: { name: text } };
   }
 
   return { key: "events.unknown", unknown: true };

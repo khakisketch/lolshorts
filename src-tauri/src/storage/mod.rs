@@ -1561,6 +1561,8 @@ mod tests {
             event_offset_secs: None,
             created_at: Utc::now(),
             usage_count: 0,
+            highlight_score: None,
+            score_reasons: Vec::new(),
         };
         fs::write(
             game_dir.join("clips.json"),
@@ -1799,6 +1801,8 @@ mod tests {
                     event_offset_secs: None,
                     created_at: Utc::now(),
                     usage_count: 0,
+                    highlight_score: None,
+                    score_reasons: Vec::new(),
                 },
             )
             .unwrap();
@@ -1837,6 +1841,8 @@ mod tests {
             event_offset_secs: None,
             created_at: Utc::now(),
             usage_count: 0,
+            highlight_score: None,
+            score_reasons: Vec::new(),
         };
         storage.save_clip_metadata("dur-game", &clip).unwrap();
 
@@ -1875,6 +1881,8 @@ mod tests {
             event_offset_secs: None,
             created_at: Utc::now(),
             usage_count: 0,
+            highlight_score: None,
+            score_reasons: Vec::new(),
         };
         storage
             .save_clip_metadata("dur-game-missing", &clip)
@@ -1945,6 +1953,8 @@ mod tests {
             event_offset_secs: None,
             created_at: Utc::now(),
             usage_count: 0,
+            highlight_score: None,
+            score_reasons: Vec::new(),
         };
         storage.save_clip_metadata("dur-game-real", &clip).unwrap();
 
@@ -2132,6 +2142,8 @@ mod tests {
             event_offset_secs: None,
             created_at: Utc::now(),
             usage_count: 0,
+            highlight_score: None,
+            score_reasons: Vec::new(),
         };
 
         storage

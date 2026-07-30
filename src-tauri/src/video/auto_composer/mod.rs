@@ -37,6 +37,9 @@ mod tests {
             thumbnail_path: None,
             duration: Some(duration),
             usage_count: 0,
+            // 이 헬퍼의 테스트들은 `priority` 로 순서를 검증한다. 점수를 비워 두면
+            // 선택기가 priority 폴백 경로를 타므로 그 검증이 그대로 유효하다.
+            highlight_score: None,
         }
     }
 

@@ -51,12 +51,17 @@ impl RecordingSettings {
                 .map_err(SettingsError::from)
                 .and_then(|json| serde_json::from_str::<Self>(&json).map_err(SettingsError::from))
             {
-                Ok(settings) => {
+                Ok(mut settings) => {
                     tracing::info!("Loaded settings from: {:?}", settings_path);
                     if let Err(e) = settings.validate() {
                         tracing::error!("Settings validation failed: {}. Using defaults.", e);
                         return Ok(Self::default());
                     }
+                    // 부모가 켜진 하위 상황은 함께 켠다. 설정 화면이 그 스위치를
+                    // 감추므로(강등 때문에 결과를 못 바꾼다) 예전 파일의 조합은
+                    // 사용자가 되돌릴 수 없는 상태로 남는다 — 이유는
+                    // `EventFilterSettings::reconcile_hierarchy` 에 적어 두었다.
+                    settings.event_filter.reconcile_hierarchy();
                     return Ok(settings);
                 }
                 Err(e) => {
@@ -68,7 +73,7 @@ impl RecordingSettings {
                             .and_then(|json| {
                                 serde_json::from_str::<Self>(&json).map_err(SettingsError::from)
                             }) {
-                            Ok(settings) => {
+                            Ok(mut settings) => {
                                 tracing::warn!("Loaded settings from backup: {:?}", backup_path);
                                 if let Err(e2) = settings.validate() {
                                     tracing::error!(
@@ -77,6 +82,7 @@ impl RecordingSettings {
                                     );
                                     return Ok(Self::default());
                                 }
+                                settings.event_filter.reconcile_hierarchy();
                                 return Ok(settings);
                             }
                             Err(e2) => {

@@ -1023,6 +1023,8 @@ mod tests {
                     event_offset_secs: None,
                     created_at: chrono::Utc::now(),
                     usage_count: 0,
+                    highlight_score: None,
+                    score_reasons: Vec::new(),
                 },
             )
             .unwrap();
@@ -1119,6 +1121,8 @@ mod tests {
                     event_offset_secs: None,
                     created_at: chrono::Utc::now(),
                     usage_count: 0,
+                    highlight_score: None,
+                    score_reasons: Vec::new(),
                 },
             )
             .unwrap();
@@ -1210,6 +1214,8 @@ mod tests {
                     event_offset_secs: None,
                     created_at: chrono::Utc::now(),
                     usage_count: 0,
+                    highlight_score: None,
+                    score_reasons: Vec::new(),
                 },
             )
             .unwrap();

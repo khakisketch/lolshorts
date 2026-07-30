@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { recordingApi, RecordingStatus as ApiRecordingStatus, isRecording as apiIsRecording } from '../api/recording';
 import { RecordingSettings, RecordingReadiness } from '@/types';
+import { EVENT_FILTER_DEFAULTS } from '@/components/settings/highlightPreset';
 
 export interface RecordingStatus {
   isRecording: boolean;
@@ -60,25 +61,12 @@ const DEFAULT_SETTINGS: RecordingSettings = {
     sample_rate: "hz48000",
     bitrate: "kbps192"
   },
-  event_filter: {
-    record_kills: true,
-    record_multikills: true,
-    record_first_blood: true,
-    record_deaths: false,
-    record_shutdown: true,
-    record_assists: false,
-    record_dragon: true,
-    record_baron: true,
-    record_elder: true,
-    record_herald: true,
-    record_turret: true,
-    record_inhibitor: true,
-    record_nexus: true,
-    record_ace: true,
-    record_game_end: true,
-    record_steal: true,
-    min_priority: 2
-  },
+  // 백엔드 `EventFilterSettings::default()` 미러를 그대로 쓴다.
+  //
+  // 손으로 적어 두었던 동안 이 표는 백엔드와 세 군데가 달랐다(어시스트 off,
+  // 포탑 on, 문턱 2). 설정이 도착하기 전 잠깐 보이는 값이지만, 그 잠깐 동안
+  // 기본 설정 화면은 어떤 프리셋과도 맞지 않아 "직접 설정" 배지를 달았다.
+  event_filter: { ...EVENT_FILTER_DEFAULTS },
   game_mode: {
     record_ranked_solo: true,
     record_ranked_flex: true,

@@ -247,6 +247,12 @@ pub struct ClipInfo {
     pub duration: Option<f64>,
     #[serde(default)]
     pub usage_count: u32, // Track usage for filtering
+    /// 하이라이트 점수(`recording::highlight_score`). 없으면 `priority` 로 되돌아간다.
+    ///
+    /// 이 값이 붙기 전에는 선택 순서가 `priority` (1~5) 뿐이었고, 그 눈금에서는
+    /// 퍼블·바론·게임종료가 전부 3점이라 어느 것이 먼저 나올지가 사실상 우연이었다.
+    #[serde(default)]
+    pub highlight_score: Option<f64>,
 }
 
 #[cfg(test)]

@@ -11,12 +11,13 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::AppError;
 
+use super::highlight_score::HighlightKind;
 use super::integration_backend::segment_recorder::now_wall_secs;
 use super::integration_backend::{RecordingStatus, WindowsCaptureRecorder};
 use super::live_client::{
     EventStreamConfig, EventTrigger, GameEvent, LiveClientMonitor, PlayerSummary,
 };
-use crate::settings::models::RecordingSettings;
+use crate::settings::models::{EventFilterSettings, RecordingSettings};
 use crate::storage::{
     models::{ClipMetadata, EventData, EventType},
     Storage,
@@ -877,15 +878,17 @@ impl AutoClipManager {
             trigger.priority()
         );
 
-        // Check if we should record this event based on settings
-        if !self.should_record_event(&trigger, &event).await? {
+        // 담을지, 그리고 **어떤 이름으로** 담을지. 하위 상황의 토글이 꺼져 있으면
+        // 여기서 부모 이름으로 강등되어 돌아오므로, 아래 모든 단계(우선순위·클립
+        // 길이·저장 이름·점수)가 강등된 이름을 일관되게 쓴다.
+        let Some(trigger) = self.resolve_recordable_trigger(&trigger, &event).await? else {
             debug!(
                 "Event filtered out by settings: {} (priority: {})",
                 event.event_name,
                 trigger.priority()
             );
             return Ok(());
-        }
+        };
 
         // Notify the overlay's event feed that a clip-worthy trigger fired. This is
         // detection, not save confirmation — the clip itself is still queued/merged
@@ -967,8 +970,25 @@ impl AutoClipManager {
         Ok(())
     }
 
-    /// Check if event should be recorded based on settings
-    async fn should_record_event(&self, trigger: &EventTrigger, event: &GameEvent) -> Result<bool> {
+    /// 이 이벤트를 **어떤 이름으로** 저장할지 정한다. 담지 않기로 하면 `None`.
+    ///
+    /// # 왜 bool 이 아닌가
+    ///
+    /// 감지는 킬 하나에 가장 특별한 이름 하나만 붙인다(`detect_trigger`). 그래서
+    /// 셧다운을 끈 사용자의 셧다운 킬은 "킬"이 아니라 "셧다운"으로 도착하고,
+    /// 예전 코드는 그걸 그대로 버렸다 — 킬을 담겠다고 켜 둔 사용자가 가장 좋은
+    /// 킬을 잃었다(기본 프리셋이 정확히 그 조합이었다).
+    ///
+    /// 이제는 버리는 대신 **부모로 한 단계 내려 다시 묻는다**(`EventTrigger::parent`).
+    /// 셧다운이 꺼져 있으면 그 순간은 평범한 킬로 취급되어 `record_kills` 에
+    /// 걸리고, 킬마저 꺼져 있으면 그때 비로소 버려진다. 강등된 이름이 그대로
+    /// 저장되므로(반환값) 클립 목록·점수·우선순위가 전부 한 이야기를 한다 —
+    /// "셧다운은 안 담겠다"고 한 사용자의 라이브러리에 셧다운 클립이 남지 않는다.
+    async fn resolve_recordable_trigger(
+        &self,
+        trigger: &EventTrigger,
+        event: &GameEvent,
+    ) -> Result<Option<EventTrigger>> {
         let settings = self.settings.read().await;
 
         // Task 29: exclude the end-of-game highlight for games shorter than the
@@ -981,7 +1001,7 @@ impl AutoClipManager {
                 "GameEnd ignored: game duration {:.0}s below minimum {}s",
                 event.event_time, settings.event_filter.min_game_duration_secs
             );
-            return Ok(false);
+            return Ok(None);
         }
 
         // Check game mode filtering
@@ -1003,43 +1023,48 @@ impl AutoClipManager {
                 _ => true,
             };
             if !mode_allowed {
-                return Ok(false);
+                return Ok(None);
             }
         }
         drop(game_mode);
         drop(queue_id);
 
-        // Check priority threshold
-        let event_priority = trigger.priority();
-        if event_priority < settings.event_filter.min_priority {
-            return Ok(false);
+        // 감지된 이름에서 시작해 통과할 때까지 부모로 내려간다.
+        //
+        // 우선순위 문턱도 매 단계 다시 본다 — 강등하면 우선순위가 함께 내려가므로
+        // (셧다운 3 -> 킬 1) 한 번만 재는 것은 거짓말이 된다. 반대로 문턱 때문에
+        // 막힌 것을 강등으로 우회하지도 않는다: 부모는 언제나 우선순위가 같거나
+        // 낮으므로, 문턱에 막힌 트리거는 강등해도 계속 막힌다(의도한 성질이다).
+        let mut candidate = trigger.clone();
+        // 실제 부모 사슬은 최장 3단(스틸 -> 장로 -> 드래곤)이다. 상한은 나중에
+        // 누가 사슬을 늘리다 고리를 만들었을 때 폴링 루프가 멈추지 않게 하는 것.
+        const MAX_DEMOTION_STEPS: usize = 8;
+
+        for _ in 0..MAX_DEMOTION_STEPS {
+            let passes_priority = candidate.priority() >= settings.event_filter.min_priority;
+            let enabled = trigger_enabled(&candidate, &settings.event_filter);
+
+            if passes_priority && enabled {
+                if candidate != *trigger {
+                    debug!(
+                        "Trigger demoted: {:?} -> {:?} (원래 이름의 토글이 꺼져 있음)",
+                        trigger, candidate
+                    );
+                }
+                return Ok(Some(candidate));
+            }
+
+            match candidate.parent(event) {
+                Some(parent) => candidate = parent,
+                None => return Ok(None),
+            }
         }
 
-        // Check event type filters
-        let should_record = match trigger {
-            EventTrigger::ChampionKill => settings.event_filter.record_kills,
-            EventTrigger::Death => settings.event_filter.record_deaths,
-            EventTrigger::Assist => settings.event_filter.record_assists,
-            EventTrigger::FirstBlood => settings.event_filter.record_first_blood,
-            EventTrigger::Multikill(_) => settings.event_filter.record_multikills,
-            EventTrigger::DragonKill => settings.event_filter.record_dragon,
-            EventTrigger::BaronKill => settings.event_filter.record_baron,
-            EventTrigger::HeraldKill => settings.event_filter.record_herald,
-            EventTrigger::TurretKill => settings.event_filter.record_turret,
-            EventTrigger::InhibitorKill => settings.event_filter.record_inhibitor,
-            EventTrigger::Ace => settings.event_filter.record_ace,
-            EventTrigger::Steal => settings.event_filter.record_steal,
-            EventTrigger::GameEnd => settings.event_filter.record_game_end,
-            EventTrigger::ElderDragonKill => settings.event_filter.record_elder,
-            EventTrigger::VoidgrubsKill => settings.event_filter.record_voidgrubs,
-            EventTrigger::AtakhanKill => settings.event_filter.record_atakhan,
-            EventTrigger::Shutdown => settings.event_filter.record_shutdown,
-            EventTrigger::Outplay1vX(_) => settings.event_filter.record_outplay,
-            EventTrigger::TradeKill => settings.event_filter.record_trade_kill,
-            EventTrigger::LowHpOutplay => settings.event_filter.record_low_hp,
-        };
-
-        Ok(should_record)
+        warn!(
+            "Trigger demotion chain did not terminate for {:?} — dropping the event",
+            trigger
+        );
+        Ok(None)
     }
 
     /// Try to process merged events if merge window has closed
@@ -1289,6 +1314,7 @@ impl AutoClipManager {
         // is clamped whenever the buffer could not cover the request.
         self.save_clip_metadata(
             &clip_id,
+            &trigger,
             &event,
             trigger.priority(),
             &clip_path,
@@ -1465,6 +1491,7 @@ impl AutoClipManager {
             // Metadata carries the MEASURED clip length, not the requested window.
             self.save_clip_metadata(
                 &clip_id,
+                &window.primary_trigger,
                 primary_event,
                 window.priority,
                 clip_path,
@@ -1590,9 +1617,15 @@ impl AutoClipManager {
     /// this number. It was previously hardcoded to `0.0`, and after that fix it carried the
     /// requested length — both broke clip selection/trimming and target-duration
     /// enforcement.
+    // 인자가 여덟이다. 묶을 만한 응집된 덩어리가 없어서(식별자·트리거·이벤트·
+    // 측정된 길이·경로는 서로 다른 출처에서 온다) 구조체로 감싸면 호출부가
+    // 그 구조체를 만드는 코드로 바뀔 뿐 읽기가 나아지지 않는다.
+    #[allow(clippy::too_many_arguments)]
     async fn save_clip_metadata(
         &self,
         clip_id: &str,
+        // 강등까지 마친 **최종** 트리거. 저장되는 이름과 점수가 여기서 갈린다.
+        trigger: &EventTrigger,
         event: &GameEvent,
         priority: u8,
         clip_path: &std::path::Path,
@@ -1651,16 +1684,30 @@ impl AutoClipManager {
                 None
             };
 
+            // 점수는 이벤트에 실려 온 그 순간의 상황으로 낸다. 상황을 못 찍었으면
+            // (게임 상태 캐시가 비어 있었던 경우) 배수 없이 종류 기본점만 나온다 —
+            // 그래도 `priority` 5단계보다는 촘촘하다.
+            let moment = event.moment.clone().unwrap_or_default();
+            let score = crate::recording::highlight_score::score(
+                trigger_to_highlight_kind(trigger, event),
+                &moment,
+            );
+
             let metadata = ClipMetadata {
                 file_path: clip_path.to_string_lossy().to_string(),
                 thumbnail_path,
                 event_offset_secs: event_offset,
-                event_type: EventType::Custom(event.event_name.clone()),
+                // 원시 이벤트 이름(`event.event_name`)이 아니라 트리거로 적는다.
+                // 이름만 쓰던 동안 더블킬도 셧다운도 전부 `Custom("ChampionKill")`
+                // 이라 저장된 뒤에는 서로 구분할 수 없었다.
+                event_type: trigger_to_event_type(trigger),
                 event_time: event.event_time as f64,
                 priority,
                 duration,
                 created_at: chrono::Utc::now(),
                 usage_count: 0,
+                highlight_score: Some(score.value),
+                score_reasons: score.reasons,
             };
 
             self.storage
@@ -1774,6 +1821,82 @@ struct ClipWindow {
     post_duration: u32, // Seconds after event
 }
 
+/// 이 트리거를 담기로 되어 있는가 — 트리거 하나와 토글 하나의 대응표.
+///
+/// `resolve_recordable_trigger` 가 강등 사슬을 돌며 단계마다 이걸 묻는다. 대응이
+/// 한 곳에 모여 있어야 "감지되는 트리거인데 대응 토글이 없다"는 빈칸이 컴파일
+/// 단계에서 드러난다(`match` 는 전부 나열한다 — `_` 를 쓰지 않는 이유다).
+fn trigger_enabled(trigger: &EventTrigger, filter: &EventFilterSettings) -> bool {
+    match trigger {
+        EventTrigger::ChampionKill => filter.record_kills,
+        EventTrigger::Death => filter.record_deaths,
+        EventTrigger::Assist => filter.record_assists,
+        EventTrigger::FirstBlood => filter.record_first_blood,
+        EventTrigger::FirstBloodVictim => filter.record_first_blood_victim,
+        EventTrigger::Multikill(_) => filter.record_multikills,
+        EventTrigger::DragonKill => filter.record_dragon,
+        EventTrigger::BaronKill => filter.record_baron,
+        EventTrigger::HeraldKill => filter.record_herald,
+        EventTrigger::TurretKill => filter.record_turret,
+        EventTrigger::InhibitorKill => filter.record_inhibitor,
+        EventTrigger::Ace => filter.record_ace,
+        EventTrigger::Steal => filter.record_steal,
+        EventTrigger::GameEnd => filter.record_game_end,
+        EventTrigger::ElderDragonKill => filter.record_elder,
+        EventTrigger::VoidgrubsKill => filter.record_voidgrubs,
+        EventTrigger::AtakhanKill => filter.record_atakhan,
+        EventTrigger::Shutdown => filter.record_shutdown,
+        EventTrigger::Outplay1vX(_) => filter.record_outplay,
+        EventTrigger::TradeKill => filter.record_trade_kill,
+        EventTrigger::LowHpOutplay => filter.record_low_hp,
+    }
+}
+
+/// 감지된 트리거를 점수 모델의 종류로 옮긴다.
+///
+/// 1:1 이 아니다 — 점수는 "얼마나 볼 만한가"를 재므로 감지가 나눈 것을 합치기도
+/// 하고(저체력 아웃플레이는 그냥 킬이다, 낮은 체력은 배수로 이미 반영된다),
+/// 감지가 합친 것을 나누기도 한다(멀티킬은 단계마다 다른 장면이다).
+fn trigger_to_highlight_kind(trigger: &EventTrigger, event: &GameEvent) -> HighlightKind {
+    match trigger {
+        EventTrigger::ChampionKill => HighlightKind::Kill,
+        // 낮은 체력은 `MomentContext` 의 클러치 배수로 붙는다. 여기서 또 올리면
+        // 같은 사실을 두 번 세는 셈이다.
+        EventTrigger::LowHpOutplay => HighlightKind::Kill,
+        EventTrigger::Death => HighlightKind::Death,
+        EventTrigger::FirstBloodVictim => HighlightKind::FirstBloodVictim,
+        EventTrigger::Assist => HighlightKind::Assist,
+        EventTrigger::FirstBlood => HighlightKind::FirstBlood,
+        EventTrigger::Multikill(2) => HighlightKind::Doublekill,
+        EventTrigger::Multikill(3) => HighlightKind::Triplekill,
+        EventTrigger::Multikill(4) => HighlightKind::Quadrakill,
+        EventTrigger::Multikill(n) if *n >= 5 => HighlightKind::Pentakill,
+        // 0·1 킬짜리 멀티킬은 감지가 만들지 않지만, 열거형이 막지 않으므로 남긴다.
+        EventTrigger::Multikill(_) => HighlightKind::Kill,
+        EventTrigger::Outplay1vX(n) => HighlightKind::Outplay((*n).min(u8::MAX as u32) as u8),
+        EventTrigger::DragonKill => HighlightKind::Dragon,
+        EventTrigger::BaronKill => HighlightKind::Baron,
+        EventTrigger::HeraldKill => HighlightKind::Herald,
+        EventTrigger::TurretKill => HighlightKind::Turret,
+        EventTrigger::InhibitorKill => HighlightKind::Inhibitor,
+        EventTrigger::Ace => HighlightKind::Ace,
+        EventTrigger::Steal => HighlightKind::ObjectiveSteal,
+        EventTrigger::ElderDragonKill => HighlightKind::ElderDragon,
+        EventTrigger::VoidgrubsKill => HighlightKind::Voidgrubs,
+        EventTrigger::AtakhanKill => HighlightKind::Atakhan,
+        EventTrigger::Shutdown => HighlightKind::Shutdown,
+        EventTrigger::TradeKill => HighlightKind::TradeKill,
+        // 이긴 판의 마지막 장면과 진 판의 마지막 장면은 볼 이유가 다르다.
+        // `Result` 가 안 오면 진 판으로 보수적으로 잡는다(더 낮은 점수).
+        EventTrigger::GameEnd => HighlightKind::GameEnd {
+            won: event
+                .result
+                .as_deref()
+                .is_some_and(|r| r.eq_ignore_ascii_case("Win")),
+        },
+    }
+}
+
 /// Convert LiveClientMonitor's EventTrigger to storage's EventType
 fn trigger_to_event_type(trigger: &EventTrigger) -> EventType {
     match trigger {
@@ -1781,6 +1904,7 @@ fn trigger_to_event_type(trigger: &EventTrigger) -> EventType {
         EventTrigger::Death => EventType::Custom("Death".to_string()),
         EventTrigger::Assist => EventType::Custom("Assist".to_string()),
         EventTrigger::FirstBlood => EventType::FirstBlood,
+        EventTrigger::FirstBloodVictim => EventType::Custom("FirstBloodVictim".to_string()),
         EventTrigger::Multikill(n) => EventType::Multikill(*n),
         EventTrigger::DragonKill => EventType::DragonKill,
         EventTrigger::BaronKill => EventType::BaronKill,
@@ -1917,8 +2041,11 @@ mod tests {
         let trigger = EventTrigger::ChampionKill; // Default settings usually allow kills
         let event = create_test_event("ChampionKill", 100.0);
 
-        let should_record = manager.should_record_event(&trigger, &event).await.unwrap();
-        assert!(should_record);
+        let resolved = manager
+            .resolve_recordable_trigger(&trigger, &event)
+            .await
+            .unwrap();
+        assert_eq!(resolved, Some(EventTrigger::ChampionKill));
 
         // Cleanup
         let _ = std::fs::remove_dir_all(temp_dir);
@@ -1956,6 +2083,7 @@ mod tests {
         manager
             .save_clip_metadata(
                 "clip_1",
+                &EventTrigger::ChampionKill,
                 &create_test_event("ChampionKill", 42.0),
                 3,
                 &clip_path,
@@ -1977,6 +2105,7 @@ mod tests {
         manager
             .save_clip_metadata(
                 "clip_without_game",
+                &EventTrigger::ChampionKill,
                 &create_test_event("ChampionKill", 50.0),
                 5,
                 &temp_dir.path().join("unassigned.mp4"),
@@ -2077,6 +2206,246 @@ mod tests {
             storage,
             Arc::new(TokioRwLock::new(settings)),
         )
+    }
+
+    /// 강등 규칙 회귀 — 하위 상황을 끈다고 그 순간이 사라지면 안 된다.
+    ///
+    /// 예전에는 감지가 붙인 이름 하나로만 판정했기 때문에, "킬은 담고 셧다운은
+    /// 빼겠다"고 한 사용자의 **셧다운 킬이 통째로 사라졌다**. 기본 프리셋이 정확히
+    /// 그 조합이었으므로 아무 설정도 건드리지 않은 사용자가 매 판 손해를 봤다.
+    #[tokio::test]
+    async fn disabled_sub_situation_demotes_to_its_parent_instead_of_vanishing() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+
+        let mut settings = RecordingSettings::default();
+        settings.event_filter.record_kills = true;
+        settings.event_filter.record_shutdown = false;
+        settings.event_filter.record_multikills = false;
+        settings.event_filter.min_priority = 1;
+
+        let manager = manager_with_settings(temp_dir.path(), storage, settings).await;
+        let event = create_test_event("ChampionKill", 300.0);
+
+        // 셧다운도 멀티킬도 꺼져 있지만 킬은 켜져 있다 → 평범한 킬로 남는다.
+        for trigger in [EventTrigger::Shutdown, EventTrigger::Multikill(3)] {
+            let resolved = manager
+                .resolve_recordable_trigger(&trigger, &event)
+                .await
+                .unwrap();
+            assert_eq!(
+                resolved,
+                Some(EventTrigger::ChampionKill),
+                "{:?} 는 킬로 강등되어 살아남아야 한다",
+                trigger
+            );
+        }
+    }
+
+    /// 강등은 부모까지만이다 — 부모도 꺼져 있으면 그때는 버린다.
+    #[tokio::test]
+    async fn demotion_stops_when_the_parent_is_also_disabled() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+
+        let mut settings = RecordingSettings::default();
+        settings.event_filter.record_kills = false;
+        settings.event_filter.record_shutdown = false;
+        settings.event_filter.min_priority = 1;
+
+        let manager = manager_with_settings(temp_dir.path(), storage, settings).await;
+        let event = create_test_event("ChampionKill", 300.0);
+
+        let resolved = manager
+            .resolve_recordable_trigger(&EventTrigger::Shutdown, &event)
+            .await
+            .unwrap();
+        assert_eq!(resolved, None);
+    }
+
+    /// 데스를 끈 사용자의 클립에 죽는 장면이 섞이지 않아야 한다.
+    ///
+    /// `record_trade_kill` 은 기본이 켜짐인데 트레이드킬은 **내가 죽은** 이벤트다.
+    /// 부모(데스)를 보지 않던 동안, 데스를 꺼 둔 사용자에게도 죽는 장면이 남았다.
+    #[tokio::test]
+    async fn trade_kill_respects_the_death_toggle() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+
+        let mut settings = RecordingSettings::default();
+        settings.event_filter.record_deaths = false;
+        settings.event_filter.record_trade_kill = false;
+        settings.event_filter.min_priority = 1;
+
+        let manager = manager_with_settings(temp_dir.path(), storage, settings).await;
+        let event = create_test_event("ChampionKill", 300.0);
+
+        let resolved = manager
+            .resolve_recordable_trigger(&EventTrigger::TradeKill, &event)
+            .await
+            .unwrap();
+        assert_eq!(resolved, None, "데스를 껐으면 트레이드킬도 빠져야 한다");
+    }
+
+    /// "죽는 장면은 됐고 퍼블 당한 것만" — 사용자가 원한 예외 조합.
+    #[tokio::test]
+    async fn first_blood_victim_can_be_kept_while_deaths_are_off() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+
+        let mut settings = RecordingSettings::default();
+        settings.event_filter.record_deaths = false;
+        settings.event_filter.record_first_blood_victim = true;
+        settings.event_filter.min_priority = 1;
+
+        let manager = manager_with_settings(temp_dir.path(), storage, settings).await;
+        let event = create_test_event("ChampionKill", 90.0);
+
+        assert_eq!(
+            manager
+                .resolve_recordable_trigger(&EventTrigger::FirstBloodVictim, &event)
+                .await
+                .unwrap(),
+            Some(EventTrigger::FirstBloodVictim)
+        );
+        // 그냥 죽은 것은 여전히 빠진다.
+        assert_eq!(
+            manager
+                .resolve_recordable_trigger(&EventTrigger::Death, &event)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    /// 스틸은 원본 이벤트에 따라 서로 다른 부모로 내려간다.
+    #[tokio::test]
+    async fn steal_demotes_along_the_objective_it_came_from() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+
+        let mut settings = RecordingSettings::default();
+        settings.event_filter.record_steal = false;
+        settings.event_filter.record_baron = true;
+        settings.event_filter.record_dragon = true;
+        settings.event_filter.record_elder = false;
+        settings.event_filter.min_priority = 1;
+
+        let manager = manager_with_settings(temp_dir.path(), storage, settings).await;
+
+        let baron = create_test_event("BaronKill", 1200.0);
+        assert_eq!(
+            manager
+                .resolve_recordable_trigger(&EventTrigger::Steal, &baron)
+                .await
+                .unwrap(),
+            Some(EventTrigger::BaronKill)
+        );
+
+        // 장로를 스틸했는데 장로도 꺼져 있으면 두 단계 내려가 일반 드래곤이 된다.
+        let elder = GameEvent {
+            event_name: "DragonKill".to_string(),
+            dragon_type: Some("Elder".to_string()),
+            ..create_test_event("DragonKill", 1500.0)
+        };
+        assert_eq!(
+            manager
+                .resolve_recordable_trigger(&EventTrigger::Steal, &elder)
+                .await
+                .unwrap(),
+            Some(EventTrigger::DragonKill)
+        );
+    }
+
+    /// 우선순위 문턱은 강등으로 우회되지 않는다.
+    ///
+    /// 부모는 언제나 우선순위가 같거나 낮으므로, 문턱에 막힌 트리거는 내려가도
+    /// 계속 막혀야 한다 — 그러지 않으면 "중요한 것만" 설정이 조용히 새어 나간다.
+    #[tokio::test]
+    async fn priority_threshold_is_not_bypassed_by_demotion() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+
+        let mut settings = RecordingSettings::default();
+        settings.event_filter.record_kills = true;
+        settings.event_filter.record_multikills = false;
+        settings.event_filter.min_priority = 3;
+
+        let manager = manager_with_settings(temp_dir.path(), storage, settings).await;
+        let event = create_test_event("ChampionKill", 300.0);
+
+        // 더블킬(2)은 문턱 3에 막히고, 킬(1)로 내려가도 여전히 막힌다.
+        assert_eq!(
+            manager
+                .resolve_recordable_trigger(&EventTrigger::Multikill(2), &event)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    /// 두 계층 표가 같은 것을 말하는지 — 마이그레이션(`reconcile_hierarchy`)과
+    /// 강등 사슬(`EventTrigger::parent`)은 서로 다른 파일에 손으로 적혀 있다.
+    ///
+    /// 어긋나면 증상이 조용하다: 화면은 부모가 켜졌다고 하위 스위치를 감추는데,
+    /// 마이그레이션이 그 하위를 켜 주지 않으면 그 순간은 부모 이름으로 강등되어
+    /// 저장된다 — 클립은 남지만 셧다운이 평범한 킬 점수를 받는다.
+    #[tokio::test]
+    async fn reconciled_settings_keep_every_sub_situation_under_its_own_name() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+
+        let mut settings = RecordingSettings::default();
+        // 부모만 켠다. 하위는 일부러 전부 끈 상태에서 시작한다.
+        for flag in [
+            &mut settings.event_filter.record_multikills,
+            &mut settings.event_filter.record_shutdown,
+            &mut settings.event_filter.record_outplay,
+            &mut settings.event_filter.record_low_hp,
+            &mut settings.event_filter.record_first_blood,
+            &mut settings.event_filter.record_trade_kill,
+            &mut settings.event_filter.record_first_blood_victim,
+            &mut settings.event_filter.record_elder,
+            &mut settings.event_filter.record_steal,
+        ] {
+            *flag = false;
+        }
+        settings.event_filter.record_kills = true;
+        settings.event_filter.record_deaths = true;
+        settings.event_filter.record_dragon = true;
+        settings.event_filter.record_baron = true;
+        settings.event_filter.min_priority = 1;
+
+        settings.event_filter.reconcile_hierarchy();
+
+        let manager = manager_with_settings(temp_dir.path(), storage, settings).await;
+
+        let kill_event = create_test_event("ChampionKill", 300.0);
+        let dragon_event = create_test_event("DragonKill", 900.0);
+
+        let cases: [(EventTrigger, &GameEvent); 8] = [
+            (EventTrigger::Shutdown, &kill_event),
+            (EventTrigger::Multikill(3), &kill_event),
+            (EventTrigger::Outplay1vX(2), &kill_event),
+            (EventTrigger::LowHpOutplay, &kill_event),
+            (EventTrigger::TradeKill, &kill_event),
+            (EventTrigger::FirstBloodVictim, &kill_event),
+            (EventTrigger::ElderDragonKill, &dragon_event),
+            (EventTrigger::Steal, &dragon_event),
+        ];
+
+        for (trigger, event) in cases {
+            let resolved = manager
+                .resolve_recordable_trigger(&trigger, event)
+                .await
+                .unwrap();
+            assert_eq!(
+                resolved,
+                Some(trigger.clone()),
+                "{:?} 는 강등 없이 제 이름으로 남아야 한다 — reconcile_hierarchy 표에 빠졌는지 확인",
+                trigger
+            );
+        }
     }
 
     fn seed_game(storage: &Storage, game_id: &str) {

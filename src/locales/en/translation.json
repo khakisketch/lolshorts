@@ -1072,6 +1072,35 @@
           "inhibitors": "Inhibitors",
           "nexus": "Nexus",
           "gameEnd": "Game End"
+        },
+        "exceptionsLabel": "Keep anyway",
+        "includedHint": "Also captured because this is on — {{scenes}}",
+        "priorityOverridesHint": "This threshold applies before the switches below. Scenes you turned on are still dropped if they rank lower than it.",
+        "groups": {
+          "kills": {
+            "title": "Kills",
+            "description": "Kills you got. Special ones like multikills and shutdowns are included here."
+          },
+          "deaths": {
+            "title": "Deaths",
+            "description": "Moments you died. Turning this off also drops trades and first-blood deaths."
+          },
+          "assists": {
+            "title": "Assists",
+            "description": "Kills you helped with."
+          },
+          "objectives": {
+            "title": "Objectives",
+            "description": "Dragons, Baron, Herald and other major objectives."
+          },
+          "structures": {
+            "title": "Structures",
+            "description": "Turrets and inhibitors."
+          },
+          "special": {
+            "title": "Special",
+            "description": "Aces and end-of-game moments."
+          }
         }
       },
       "gameModes": {
@@ -1993,7 +2022,21 @@
       "quadra": "Quadra Kill",
       "penta": "Penta Kill",
       "other": "{{count}} Kills"
-    }
+    },
+    "shutdown": "Shutdown",
+    "death": "Death",
+    "firstBloodVictim": "First blood (you died)",
+    "assist": "Assist",
+    "steal": "Steal",
+    "gameEnd": "Game end",
+    "heraldKill": "Rift Herald",
+    "elderDragonKill": "Elder Dragon",
+    "voidgrubsKill": "Voidgrubs",
+    "atakhanKill": "Atakhan",
+    "tradeKill": "Trade",
+    "lowHpOutplay": "Clutch survival",
+    "manualReplay": "Saved manually",
+    "outplay": "1v{{count}} outplay"
   },
   "home": {
     "status": {
