@@ -492,9 +492,9 @@ impl AutoClipManager {
 
             // Create callback closure that processes events
             let callback =
-                move |trigger: EventTrigger, live_event: super::live_client::GameEvent| {
-                    // Convert live_client::GameEvent to recording::GameEvent
-                    let event = convert_live_event(live_event, &trigger);
+                move |trigger: EventTrigger, event: super::live_client::GameEvent| {
+                    // 이벤트를 그대로 쓴다 — 같은 타입인데 필드를 옮겨 적던 변환이
+                    // `moment`·`result` 를 매번 버리고 있었다.
 
                     // Clone Arc references for the async block
                     let event_queue = Arc::clone(&event_queue);
@@ -860,11 +860,10 @@ impl AutoClipManager {
             trigger.priority()
         );
 
-        // Convert live_client::GameEvent to recording::GameEvent
-        let recording_event = convert_live_event(event, &trigger);
-
-        // Process the converted event
-        self.process_event(trigger, recording_event).await
+        // 이벤트를 **그대로** 넘긴다. 예전에는 `convert_live_event` 로 필드를 손수
+        // 옮겨 적었는데, 같은 타입인데도 그렇게 하는 바람에 `moment`(그 순간의
+        // 체력·생존 인원)와 `result`(승/패)가 매번 조용히 버려졌다.
+        self.process_event(trigger, event).await
     }
 
     /// Process an event from LiveClientMonitor
@@ -2001,22 +2000,21 @@ pub(crate) fn trigger_to_event_type(trigger: &EventTrigger) -> EventType {
     }
 }
 
-/// Convert live_client::GameEvent to recording::GameEvent
-fn convert_live_event(
-    live_event: super::live_client::GameEvent,
-    _trigger: &EventTrigger,
-) -> GameEvent {
-    GameEvent {
-        event_id: live_event.event_id,
-        event_name: live_event.event_name,
-        event_time: live_event.event_time,
-        killer_name: live_event.killer_name,
-        victim_name: live_event.victim_name,
-        assisters: live_event.assisters,
-        dragon_type: live_event.dragon_type,
-        ..Default::default()
-    }
-}
+// `convert_live_event` 를 **삭제했다.**
+//
+// 이름은 "live_client::GameEvent 를 recording::GameEvent 로 변환" 이었지만 둘은
+// 애초에 같은 타입이다(`use super::live_client::GameEvent`). 그래서 이 함수가 한
+// 일은 필드 일곱 개를 손으로 옮겨 적고 나머지를 `..Default::default()` 로 덮는
+// 것뿐이었다 — 즉 **새 필드가 생길 때마다 조용히 버리는 장치**였다.
+//
+// 실제로 두 개를 버리고 있었다:
+//   `moment`  — 그 순간의 체력·생존 인원·어시스트. 하이라이트 점수의 배수가
+//               전부 여기 걸려 있어서, 실게임 22개 클립이 전부 `score_reasons=[]`
+//               였고 점수가 소수점까지 기본점과 일치했다. 훅 자막 둘째 줄도
+//               통째로 비었다.
+//   `result`  — 승/패. `GameEnd` 클립의 점수가 이긴 판과 진 판에서 갈리지 않았다.
+//
+// 같은 타입이므로 변환 자체가 필요 없다. 이벤트를 그대로 넘긴다.
 
 #[cfg(test)]
 mod tests {
@@ -2283,6 +2281,53 @@ mod tests {
             storage,
             Arc::new(TokioRwLock::new(settings)),
         )
+    }
+
+    /// **상황 정보가 저장 경로 끝까지 살아서 가는가.**
+    ///
+    /// 실게임에서 클립 22개가 전부 `score_reasons=[]` 였고 점수가 소수점까지
+    /// 기본점과 일치했다. 원인은 `convert_live_event` — 이름은 "변환" 이었지만
+    /// 같은 타입을 필드별로 옮겨 적으면서 `..Default::default()` 로 `moment` 와
+    /// `result` 를 매번 버리는 장치였다. 새 필드가 생길 때마다 조용히 사라지는
+    /// 구조였고, 실제로 두 개가 그렇게 사라졌다.
+    ///
+    /// 이 테스트는 "이벤트가 큐를 지나 창까지 가면서 `moment` 를 잃지 않는다" 를
+    /// 고정한다. 다시 손으로 옮겨 적는 코드가 생기면 여기서 먼저 깨진다.
+    #[tokio::test]
+    async fn the_moment_survives_the_merge_window() {
+        use crate::recording::highlight_score::MomentContext;
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+        let manager =
+            manager_with_settings(temp_dir.path(), storage, RecordingSettings::default()).await;
+
+        let mut queued = queued_at(EventTrigger::ChampionKill, 100.0, 1_100.0);
+        queued.event.moment = Some(MomentContext {
+            my_health_ratio: Some(0.08),
+            assist_count: Some(0),
+            ..Default::default()
+        });
+
+        let window = manager.merge_events(&[queued]).expect("window");
+        let moment = window.events[0]
+            .moment
+            .as_ref()
+            .expect("상황 정보가 창까지 살아 있어야 한다");
+
+        assert_eq!(moment.my_health_ratio, Some(0.08));
+        assert_eq!(moment.assist_count, Some(0));
+
+        // 그리고 그 값이 실제로 점수를 움직여야 한다 — 전달만 되고 안 쓰이면 같은 결함이다.
+        let scored = crate::recording::highlight_score::score(
+            crate::recording::highlight_score::HighlightKind::Kill,
+            moment,
+        );
+        assert!(
+            !scored.reasons.is_empty(),
+            "상황이 있는데 이유가 비었다: {:?}",
+            scored
+        );
     }
 
     /// 병합 라벨링 회귀 — 킬이 포탑·데스로 둔갑하면 안 된다.
