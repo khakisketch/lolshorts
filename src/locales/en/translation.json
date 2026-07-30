@@ -880,13 +880,6 @@
           "record_ace": "Ace",
           "record_game_end": "Game end"
         },
-        "clipLength": {
-          "kill": "Kills, objectives, most events",
-          "multikill": "Multikills",
-          "steal": "Steals",
-          "death": "Deaths",
-          "game_end": "Game end"
-        },
         "coverage": {
           "none": {
             "title": "No clips will be created with these settings",

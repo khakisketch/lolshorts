@@ -83,7 +83,9 @@ const DEFAULT_SETTINGS: RecordingSettings = {
     default_post_duration: 5,
     event_timings: {},
     merge_consecutive_events: true,
-    merge_time_threshold: 10
+    // 백엔드 `ClipTimingSettings::default()` 와 같아야 한다 — 설정이 도착하기 전
+    // 잠깐 보이는 값이지만, 다르면 그 잠깐 동안 화면이 다른 숫자를 말한다.
+    merge_time_threshold: 15
   },
   hotkeys: {
     manual_save_clip: "F9",

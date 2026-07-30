@@ -2,16 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import {
   BITRATE_MBPS,
-  CLIP_WINDOW_BUCKETS,
-  clipLengthSpecs,
-  clipWindowSeconds,
   enabledScenes,
   megabytesPerMinute,
   qualitySpecs,
   SCENE_FLAGS,
-  TRIGGER_DEFAULT_SECONDS,
 } from './settingSpecs';
-import type { ClipTimingSettings } from '@/types';
 
 const SRC_TAURI = path.resolve(__dirname, '../../../src-tauri/src');
 const MODELS_RS = path.join(SRC_TAURI, 'settings/models.rs');
@@ -22,6 +17,17 @@ const LIVE_CLIENT_RS = path.join(SRC_TAURI, 'recording/live_client.rs');
 const FN_END = ['', '    }'].join('\n');
 
 /**
+ * Rust 소스를 읽되 줄바꿈을 LF 로 정규화한다.
+ *
+ * 이 저장소는 git 이 체크아웃 시 CRLF 로 바꾸므로 워킹 카피의 줄바꿈이 환경마다
+ * 다르다. 위 `FN_END` 처럼 개행을 표식으로 쓰는 파서가 그걸 그대로 맞으면 코드는
+ * 멀쩡한데 테스트만 죽는다 — 실제로 한 번 그렇게 깨졌다.
+ */
+function readRustSource(filePath: string): string {
+  return fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n');
+}
+
+/**
  * 이 화면은 한 번 거짓말을 한 전력이 있다 — 저장된 `resolution` 을 캡처 해상도인
  * 것처럼 보여줬는데 Windows 캡처는 그 값을 쓰지 않는다. 카드 아래에 수치를 더
  * 노출하기로 한 이상, 그 수치가 백엔드와 어긋나는 순간을 테스트가 먼저 잡아야
@@ -29,7 +35,7 @@ const FN_END = ['', '    }'].join('\n');
  */
 describe('settingSpecs (backend mirror)', () => {
   describe('비트레이트 표', () => {
-    const source = fs.readFileSync(MODELS_RS, 'utf8');
+    const source = readRustSource(MODELS_RS);
 
     it('models.rs 의 to_bitrate_bps 와 Mbps 값이 일치한다', () => {
       const found: Record<string, number> = {};
@@ -51,68 +57,9 @@ describe('settingSpecs (backend mirror)', () => {
   });
 
   describe('클립 길이 버킷', () => {
-    const source = fs.readFileSync(AUTO_CLIP_RS, 'utf8');
+    const source = readRustSource(AUTO_CLIP_RS);
 
-    it('설정 키로 인정되는 버킷 이름과 정확히 같다', () => {
-      const start = source.indexOf('fn calculate_clip_window');
-      expect(start).toBeGreaterThan(-1);
-      // `let settings_key = match trigger {` 블록만 잘라낸다.
-      const matchStart = source.indexOf('match trigger {', start);
-      const matchEnd = source.indexOf('};', matchStart);
-      const block = source.slice(matchStart, matchEnd);
 
-      const buckets = new Set<string>();
-      const re = /Some\("([a-z_]+)"\)/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(block)) !== null) {
-        buckets.add(m[1]);
-      }
-
-      expect([...buckets].sort()).toEqual([...CLIP_WINDOW_BUCKETS].sort());
-    });
-
-    it('설정에 항목이 없을 때 쓰는 길이가 EventTrigger 설계값과 같다', () => {
-      // 이 단언이 없던 동안 화면은 「게임 끝 13초」라고 적었고 실제 산출물은
-      // 40초였다. 프론트는 `default_pre + default_post` 로 떨어뜨렸는데 백엔드는
-      // 그 경로에서 이벤트별 설계값을 쓴다.
-      const live = fs.readFileSync(LIVE_CLIENT_RS, 'utf8');
-
-      /** `pub fn <name>(&self) -> u32 {` 본문에서 `Variant => N` 을 뽑는다. */
-      const durations = (fn: 'pre_duration' | 'post_duration') => {
-        const start = live.indexOf(`pub fn ${fn}(&self) -> u32 {`);
-        expect(start).toBeGreaterThan(-1);
-        const block = live.slice(start, live.indexOf(FN_END, start));
-        const out: Record<string, number> = {};
-        const re = /EventTrigger::(\w+)(?:\([^)]*\))?\s*=>\s*(\d+)\s*,/g;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(block)) !== null) {
-          if (out[m[1]] === undefined) out[m[1]] = Number(m[2]);
-        }
-        // `_ => N` 갈래(다른 변형 전부).
-        const fallback = /_\s*=>\s*(\d+)\s*,/.exec(block);
-        expect(fallback).not.toBeNull();
-        out.__fallback = Number(fallback![1]);
-        return out;
-      };
-
-      const pre = durations('pre_duration');
-      const post = durations('post_duration');
-      const total = (variant: string) =>
-        (pre[variant] ?? pre.__fallback) + (post[variant] ?? post.__fallback);
-
-      // `calculate_clip_window` 의 버킷 -> `EventTrigger` 변형 대응.
-      expect(TRIGGER_DEFAULT_SECONDS).toEqual({
-        kill: total('ChampionKill'),
-        multikill: total('Multikill'),
-        steal: total('Steal'),
-        death: total('Death'),
-        game_end: total('GameEnd'),
-      });
-      // 승리 순간이 킬과 같은 길이면 설계값이 다시 죽은 것이다.
-      expect(TRIGGER_DEFAULT_SECONDS.game_end).toBeGreaterThan(
-        TRIGGER_DEFAULT_SECONDS.kill,
-      );
-    });
 
     it('설정에 키가 없는 이벤트는 기본값으로 뭉개지지 않는다', () => {
       // 예전에는 `_ => "kill"` 이라 에이스·바론·1vX 아웃플레이가 전부 킬과 같은
@@ -131,7 +78,7 @@ describe('settingSpecs (backend mirror)', () => {
     // `record_*` 로 훑으면 게임 모드 플래그(`record_aram`)나 메트릭 이름
     // (`record_success`)까지 딸려온다.
     const declared = (() => {
-      const source = fs.readFileSync(MODELS_RS, 'utf8');
+      const source = readRustSource(MODELS_RS);
       const start = source.indexOf('pub struct EventFilterSettings {');
       expect(start).toBeGreaterThan(-1);
       const end = source.indexOf('\n}', start);
@@ -147,7 +94,7 @@ describe('settingSpecs (backend mirror)', () => {
 
     const consumed = new Set<string>();
     for (const file of [AUTO_CLIP_RS, LIVE_CLIENT_RS]) {
-      const source = fs.readFileSync(file, 'utf8');
+      const source = readRustSource(file);
       for (const flag of declared) {
         if (new RegExp(`\\b${flag}\\b`).test(source)) {
           consumed.add(flag);
@@ -209,34 +156,6 @@ describe('settingSpecs (계산)', () => {
     expect(rows.find((r) => r.key === 'sizePerMinute')?.value).toBe('150 MB');
     expect(JSON.stringify(rows)).not.toMatch(/1920|1080|2560|해상도/);
     expect(JSON.stringify(rows)).not.toMatch(/codec|H\.26/i);
-  });
-
-  const timing: ClipTimingSettings = {
-    default_pre_duration: 10,
-    default_post_duration: 3,
-    event_timings: {
-      kill: { pre_duration: 10, post_duration: 3 },
-      steal: { pre_duration: 20, post_duration: 5 },
-      multikill: { pre_duration: 15, post_duration: 5 },
-    },
-    merge_consecutive_events: true,
-    merge_time_threshold: 15,
-  } as ClipTimingSettings;
-
-  it('이벤트별 항목이 있으면 그 값을, 없으면 이벤트 설계값을 쓴다', () => {
-    expect(clipWindowSeconds(timing, 'kill')).toBe(13);
-    expect(clipWindowSeconds(timing, 'multikill')).toBe(20);
-    expect(clipWindowSeconds(timing, 'steal')).toBe(25);
-    // 항목이 없는 버킷은 `default_pre + default_post`(13) 가 아니라 그 이벤트의
-    // 설계값을 쓴다 — 백엔드 `calculate_clip_window` 와 같은 규칙이다.
-    expect(clipWindowSeconds(timing, 'death')).toBe(TRIGGER_DEFAULT_SECONDS.death);
-    expect(clipWindowSeconds(timing, 'game_end')).toBe(40);
-  });
-
-  it('클립 길이 표는 모든 버킷을 빠짐없이 낸다', () => {
-    expect(clipLengthSpecs(timing).map((r) => r.key)).toEqual([
-      ...CLIP_WINDOW_BUCKETS,
-    ]);
   });
 
   it('켜진 장면만 화면 순서대로 돌려준다', () => {

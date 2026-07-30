@@ -22,7 +22,11 @@ const MODELS_RS = path.resolve(
  * 읽어 표를 대조한다 — Rust 쪽 기본값/프리셋/필드가 바뀌면 여기서 먼저 깨진다.
  */
 describe('highlightPreset (backend mirror)', () => {
-  const source = fs.readFileSync(MODELS_RS, 'utf8');
+  // 줄바꿈을 LF 로 정규화해서 읽는다. 이 저장소는 git 이 체크아웃 시 CRLF 로
+  // 바꾸므로 워킹 카피의 줄바꿈이 환경마다 다르고, 아래 `'\n}\n'` 표식이 그걸
+  // 그대로 맞으면 코드는 멀쩡한데 테스트만 "블록의 끝을 찾지 못했습니다" 로
+  // 죽는다 — 실제로 한 번 그렇게 깨졌다.
+  const source = fs.readFileSync(MODELS_RS, 'utf8').replace(/\r\n/g, '\n');
 
   /** `marker` 로 시작하는 블록에서, 들여쓰기 없는 닫는 중괄호까지 잘라낸다. */
   const blockAfter = (marker: string): string => {

@@ -930,13 +930,6 @@
           "record_ace": "에이스",
           "record_game_end": "게임 끝"
         },
-        "clipLength": {
-          "kill": "킬·오브젝트 등 대부분",
-          "multikill": "멀티킬",
-          "steal": "스틸",
-          "death": "죽는 장면",
-          "game_end": "게임 끝"
-        },
         "coverage": {
           "none": {
             "title": "지금 설정으로는 클립이 만들어지지 않습니다",

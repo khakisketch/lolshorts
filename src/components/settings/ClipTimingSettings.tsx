@@ -3,7 +3,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
-import { Clock, Zap } from "lucide-react";
+import { Zap } from "lucide-react";
 
 interface EventTiming {
   pre_duration: number;
@@ -57,63 +57,19 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
   return (
     <div className="space-y-6">
       {/* Default Timing */}
-      <div className="gaming-panel p-6">
-        <div className="mb-4">
-          <h3 className="text-lg font-semibold text-base flex items-center gap-2">
-            <Clock className="w-4 h-4" />
-            {t('settings.recordingConfig.clipTiming.defaultDuration.title')}
-          </h3>
-          <p className="text-sm text-muted-foreground">
-            {t('settings.recordingConfig.clipTiming.defaultDuration.description')}
-          </p>
-        </div>
-        <div className="space-y-6">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <Label>{t('settings.recordingConfig.clipTiming.defaultDuration.beforeEvent')}</Label>
-              <Badge variant="secondary">{settings.default_pre_duration}s</Badge>
-            </div>
-            <Slider
-              value={[settings.default_pre_duration]}
-              onValueChange={([value]) => updateSetting("default_pre_duration", value)}
-              min={5}
-              max={30}
-              step={1}
-              className="w-full"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>5s</span>
-              <span>15s</span>
-              <span>30s</span>
-            </div>
-          </div>
+      {/*
+        「기본 길이」 슬라이더를 **없앴다.**
 
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <Label>{t('settings.recordingConfig.clipTiming.defaultDuration.afterEvent')}</Label>
-              <Badge variant="secondary">{settings.default_post_duration}s</Badge>
-            </div>
-            <Slider
-              value={[settings.default_post_duration]}
-              onValueChange={([value]) => updateSetting("default_post_duration", value)}
-              min={2}
-              max={15}
-              step={1}
-              className="w-full"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>2s</span>
-              <span>7s</span>
-              <span>15s</span>
-            </div>
-          </div>
+        `default_pre_duration`/`default_post_duration` 을 조절하는 슬라이더가 있었고
+        총 길이까지 계산해 보여줬지만, 백엔드는 그 두 값을 클립 길이 계산에 쓰지
+        않는다 — `calculate_clip_window` 는 `event_timings` 에 키가 없으면
+        `default_*` 가 아니라 `EventTrigger::pre_duration()` 으로 폴백한다.
+        (그건 의도된 설계다: 예전에 전부 13초로 뭉개지던 것을 고친 결과이고,
+        `settingSpecs.test.ts` 가 그 분기를 고정하고 있다.)
 
-          <div className="pt-2 text-sm text-muted-foreground">
-            {t('settings.recordingConfig.clipTiming.defaultDuration.totalLength')}: {settings.default_pre_duration + settings.default_post_duration}s
-            ({settings.default_pre_duration}s {t('settings.recordingConfig.clipTiming.defaultDuration.before')} + {settings.default_post_duration}s {t('settings.recordingConfig.clipTiming.defaultDuration.after')})
-          </div>
-        </div>
-      </div>
+        즉 사용자가 움직일 수 있는데 결과가 전혀 바뀌지 않는 컨트롤이었다.
+        아래 이벤트별 슬라이더는 실제로 동작하므로 그대로 둔다.
+      */}
 
       {/* Event-Specific Timing */}
       <div className="gaming-panel p-6">

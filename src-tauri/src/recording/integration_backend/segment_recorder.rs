@@ -49,6 +49,19 @@ const CLIP_LENGTH_TOLERANCE_SECS: f64 = 0.25;
 /// logged.
 const SEVERE_SHORTFALL_RATIO: f64 = 0.5;
 
+/// concat 목록을 요청 창 뒤쪽으로 자를 때 창 **앞**에 남겨 두는 여유(초).
+///
+/// - 2.0s — 세그먼트 인코딩의 GOP 하나(`-g fps*2`). 세그먼트 경계는 언제나 키프레임이라
+///   세그먼트 단위 트림에는 사실 불필요하지만, 이 여유 덕에 `video_ss >= 2.0` 이 보장돼
+///   seek 목표가 입력의 맨 앞 가장자리에 놓이는 일이 없다.
+/// - 1.0s — 시간축 복원 오차. `concat_start` 는 `content_end(=mtime) - Σ측정길이` 로
+///   되짚는 값인데, mtime 은 마지막 프레임이 아니라 **먹싱 flush 시각**이고 측정 길이는
+///   소수 셋째 자리에서 반올림된다.
+///
+/// 세그먼트 경계로만 자를 수 있으므로 실효 여유는 `[GUARD, GUARD + segment_duration)`
+/// 이다. 이 상수는 그 분포를 어디에 놓을지만 정한다.
+const CONCAT_TRIM_GUARD_SECS: f64 = 3.0;
+
 /// Rolling tail of FFmpeg stderr lines shared with the stderr reader task.
 type StderrTail = Arc<Mutex<VecDeque<String>>>;
 
@@ -1085,6 +1098,34 @@ impl ClipExtractionContext {
             anyhow::bail!("저장된 세그먼트가 없습니다");
         }
 
+        // 요청 창에 닿을 수 없는 오래된 세그먼트는 **검증에 태우지도 않는다.**
+        //
+        // `verify_segment` 는 세그먼트당 풀 디코드라 실측 1.6~1.7초가 든다. 9개면
+        // 저장 시작부터 ffmpeg 실행까지 15초가 걸리고(실측 13.7~23.2초), 그동안
+        // 롤링 라이터가 목록 맨 앞 — `-segment_wrap` 때문에 정확히 다음 덮어쓸 대상 —
+        // 을 덮어쓴다. 그래서 `moov atom not found` 로 저장이 통째로 실패했다
+        // (두 판 실측 44개 중 10개, 23%).
+        //
+        // 여기서는 아직 `content_end` 를 모르고 `end_anchor` 만 아므로 여유를 한 번
+        // 더 얹는다. 정확한 범위는 뒤의 `trim_concat_to_window` 가 정하므로 여기서
+        // 넉넉해도 최종 파일 크기에는 영향이 없다 — verify 한 번 더 돌 뿐이다.
+        let segments = if requested_secs.is_finite() && requested_secs > 0.0 {
+            let mtimes: Vec<f64> = segments.iter().map(|p| mtime_secs(p)).collect();
+            let oldest_needed = end_anchor
+                - requested_secs
+                - (CONCAT_TRIM_GUARD_SECS + self.config.segment_duration_secs as f64);
+            let keep_from = prefilter_keep_from(&mtimes, oldest_needed);
+            if keep_from > 0 {
+                info!(
+                    "창 밖 오래된 세그먼트 {}개는 검증 없이 제외합니다 (검증 비용 절감)",
+                    keep_from
+                );
+            }
+            segments[keep_from..].to_vec()
+        } else {
+            segments
+        };
+
         let ffmpeg_path = get_ffmpeg_path()?;
         let mut verified_segments = Vec::with_capacity(segments.len());
 
@@ -1138,7 +1179,8 @@ impl ClipExtractionContext {
         );
         let verified_count = verified_segments.len();
 
-        let (concat_segments, durations) = retain_measured_segments(&verified_segments, &probed)?;
+        let (measured_segments, measured_durations) =
+            retain_measured_segments(&verified_segments, &probed)?;
 
         // ---- Compute per-input seek offsets against the rolling buffer timeline ----
         // concat_segments is sorted oldest-first (by mtime), and a segment's mtime marks
@@ -1146,10 +1188,12 @@ impl ClipExtractionContext {
         // walking back the MEASURED durations) stays correct even when an older segment
         // was dropped by the integrity check — the old "oldest_mtime - segment_duration"
         // anchor silently shifted the whole window in that case.
+        //
+        // `content_end` 는 **마지막** 세그먼트의 mtime 에서만 나오므로 아래 트림(앞쪽만
+        // 버린다)의 불변량이다. 그래서 트림보다 **먼저** 구한다.
         let now = now_wall_secs();
-        let total_content: f64 = durations.iter().sum();
         let newest_mtime = mtime_secs(
-            concat_segments
+            measured_segments
                 .last()
                 .expect("retain_measured_segments never returns an empty list"),
         );
@@ -1158,21 +1202,47 @@ impl ClipExtractionContext {
         } else {
             now
         };
+
+        // 요청 창을 덮는 최소 범위만 남긴다. 이유는 `trim_concat_to_window` 참조 —
+        // concat 데뮤서가 `-ss` 를 이행하지 않아 파일에 `video_ss` 만큼의 영상이
+        // 통째로 더 쓰이고, 긴 목록은 읽는 동안 롤링 라이터에 덮어써진다.
+        let (concat_segments, durations) = trim_concat_to_window(
+            &measured_segments,
+            &measured_durations,
+            requested_secs,
+            end_anchor,
+            content_end,
+        );
+
+        let total_content: f64 = durations.iter().sum();
         let concat_start = content_end - total_content;
+
+        if concat_segments.len() < measured_segments.len() {
+            info!(
+                "concat 범위 축소: {}개(총 {:.1}s) → {}개(총 {:.1}s) — 요청 창을 덮는 최소 구간만 사용",
+                measured_segments.len(),
+                measured_durations.iter().sum::<f64>(),
+                concat_segments.len(),
+                total_content
+            );
+        }
 
         // Dropping an unmeasurable TAIL segment shortens the usable footage: the window
         // must be clamped to what survived, not to what merely passed the integrity check.
         // `compute_clip_window` does the clamping (content_end is its `available_end`);
         // this only makes the cost visible instead of letting it surface as a mysteriously
         // short clip.
-        if concat_segments.len() < verified_count {
+        //
+        // 비교 대상은 **트림 전**(`measured_segments`)이다. 트림은 의도적 축소라
+        // `concat_segments` 와 비교하면 매번 참이 되어 이 경고가 오탐이 된다.
+        if measured_segments.len() < verified_count {
             let verified_end = verified_end.min(now);
             if verified_end > content_end + CLIP_LENGTH_TOLERANCE_SECS {
                 warn!(
                     "길이 측정 실패 세그먼트 제외로 가용 영상 끝이 {:.2}s 앞당겨졌습니다 \
                      — 클립 창을 가용 범위({:.2}s)로 잘라 저장합니다",
                     verified_end - content_end,
-                    total_content
+                    measured_durations.iter().sum::<f64>()
                 );
             }
         }
@@ -1724,6 +1794,106 @@ fn retain_measured_segments(
     }
 
     Ok((kept_segments, kept_durations))
+}
+
+/// 검증 전에 떨궈도 되는 오래된 세그먼트 개수 — 남길 첫 인덱스를 돌려준다.
+///
+/// 세그먼트의 mtime 은 그 파일의 **완료 시각**이므로 내용은 대략
+/// `[mtime - segment_duration, mtime]` 을 덮는다. 따라서 `mtime < oldest_needed_wall`
+/// 인 파일은 요청 창과 겹칠 수 없다.
+///
+/// 보수적으로 한 칸 더 남긴다(경계를 품는 세그먼트 + mtime 오차 쿠션). mtime 을 읽지
+/// 못한 파일(`0.0`)이 하나라도 있으면 판단 근거가 없으므로 **아무것도 떨구지 않는다.**
+/// 파일시스템 없이 테스트하려고 mtime 을 인자로 받는다.
+fn prefilter_keep_from(mtimes: &[f64], oldest_needed_wall: f64) -> usize {
+    /// 이 개수 아래로는 절대 줄이지 않는다 — 창 계산은 뒤 단계의 일이다.
+    const MIN_KEEP: usize = 2;
+
+    if !oldest_needed_wall.is_finite() || mtimes.iter().any(|m| *m <= 0.0) {
+        return 0;
+    }
+
+    let first_reachable = mtimes.iter().position(|m| *m >= oldest_needed_wall);
+    let keep_from = match first_reachable {
+        // 경계를 품는 세그먼트를 살리려고 한 칸 앞에서 시작한다.
+        Some(index) => index.saturating_sub(1),
+        // 전부 창보다 오래됐다 — 판단이 어긋난 것이므로 건드리지 않는다.
+        None => return 0,
+    };
+
+    keep_from.min(mtimes.len().saturating_sub(MIN_KEEP))
+}
+
+/// concat 목록을 요청 창을 덮는 **가장 짧은 뒤쪽 구간**으로 줄일 때 남길 첫 인덱스.
+///
+/// `durations` 는 oldest-first 측정 길이. 반환값은
+/// `sum(durations[keep_from..]) >= needed_tail_secs` 를 만족하는 **가장 큰** 인덱스다.
+/// 전체를 다 써도 모자라면 `0` — 즉 **버퍼가 이미 부족한 경우에는 아무것도 버리지 않는다.**
+fn concat_keep_from(durations: &[f64], needed_tail_secs: f64) -> usize {
+    if !needed_tail_secs.is_finite() || needed_tail_secs <= 0.0 {
+        // 계산할 근거가 없으면 오늘과 완전히 동일하게 전부 쓴다.
+        return 0;
+    }
+
+    let mut acc = 0.0;
+    for (back, duration) in durations.iter().rev().enumerate() {
+        acc += duration;
+        if acc >= needed_tail_secs {
+            return durations.len() - (back + 1);
+        }
+    }
+    0
+}
+
+/// 요청 창을 덮는 최소 범위만 남긴 `(segments, durations)`.
+///
+/// # 왜 필요한가
+///
+/// concat 데뮤서는 입력 `-ss` 를 **이행하지 않는다.** FFmpeg 는 concat 맨 앞부터
+/// `video_ss + duration` 까지 전부 `mdat` 에 쓴 다음, mp4 edit list(`elst`)로
+/// `[0, video_ss)` 구간을 가린다. 그래서 13초짜리 클립인데도 파일에는 40~60초 분량이
+/// 들어가고, 실측으로 `기록된 미디어 = video_ss + duration − 1.95s` 였다
+/// (1.95 = probesize 5MB ÷ 세그먼트 비트레이트). 저장된 실클립의 `elst.media_time` 이
+/// 로그의 `video_ss` 와 상수 1.95초 차이로 일치하는 것으로 확인했다.
+///
+/// `ffprobe` 의 `format=duration` 은 edit list 를 적용한 값이라 **길이는 정확해 보였고**,
+/// 그래서 이 낭비가 지금까지 드러나지 않았다.
+///
+/// 팽창을 줄이는 유일한 레버가 `video_ss` 이고, `video_ss` 를 줄이는 유일한 방법이
+/// concat 범위를 줄이는 것이다. 같은 변경이 저장 실패도 함께 줄인다 — 목록이 짧아지면
+/// 읽는 동안 롤링 라이터에 덮어써질 파일이 사라지기 때문이다.
+///
+/// # 계약
+///
+/// `content_end_secs` 는 **트림 불변량**이다. 마지막 세그먼트의 mtime 에서만 나오고 이
+/// 함수는 앞쪽만 버리므로, 호출부는 `content_end` 를 먼저 구한 뒤 이 함수를 부르고
+/// 그 다음에 `total_content`/`concat_start` 를 다시 계산하면 된다.
+///
+/// **없던 부족을 새로 만들지 않는다**: 버릴 수 있을 때만 버리고, 버리는 경우에도
+/// `Σ남긴 길이 >= (content_end − want_start) + GUARD` 이므로 `compute_clip_window` 의
+/// `effective_start` clamp 가 발동할 수 없다. 결과적으로 `window.duration` 과
+/// `audio_ss`/`mic_ss` 는 트림 전과 **완전히 동일**하고 `video_ss` 만 줄어든다.
+fn trim_concat_to_window(
+    segments: &[PathBuf],
+    durations: &[f64],
+    requested_secs: f64,
+    end_anchor_secs: f64,
+    content_end_secs: f64,
+) -> (Vec<PathBuf>, Vec<f64>) {
+    // `requested <= 0` 은 "있는 만큼 전부" 라는 뜻이라 자를 근거가 없다.
+    if !requested_secs.is_finite() || requested_secs <= 0.0 {
+        return (segments.to_vec(), durations.to_vec());
+    }
+
+    // `compute_clip_window` 의 `want_start` 와 **반드시 같은 식**이어야 한다.
+    let want_start = end_anchor_secs - requested_secs;
+    let needed_tail = (content_end_secs - want_start) + CONCAT_TRIM_GUARD_SECS;
+
+    let keep_from = concat_keep_from(durations, needed_tail);
+    (
+        segments[keep_from..].to_vec(),
+        durations[keep_from..].to_vec(),
+    )
 }
 
 /// How far the produced clip fell short of what the caller asked for.
@@ -2426,6 +2596,139 @@ mod clip_window_tests {
         assert!(approx(w.duration, 13.0), "duration={}", w.duration);
         assert!(ensure_usable_clip_window(&w, 13.0, std::path::Path::new("clip.mp4")).is_ok());
     }
+
+    /// **회귀 방지 핵심.** concat 목록을 잘라도 잘라내는 영상 구간은 그대로여야 한다.
+    ///
+    /// 실게임에서 요청 13.00s → 실제 13.05/13.06/13.09s 로 길이가 정확해진 것을 방금
+    /// 확인했다. 트림이 그걸 되돌리면 이 최적화는 실패다. 바뀌어도 되는 값은
+    /// `video_ss` 하나뿐이고, 그마저 `concat_start + video_ss`(절대 시각)는 불변이다.
+    #[test]
+    fn trimming_the_concat_list_changes_only_video_ss() {
+        use super::trim_concat_to_window;
+        use std::path::PathBuf;
+
+        let content_end = 1200.0;
+        let end_anchor = 1195.0;
+        let requested = 13.0;
+        let segments: Vec<PathBuf> = (0..9).map(|i| PathBuf::from(format!("s{i}.mp4"))).collect();
+        let durations = vec![10.0; 9];
+        let full_start = content_end - durations.iter().sum::<f64>(); // 1110.0
+
+        let full = compute_clip_window(
+            requested,
+            end_anchor,
+            content_end,
+            full_start,
+            Some(0.0),
+            Some(50.0),
+        );
+
+        let (_, kept) =
+            trim_concat_to_window(&segments, &durations, requested, end_anchor, content_end);
+        let trimmed_start = content_end - kept.iter().sum::<f64>();
+        let trimmed = compute_clip_window(
+            requested,
+            end_anchor,
+            content_end,
+            trimmed_start,
+            Some(0.0),
+            Some(50.0),
+        );
+
+        assert!(
+            approx(full.duration, trimmed.duration),
+            "길이가 바뀌었다: {} -> {}",
+            full.duration,
+            trimmed.duration
+        );
+        assert!(
+            approx(full.audio_ss, trimmed.audio_ss),
+            "오디오 앵커가 바뀌었다: {} -> {}",
+            full.audio_ss,
+            trimmed.audio_ss
+        );
+        assert!(
+            approx(full.mic_ss, trimmed.mic_ss),
+            "마이크 앵커가 바뀌었다: {} -> {}",
+            full.mic_ss,
+            trimmed.mic_ss
+        );
+        assert!(
+            approx(full_start + full.video_ss, trimmed_start + trimmed.video_ss),
+            "잘라내는 절대 시각이 바뀌었다"
+        );
+        assert!(
+            trimmed.video_ss < full.video_ss,
+            "video_ss 가 줄지 않았다: {} -> {}",
+            full.video_ss,
+            trimmed.video_ss
+        );
+    }
+
+    /// 트림이 **없던 부족을 만들지 않는다** — 버퍼가 짧든 길든, 요청이 정상이든 아니든.
+    #[test]
+    fn trimming_never_introduces_a_shortfall() {
+        use super::trim_concat_to_window;
+        use std::path::PathBuf;
+
+        let segments: Vec<PathBuf> = (0..9).map(|i| PathBuf::from(format!("s{i}.mp4"))).collect();
+
+        // (총 버퍼 길이, content_end, end_anchor, requested)
+        let cases: [(f64, f64, f64, f64); 6] = [
+            (90.0, 1200.0, 1195.0, 13.0),  // 버퍼 충분
+            (90.0, 1200.0, 1195.0, 85.0),  // 거의 딱 맞음
+            (30.0, 1200.0, 1195.0, 60.0),  // 버퍼 부족
+            (90.0, 1200.0, 1210.0, 13.0),  // end_anchor 가 미래(커버리지 타임아웃)
+            (90.0, 1200.0, 1195.0, 0.0),   // 요청 0
+            (90.0, 1200.0, 1195.0, -3.0),  // 요청 음수
+        ];
+
+        for (total, content_end, end_anchor, requested) in cases {
+            let n = (total / 10.0) as usize;
+            let durations = vec![10.0; n];
+            let full_start = content_end - total;
+
+            let full = compute_clip_window(
+                requested,
+                end_anchor,
+                content_end,
+                full_start,
+                Some(0.0),
+                None,
+            );
+            let (_, kept) = trim_concat_to_window(
+                &segments[..n],
+                &durations,
+                requested,
+                end_anchor,
+                content_end,
+            );
+            let trimmed = compute_clip_window(
+                requested,
+                end_anchor,
+                content_end,
+                content_end - kept.iter().sum::<f64>(),
+                Some(0.0),
+                None,
+            );
+
+            assert!(
+                approx(full.duration, trimmed.duration),
+                "case {:?}: 길이 {} -> {}",
+                (total, content_end, end_anchor, requested),
+                full.duration,
+                trimmed.duration
+            );
+
+            let path = std::path::Path::new("clip.mp4");
+            assert_eq!(
+                ensure_usable_clip_window(&full, requested, path).is_ok(),
+                ensure_usable_clip_window(&trimmed, requested, path).is_ok(),
+                "case {:?}: 사용 가능 판정이 달라졌다",
+                (total, content_end, end_anchor, requested)
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2487,9 +2790,154 @@ mod concat_list_tests {
     }
 
     use super::{
-        build_concat_list, even_dimensions, parse_ffprobe_duration, retain_measured_segments,
+        build_concat_list, concat_keep_from, even_dimensions, parse_ffprobe_duration,
+        prefilter_keep_from, retain_measured_segments, trim_concat_to_window,
+        CONCAT_TRIM_GUARD_SECS,
     };
     use std::path::PathBuf;
+
+    // ---- 검증 전 사전 필터 ----
+    //
+    // `verify_segment` 는 세그먼트당 풀 디코드(실측 1.6초)라 9개면 프롤로그가 15초다.
+    // 그동안 롤링 라이터가 목록 맨 앞을 덮어써 저장이 실패했다(실측 23%).
+
+    #[test]
+    fn prefilter_drops_only_segments_that_cannot_reach_the_window() {
+        // mtime = 완료 시각. 10초 간격으로 아홉 개, 마지막이 1200.
+        let mtimes: Vec<f64> = (0..9).map(|i| 1120.0 + (i as f64) * 10.0).collect();
+        // 창이 1180 이후만 필요하면 1170 이전 것들은 닿을 수 없다.
+        let keep = prefilter_keep_from(&mtimes, 1180.0);
+        assert!(keep > 0, "아무것도 안 떨궜다");
+        assert!(
+            mtimes[keep] >= 1180.0 - 10.0,
+            "경계를 품는 세그먼트를 잃었다: keep={} mtime={}",
+            keep,
+            mtimes[keep]
+        );
+    }
+
+    #[test]
+    fn prefilter_keeps_everything_when_an_mtime_is_unreadable() {
+        // stat 실패(0.0)가 하나라도 있으면 순서를 신뢰할 수 없으므로 판단하지 않는다.
+        let mtimes = vec![1120.0, 0.0, 1140.0, 1150.0, 1160.0];
+        assert_eq!(prefilter_keep_from(&mtimes, 1155.0), 0);
+    }
+
+    #[test]
+    fn prefilter_never_empties_the_list() {
+        let mtimes: Vec<f64> = (0..9).map(|i| 1120.0 + (i as f64) * 10.0).collect();
+        // 창이 미래라 전부 "닿을 수 없음" 으로 보이는 극단.
+        let keep = prefilter_keep_from(&mtimes, 9999.0);
+        assert!(
+            mtimes.len() - keep >= 2,
+            "최소 2개는 남아야 한다 (keep={})",
+            keep
+        );
+    }
+
+    #[test]
+    fn prefilter_does_nothing_when_the_whole_buffer_is_needed() {
+        let mtimes: Vec<f64> = (0..9).map(|i| 1120.0 + (i as f64) * 10.0).collect();
+        assert_eq!(prefilter_keep_from(&mtimes, 1000.0), 0);
+        assert_eq!(prefilter_keep_from(&mtimes, f64::NAN), 0);
+    }
+
+    // ---- concat 범위 트림 ----
+    //
+    // concat 데뮤서가 `-ss` 를 이행하지 않아 파일에는 `video_ss + duration` 만큼이
+    // 통째로 쓰인다. 그래서 목록을 짧게 유지하는 것이 유일한 용량 레버이고, 동시에
+    // 저장 실패(긴 목록을 읽는 동안 롤링 라이터가 맨 앞을 덮어씀)도 함께 줄인다.
+
+    #[test]
+    fn trims_to_the_shortest_suffix_that_covers_the_window() {
+        let durations = vec![10.0; 9]; // 90초 버퍼
+        assert_eq!(concat_keep_from(&durations, 16.0), 7); // 2개(20s)면 덮는다
+        assert_eq!(concat_keep_from(&durations, 21.0), 6); // 3개(30s)
+        assert_eq!(concat_keep_from(&durations, 10.0), 8); // 1개(10s)
+        assert_eq!(concat_keep_from(&durations, 30.0), 6); // 정확히 경계
+    }
+
+    #[test]
+    fn a_buffer_shorter_than_the_window_is_never_trimmed() {
+        // 없던 부족을 새로 만들지 않는다 — 버퍼가 이미 짧으면 오늘과 동일 경로.
+        let durations = vec![10.0; 9];
+        assert_eq!(concat_keep_from(&durations, 200.0), 0);
+    }
+
+    #[test]
+    fn an_unusable_needed_length_keeps_everything() {
+        let durations = vec![10.0; 9];
+        for needed in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(concat_keep_from(&durations, needed), 0, "needed={}", needed);
+        }
+    }
+
+    #[test]
+    fn the_trim_only_ever_removes_leading_entries() {
+        let segments: Vec<PathBuf> = (0..9).map(|i| PathBuf::from(format!("s{i}.mp4"))).collect();
+        let durations = vec![10.0; 9];
+
+        let (kept, kept_durations) =
+            trim_concat_to_window(&segments, &durations, 13.0, 1195.0, 1200.0);
+
+        assert_eq!(kept.len(), kept_durations.len());
+        assert_eq!(kept, segments[segments.len() - kept.len()..].to_vec());
+        assert_eq!(kept.last(), segments.last(), "가장 최신 세그먼트는 항상 남는다");
+    }
+
+    #[test]
+    fn a_zero_or_negative_request_keeps_everything() {
+        let segments: Vec<PathBuf> = (0..9).map(|i| PathBuf::from(format!("s{i}.mp4"))).collect();
+        let durations = vec![10.0; 9];
+        for requested in [0.0, -1.0] {
+            let (kept, _) = trim_concat_to_window(&segments, &durations, requested, 1195.0, 1200.0);
+            assert_eq!(kept.len(), 9, "requested={}", requested);
+        }
+    }
+
+    #[test]
+    fn a_measurement_hole_still_wins_over_the_trim() {
+        // 구멍 앞은 시간축을 보장할 수 없어 버려야 한다 — 트림이 그걸 되살리면 안 된다.
+        let segments: Vec<PathBuf> = (0..4).map(|i| PathBuf::from(format!("s{i}.mp4"))).collect();
+        let probed = vec![Some(10.0), None, Some(10.0), Some(10.0)];
+
+        let (measured, measured_durations) = retain_measured_segments(&segments, &probed).unwrap();
+        assert_eq!(measured, vec![segments[2].clone(), segments[3].clone()]);
+
+        let (kept, _) =
+            trim_concat_to_window(&measured, &measured_durations, 13.0, 1195.0, 1200.0);
+        assert!(
+            !kept.contains(&segments[0]) && !kept.contains(&segments[1]),
+            "구멍 앞 세그먼트가 되살아났다: {:?}",
+            kept
+        );
+    }
+
+    #[test]
+    fn the_field_case_keeps_two_or_three_segments() {
+        // 실측 기준선: 세그먼트 10초 × 9개, 저장이 이벤트보다 늦어 end_anchor 가 과거,
+        // 요청 13초. 트림 전 video_ss 는 24.4~50.9초였다.
+        let segments: Vec<PathBuf> = (0..9).map(|i| PathBuf::from(format!("s{i}.mp4"))).collect();
+        let durations = vec![10.0; 9];
+        let content_end = 1200.0;
+        let end_anchor = 1195.0; // 5초 전 이벤트
+        let requested = 13.0;
+
+        let (kept, kept_durations) =
+            trim_concat_to_window(&segments, &durations, requested, end_anchor, content_end);
+
+        // needed = (1200-1195) + 13 + 3 = 21 -> 3개(30s)
+        assert_eq!(kept.len(), 3, "kept={:?}", kept);
+
+        // 트림 후 video_ss 는 한 세그먼트 + 여유 안으로 들어와야 한다.
+        let concat_start = content_end - kept_durations.iter().sum::<f64>();
+        let video_ss = (end_anchor - requested) - concat_start;
+        assert!(
+            (0.0..=CONCAT_TRIM_GUARD_SECS + 10.0).contains(&video_ss),
+            "video_ss={} (기준선 24.4~50.9초)",
+            video_ss
+        );
+    }
 
     #[test]
     fn every_file_line_is_followed_by_a_duration_directive() {

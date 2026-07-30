@@ -291,7 +291,14 @@ impl EventTrigger {
         match self {
             EventTrigger::Multikill(_) => 15, // Need setup time
             EventTrigger::Steal => 20,        // Need fight context
-            EventTrigger::GameEnd => 30,      // Show final moments
+            // 게임 종료: 예전에는 30초였다.
+            //
+            // 쇼츠 관점에서 이건 과했다 — 60초 영상의 2/3 를 한 장면이 먹었다. 게다가
+            // 실측하면 확보되지도 않았다: 녹화가 게임과 함께 멈추므로 post 10초가
+            // 존재할 수 없고, 실제 산출물은 40초가 아니라 31.4초였다.
+            // 12+3 이면 승리 직전 한타와 넥서스 파괴가 들어가고, 남은 자리에 다른
+            // 장면이 두 개 더 들어간다.
+            EventTrigger::GameEnd => 12,
             EventTrigger::Death => 8,         // Short context
             EventTrigger::Assist => 8,
             EventTrigger::ElderDragonKill => 15,
@@ -308,9 +315,14 @@ impl EventTrigger {
     /// Get recommended clip duration after event (seconds)
     pub fn post_duration(&self) -> u32 {
         match self {
-            EventTrigger::Ace => 10,     // Show aftermath
-            EventTrigger::GameEnd => 10, // Victory/defeat screen
+            EventTrigger::Ace => 10, // Show aftermath
+            // 게임 종료의 post-roll 은 **원리적으로 확보되지 않는다** — 녹화가 게임과
+            // 함께 멈추기 때문이다. 10초를 적어 두면 매번 부족분 경고만 남는다.
+            EventTrigger::GameEnd => 3,
             EventTrigger::BaronKill => 5,
+            // 스틸: `ClipTimingSettings::default()` 의 `steal.post_duration` 과 같아야
+            // 한다(설정에 키가 있으면 설정이 이기므로, 다르면 이 값은 죽은 값이 된다).
+            EventTrigger::Steal => 5,
             EventTrigger::Multikill(_) => 5,
             EventTrigger::ElderDragonKill => 5,
             EventTrigger::AtakhanKill => 5,
@@ -347,6 +359,14 @@ pub struct ActivePlayer {
     pub level: u32,
     #[serde(rename = "currentGold", default)]
     pub current_gold: f32,
+    /// 내 체력 — **여기에만 있다.**
+    ///
+    /// `allPlayers[]` 에는 `championStats` 가 없다(라이엇 API 설계). 실게임 캡처로
+    /// 확정했다: `activePlayer.championStats.maxHealth = 2458.76` 인데
+    /// `allPlayers[0]` 에는 그 키 자체가 없다. 하이라이트 점수의 클러치 배수가
+    /// 여기 걸려 있다 — `capture_moment` 참조.
+    #[serde(rename = "championStats", default)]
+    pub champion_stats: ChampionStats,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -1687,32 +1707,12 @@ impl LiveClientMonitor {
     ) -> crate::recording::highlight_score::MomentContext {
         use crate::recording::highlight_score::MomentContext;
 
-        let cache = self.game_state_cache.read().await;
-        let Some(ref data) = cache.data else {
-            // 캐시가 비었으면 시간만이라도 남긴다. 이벤트 자체가 게임 시각을 안다.
-            return MomentContext {
-                game_time_secs: Some(event.event_time as f64),
-                ..Default::default()
-            };
-        };
-
-        let me = data
-            .all_players
-            .iter()
-            .find(|p| same_player(&p.summoner_name, player_name));
-
-        let my_health_ratio = me.and_then(|p| {
-            let max = p.champion_stats.max_health;
-            if max > 0.0 {
-                Some((p.champion_stats.current_health / max).clamp(0.0, 1.0) as f64)
-            } else {
-                // 최대 체력이 0 이면 아직 안 받은 값이다. 0 으로 나누지 않고 비운다.
-                None
-            }
-        });
-
-        // 어시스트 수는 이벤트가 직접 알려준다. 내가 죽은 이벤트(Death)에서는
-        // 상대편 어시스트라 의미가 다르므로, 킬러가 나일 때만 센다.
+        // 어시스트 수는 **이벤트 자체**가 알려준다 — 캐시와 무관하다.
+        //
+        // 예전에는 이 계산이 아래 캐시 가드 뒤에 있었다. 캐시가 비면 알 수 있는 값까지
+        // 같이 버려져 단독 킬 판정(`Solo`, 배수 1.25)이 통째로 죽었다.
+        // 내가 죽은 이벤트(Death)의 어시스트는 상대편 것이라 의미가 다르므로,
+        // 킬러가 나일 때만 센다.
         let assist_count = match event.killer_name.as_deref() {
             Some(killer) if same_player(killer, player_name) => {
                 Some(event.assisters.as_ref().map_or(0, |a| a.len() as u32))
@@ -1720,7 +1720,40 @@ impl LiveClientMonitor {
             _ => None,
         };
 
+        let cache = self.game_state_cache.read().await;
+        let Some(ref data) = cache.data else {
+            // 캐시가 비어도 이벤트에서 아는 것은 남긴다.
+            return MomentContext {
+                assist_count,
+                game_time_secs: Some(event.event_time as f64),
+                ..Default::default()
+            };
+        };
+
+        // 체력은 **`activePlayer`** 에서 읽는다.
+        //
+        // `allPlayers[]` 에는 `championStats` 가 **없다** — 라이엇 Live Client API 설계다
+        // (실게임 캡처로 확정: `activePlayer.championStats.maxHealth = 2458.76`,
+        // `allPlayers[0]` 에는 그 키 자체가 없음). 예전에는 없는 쪽에서 읽었고,
+        // `#[serde(default)]` 때문에 파싱은 성공하고 체력만 조용히 0 이 됐다.
+        // 그래서 `max > 0.0` 검사에 걸려 **항상 `None`** — "체력 8%에서 펜타킬" 이라는
+        // 이 앱의 유일한 차별점이 한 번도 계산된 적이 없었다.
+        let my_health_ratio = {
+            let stats = &data.active_player.champion_stats;
+            if stats.max_health > 0.0 {
+                Some((stats.current_health / stats.max_health).clamp(0.0, 1.0) as f64)
+            } else {
+                // 최대 체력이 0 이면 아직 안 받은 값이다. 0 으로 나누지 않고 비운다.
+                None
+            }
+        };
+
         // 양 팀 생존 수. 내 팀을 알아야 세므로 나를 못 찾으면 비운다.
+        let me = data
+            .all_players
+            .iter()
+            .find(|p| same_player(&p.summoner_name, player_name));
+
         let (allies_alive, enemies_alive) = match me {
             Some(me) => {
                 let mut allies = 0u32;
@@ -1817,6 +1850,115 @@ mod circuit_breaker_tests {
     }
 }
 
+/// 실게임에서 받아 온 `allgamedata` 응답 하나. 소환사명만 익명화했고 **구조는 그대로**다.
+///
+/// 이 픽스처가 없던 동안 "체력을 어디서 읽어야 하는가" 가 추측으로만 논의됐고,
+/// 그 결과 `allPlayers[].championStats`(존재하지 않는 필드)에서 읽는 코드가
+/// 22개 클립을 만드는 동안 아무도 모르게 살아 있었다.
+#[cfg(test)]
+const REAL_GAME_DATA: &str = include_str!("../../tests/fixtures/live_client_allgamedata.json");
+
+#[cfg(test)]
+mod live_client_fixture_tests {
+    use super::*;
+
+    fn parsed() -> AllGameData {
+        serde_json::from_str(REAL_GAME_DATA).expect("실게임 응답이 파싱돼야 한다")
+    }
+
+    /// 라이엇은 체력을 `activePlayer` 에만 준다 — 이 사실이 바뀌면 즉시 알아야 한다.
+    #[test]
+    fn health_lives_on_active_player_and_nowhere_else() {
+        let data = parsed();
+
+        assert!(
+            data.active_player.champion_stats.max_health > 0.0,
+            "activePlayer.championStats.maxHealth 가 비었다 — 체력 배수가 다시 죽는다"
+        );
+
+        // allPlayers 에는 championStats 가 아예 없어서 serde 기본값(0.0)으로 채워진다.
+        // 여기서 읽으면 안 된다는 사실 자체를 고정한다.
+        for player in &data.all_players {
+            assert_eq!(
+                player.champion_stats.max_health, 0.0,
+                "allPlayers 에 championStats 가 생겼다면 이 테스트와 capture_moment 를 함께 갱신할 것"
+            );
+        }
+    }
+
+    /// 이벤트의 이름은 태그가 없고(`트린장로`) activePlayer 는 태그가 있다(`트린장로#0001`).
+    /// `same_player` 가 그 차이를 흡수하지 못하면 단독 킬 판정이 통째로 죽는다.
+    #[test]
+    fn event_names_match_the_active_player_despite_the_tag() {
+        let data = parsed();
+        let me = &data.active_player.summoner_name;
+
+        let my_kills = data
+            .events
+            .events
+            .iter()
+            .filter(|e| e.event_name == "ChampionKill")
+            .filter(|e| {
+                e.killer_name
+                    .as_deref()
+                    .is_some_and(|k| same_player(k, me))
+            })
+            .count();
+
+        assert!(
+            my_kills > 0,
+            "실제로 킬을 딴 판인데 하나도 못 찾았다 — 이름 매칭이 깨졌다"
+        );
+    }
+
+    /// 이 판에는 어시스트 0명짜리 단독 킬이 실제로 있었다.
+    /// 그 킬들이 `Solo` 배수를 받아야 한다 — 지난 판에는 22개 전부 이유가 비어 있었다.
+    #[test]
+    fn the_real_game_contains_solo_kills_that_must_score_higher() {
+        use crate::recording::highlight_score::{score, HighlightKind, MomentContext, ScoreReason};
+
+        let data = parsed();
+        let me = &data.active_player.summoner_name;
+
+        let solo_kills = data
+            .events
+            .events
+            .iter()
+            .filter(|e| e.event_name == "ChampionKill")
+            .filter(|e| {
+                e.killer_name
+                    .as_deref()
+                    .is_some_and(|k| same_player(k, me))
+            })
+            .filter(|e| e.assisters.as_ref().is_none_or(|a| a.is_empty()))
+            .count();
+
+        assert!(
+            solo_kills > 0,
+            "단독 킬이 없는 픽스처로는 이 회귀를 지킬 수 없다"
+        );
+
+        // 단독 킬의 점수는 기본점보다 높아야 한다.
+        let ctx = MomentContext {
+            assist_count: Some(0),
+            game_time_secs: Some(600.0),
+            ..Default::default()
+        };
+        let scored = score(HighlightKind::Kill, &ctx);
+        assert!(
+            scored.value > HighlightKind::Kill.base(),
+            "단독 킬인데 기본점 그대로다: {} (기본 {})",
+            scored.value,
+            HighlightKind::Kill.base()
+        );
+        assert!(
+            scored.reasons.contains(&ScoreReason::Solo),
+            "이유에 Solo 가 없다: {:?}",
+            scored.reasons
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1838,7 +1980,9 @@ mod tests {
 
         let trigger = EventTrigger::Steal;
         assert_eq!(trigger.pre_duration(), 20);
-        assert_eq!(trigger.post_duration(), 3);
+        // `ClipTimingSettings::default()` 의 `steal.post_duration` 과 같아야 한다 —
+        // 설정에 키가 있으면 설정이 이기므로, 다르면 이 값이 죽은 값이 된다.
+        assert_eq!(trigger.post_duration(), 5);
     }
 
     /// `Result` 필드의 **와이어 계약**을 고정한다.
@@ -1941,7 +2085,8 @@ mod tests {
         assert_eq!(EventTrigger::AtakhanKill.pre_duration(), 15);
         assert_eq!(EventTrigger::Shutdown.pre_duration(), 10);
         assert_eq!(EventTrigger::VoidgrubsKill.pre_duration(), 10);
-        assert_eq!(EventTrigger::GameEnd.pre_duration(), 30);
+        // 30 -> 12: 60초 쇼츠의 2/3 를 한 장면이 먹었다.
+        assert_eq!(EventTrigger::GameEnd.pre_duration(), 12);
         assert_eq!(EventTrigger::Death.pre_duration(), 8);
         assert_eq!(EventTrigger::Assist.pre_duration(), 8);
         assert_eq!(EventTrigger::ChampionKill.pre_duration(), 10);
@@ -1954,7 +2099,9 @@ mod tests {
         assert_eq!(EventTrigger::Shutdown.post_duration(), 5);
         assert_eq!(EventTrigger::VoidgrubsKill.post_duration(), 3);
         assert_eq!(EventTrigger::Ace.post_duration(), 10);
-        assert_eq!(EventTrigger::GameEnd.post_duration(), 10);
+        // 10 -> 3: 녹화가 게임과 함께 멈추므로 post-roll 은 원리적으로 확보되지 않는다
+        //          (실측: 40초 설계인데 산출물은 31.4초).
+        assert_eq!(EventTrigger::GameEnd.post_duration(), 3);
         assert_eq!(EventTrigger::BaronKill.post_duration(), 5);
         assert_eq!(EventTrigger::ChampionKill.post_duration(), 3);
     }
@@ -2080,6 +2227,7 @@ mod tests {
                     champion_name: "Yasuo".to_string(),
                     level: 10,
                     current_gold: 3000.0,
+                    champion_stats: ChampionStats::default(),
                 },
                 all_players: vec![
                     Player {
@@ -2128,6 +2276,7 @@ mod tests {
                     champion_name: "Yasuo".to_string(),
                     level: 10,
                     current_gold: 3000.0,
+                    champion_stats: ChampionStats::default(),
                 },
                 all_players: vec![Player {
                     summoner_name: player_name.to_string(),

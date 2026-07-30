@@ -351,8 +351,12 @@ impl Default for EventFilterSettings {
             record_elder: true,
             record_herald: true,
 
-            record_turret: false, // 타워는 너무 많아서 OFF
-            record_inhibitor: true,
+            // 구조물은 쇼츠 소재가 아니다. 포탑은 한 판에 열 개 넘게 부서지고,
+            // 억제기도 "이기고 있다"는 사실을 알릴 뿐 볼거리가 아니다(점수 30 —
+            // 에이스 68·셧다운 55 와 비교하면 자동 편집이 고를 일이 거의 없다).
+            // 담고 싶은 사람은 고급 설정에서 켠다.
+            record_turret: false,
+            record_inhibitor: false,
             record_nexus: true,
 
             record_ace: true,

@@ -121,7 +121,7 @@ export const test = base.extend({
                 record_elder: true,
                 record_herald: true,
                 record_turret: false,
-                record_inhibitor: true,
+                record_inhibitor: false,
                 record_nexus: true,
                 record_ace: true,
                 record_game_end: true,
@@ -151,7 +151,7 @@ export const test = base.extend({
                 default_post_duration: 5,
                 event_timings: {},
                 merge_consecutive_events: true,
-                merge_time_threshold: 10,
+                merge_time_threshold: 15,
               },
               hotkeys: {
                 toggle_recording: "F8",

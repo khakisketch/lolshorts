@@ -1,0 +1,666 @@
+{
+ "activePlayer": {
+  "championName": "",
+  "summonerName": "트린장로#0001",
+  "level": 17,
+  "currentGold": 2993.980224609375,
+  "championStats": {
+   "currentHealth": 0.0,
+   "maxHealth": 2458.76025390625
+  }
+ },
+ "allPlayers": [
+  {
+   "championName": "누누와 윌럼프",
+   "summonerName": "Player1#KR1",
+   "team": "ORDER",
+   "level": 14,
+   "isDead": false,
+   "scores": {
+    "kills": 4,
+    "deaths": 8,
+    "assists": 4
+   }
+  },
+  {
+   "championName": "리 신",
+   "summonerName": "Player2#KR1",
+   "team": "ORDER",
+   "level": 14,
+   "isDead": false,
+   "scores": {
+    "kills": 2,
+    "deaths": 5,
+    "assists": 4
+   }
+  },
+  {
+   "championName": "나피리",
+   "summonerName": "Player3#KR1",
+   "team": "ORDER",
+   "level": 15,
+   "isDead": false,
+   "scores": {
+    "kills": 4,
+    "deaths": 3,
+    "assists": 4
+   }
+  },
+  {
+   "championName": "멜",
+   "summonerName": "Player4#KR1",
+   "team": "ORDER",
+   "level": 14,
+   "isDead": false,
+   "scores": {
+    "kills": 7,
+    "deaths": 3,
+    "assists": 3
+   }
+  },
+  {
+   "championName": "세라핀",
+   "summonerName": "Player5#KR1",
+   "team": "ORDER",
+   "level": 14,
+   "isDead": false,
+   "scores": {
+    "kills": 3,
+    "deaths": 3,
+    "assists": 9
+   }
+  },
+  {
+   "championName": "트린다미어",
+   "summonerName": "트린장로#0001",
+   "team": "CHAOS",
+   "level": 17,
+   "isDead": true,
+   "scores": {
+    "kills": 10,
+    "deaths": 5,
+    "assists": 3
+   }
+  },
+  {
+   "championName": "릴리아",
+   "summonerName": "Player6#KR1",
+   "team": "CHAOS",
+   "level": 14,
+   "isDead": false,
+   "scores": {
+    "kills": 1,
+    "deaths": 2,
+    "assists": 4
+   }
+  },
+  {
+   "championName": "탈론",
+   "summonerName": "Player7#KR1",
+   "team": "CHAOS",
+   "level": 15,
+   "isDead": false,
+   "scores": {
+    "kills": 8,
+    "deaths": 5,
+    "assists": 1
+   }
+  },
+  {
+   "championName": "진",
+   "summonerName": "Player8#KR1",
+   "team": "CHAOS",
+   "level": 13,
+   "isDead": false,
+   "scores": {
+    "kills": 0,
+    "deaths": 4,
+    "assists": 4
+   }
+  },
+  {
+   "championName": "세라핀",
+   "summonerName": "Player9#KR1",
+   "team": "CHAOS",
+   "level": 13,
+   "isDead": false,
+   "scores": {
+    "kills": 3,
+    "deaths": 4,
+    "assists": 2
+   }
+  }
+ ],
+ "events": {
+  "Events": [
+   {
+    "EventID": 0,
+    "EventName": "GameStart",
+    "EventTime": 0.025699900463223457
+   },
+   {
+    "EventID": 1,
+    "EventName": "MinionsSpawning",
+    "EventTime": 30.020801544189453
+   },
+   {
+    "Assisters": [],
+    "EventID": 2,
+    "EventName": "ChampionKill",
+    "EventTime": 77.62320709228516,
+    "KillerName": "Player10",
+    "VictimName": "Player11"
+   },
+   {
+    "EventID": 3,
+    "EventName": "FirstBlood",
+    "EventTime": 77.62320709228516,
+    "Recipient": "Messi"
+   },
+   {
+    "Assisters": [
+     "Player12"
+    ],
+    "EventID": 4,
+    "EventName": "ChampionKill",
+    "EventTime": 127.96653747558594,
+    "KillerName": "Player13",
+    "VictimName": "트린장로"
+   },
+   {
+    "Assisters": [],
+    "EventID": 5,
+    "EventName": "ChampionKill",
+    "EventTime": 163.67462158203125,
+    "KillerName": "Player10",
+    "VictimName": "Player11"
+   },
+   {
+    "Assisters": [],
+    "EventID": 6,
+    "EventName": "ChampionKill",
+    "EventTime": 191.2411346435547,
+    "KillerName": "트린장로",
+    "VictimName": "Player13"
+   },
+   {
+    "Assisters": [
+     "Player12",
+     "Player14"
+    ],
+    "EventID": 7,
+    "EventName": "ChampionKill",
+    "EventTime": 195.65687561035156,
+    "KillerName": "Player15",
+    "VictimName": "Player16"
+   },
+   {
+    "Assisters": [],
+    "EventID": 8,
+    "EventName": "ChampionKill",
+    "EventTime": 264.0986328125,
+    "KillerName": "트린장로",
+    "VictimName": "Player13"
+   },
+   {
+    "Assisters": [],
+    "EventID": 9,
+    "EventName": "ChampionKill",
+    "EventTime": 304.1309814453125,
+    "KillerName": "트린장로",
+    "VictimName": "Player13"
+   },
+   {
+    "Assisters": [
+     "Player17",
+     "Player16"
+    ],
+    "EventID": 10,
+    "EventName": "ChampionKill",
+    "EventTime": 314.1229248046875,
+    "KillerName": "Player18",
+    "VictimName": "Player15"
+   },
+   {
+    "Assisters": [
+     "Player12",
+     "Player15"
+    ],
+    "EventID": 11,
+    "EventName": "ChampionKill",
+    "EventTime": 321.3761901855469,
+    "KillerName": "Player14",
+    "VictimName": "Player18"
+   },
+   {
+    "Assisters": [
+     "Player14"
+    ],
+    "EventID": 12,
+    "EventName": "ChampionKill",
+    "EventTime": 329.31097412109375,
+    "KillerName": "Player12",
+    "VictimName": "Player17"
+   },
+   {
+    "Assisters": [
+     "Player17"
+    ],
+    "EventID": 13,
+    "EventName": "ChampionKill",
+    "EventTime": 337.4527282714844,
+    "KillerName": "Player11",
+    "VictimName": "Player14"
+   },
+   {
+    "Assisters": [],
+    "EventID": 14,
+    "EventName": "ChampionKill",
+    "EventTime": 351.1343994140625,
+    "KillerName": "Player11",
+    "VictimName": "Player12"
+   },
+   {
+    "Assisters": [],
+    "EventID": 15,
+    "EventName": "ChampionKill",
+    "EventTime": 433.1514892578125,
+    "KillerName": "트린장로",
+    "VictimName": "Player13"
+   },
+   {
+    "Assisters": [],
+    "EventID": 16,
+    "EventName": "TurretKilled",
+    "EventTime": 445.2209167480469,
+    "KillerName": "트린장로",
+    "TurretKilled": "Turret_TOrder_L2_P3_1509986696_0"
+   },
+   {
+    "EventID": 17,
+    "EventName": "FirstBrick",
+    "EventTime": 445.2209167480469,
+    "KillerName": "트린장로"
+   },
+   {
+    "Assisters": [],
+    "DragonType": "Air",
+    "EventID": 18,
+    "EventName": "DragonKill",
+    "EventTime": 460.9090576171875,
+    "KillerName": "Player17",
+    "Stolen": "False"
+   },
+   {
+    "Assisters": [
+     "Player13",
+     "Player14"
+    ],
+    "EventID": 19,
+    "EventName": "ChampionKill",
+    "EventTime": 473.4609069824219,
+    "KillerName": "Player15",
+    "VictimName": "Player16"
+   },
+   {
+    "Assisters": [
+     "Player10"
+    ],
+    "EventID": 20,
+    "EventName": "ChampionKill",
+    "EventTime": 491.019287109375,
+    "KillerName": "Player12",
+    "VictimName": "Player11"
+   },
+   {
+    "Assisters": [
+     "Player14"
+    ],
+    "EventID": 21,
+    "EventName": "ChampionKill",
+    "EventTime": 495.43304443359375,
+    "KillerName": "Player15",
+    "VictimName": "Player18"
+   },
+   {
+    "Assisters": [],
+    "EventID": 22,
+    "EventName": "ChampionKill",
+    "EventTime": 519.6737670898438,
+    "KillerName": "트린장로",
+    "VictimName": "Player12"
+   },
+   {
+    "Assisters": [
+     "Player12",
+     "Player10"
+    ],
+    "EventID": 23,
+    "EventName": "ChampionKill",
+    "EventTime": 526.1278076171875,
+    "KillerName": "Player13",
+    "VictimName": "트린장로"
+   },
+   {
+    "Assisters": [
+     "트린장로"
+    ],
+    "EventID": 24,
+    "EventName": "ChampionKill",
+    "EventTime": 540.611328125,
+    "KillerName": "Player11",
+    "VictimName": "Player13"
+   },
+   {
+    "Assisters": [
+     "Player13"
+    ],
+    "EventID": 25,
+    "EventName": "ChampionKill",
+    "EventTime": 554.1773681640625,
+    "KillerName": "Player10",
+    "VictimName": "Player11"
+   },
+   {
+    "Assisters": [
+     "Player15"
+    ],
+    "EventID": 26,
+    "EventName": "ChampionKill",
+    "EventTime": 568.4805297851562,
+    "KillerName": "Player14",
+    "VictimName": "Player18"
+   },
+   {
+    "Assisters": [],
+    "EventID": 27,
+    "EventName": "ChampionKill",
+    "EventTime": 574.0636596679688,
+    "KillerName": "트린장로",
+    "VictimName": "Player10"
+   },
+   {
+    "Assisters": [
+     "Player14"
+    ],
+    "EventID": 28,
+    "EventName": "ChampionKill",
+    "EventTime": 587.4230346679688,
+    "KillerName": "Player15",
+    "VictimName": "Player17"
+   },
+   {
+    "Assisters": [
+     "Player14"
+    ],
+    "EventID": 29,
+    "EventName": "ChampionKill",
+    "EventTime": 588.6924438476562,
+    "KillerName": "Player13",
+    "VictimName": "Player16"
+   },
+   {
+    "Assisters": [
+     "트린장로"
+    ],
+    "EventID": 30,
+    "EventName": "ChampionKill",
+    "EventTime": 599.8671264648438,
+    "KillerName": "Player11",
+    "VictimName": "Player12"
+   },
+   {
+    "Assisters": [],
+    "EventID": 31,
+    "EventName": "ChampionKill",
+    "EventTime": 610.6205444335938,
+    "KillerName": "Player11",
+    "VictimName": "Player13"
+   },
+   {
+    "Assisters": [
+     "Player11",
+     "Player16"
+    ],
+    "EventID": 32,
+    "EventName": "ChampionKill",
+    "EventTime": 616.0035400390625,
+    "KillerName": "트린장로",
+    "VictimName": "Player15"
+   },
+   {
+    "Assisters": [
+     "트린장로",
+     "Player18"
+    ],
+    "EventID": 33,
+    "EventName": "ChampionKill",
+    "EventTime": 618.2982788085938,
+    "KillerName": "Player11",
+    "VictimName": "Player14"
+   },
+   {
+    "EventID": 34,
+    "EventName": "Multikill",
+    "EventTime": 618.2982788085938,
+    "KillStreak": 2,
+    "KillerName": "Player11"
+   },
+   {
+    "Assisters": [],
+    "EventID": 35,
+    "EventName": "TurretKilled",
+    "EventTime": 624.8482055664062,
+    "KillerName": "Player19",
+    "TurretKilled": "Turret_TChaos_L0_P3_511845594_0"
+   },
+   {
+    "Assisters": [],
+    "EventID": 36,
+    "EventName": "ChampionKill",
+    "EventTime": 645.3445434570312,
+    "KillerName": "트린장로",
+    "VictimName": "Player10"
+   },
+   {
+    "Assisters": [],
+    "EventID": 37,
+    "EventName": "TurretKilled",
+    "EventTime": 652.9116821289062,
+    "KillerName": "Player11",
+    "TurretKilled": "Turret_TOrder_L0_P3_3795288474_0"
+   },
+   {
+    "Assisters": [
+     "Player13",
+     "Player15"
+    ],
+    "EventID": 38,
+    "EventName": "ChampionKill",
+    "EventTime": 659.6302490234375,
+    "KillerName": "Player14",
+    "VictimName": "트린장로"
+   },
+   {
+    "Assisters": [
+     "Player17"
+    ],
+    "EventID": 39,
+    "EventName": "ChampionKill",
+    "EventTime": 667.69287109375,
+    "KillerName": "Player18",
+    "VictimName": "Player12"
+   },
+   {
+    "Assisters": [],
+    "EventID": 40,
+    "EventName": "ChampionKill",
+    "EventTime": 708.7911987304688,
+    "KillerName": "Player15",
+    "VictimName": "Player18"
+   },
+   {
+    "Assisters": [
+     "Player10",
+     "Player14"
+    ],
+    "EventID": 41,
+    "EventName": "ChampionKill",
+    "EventTime": 735.5153198242188,
+    "KillerName": "Player15",
+    "VictimName": "Player11"
+   },
+   {
+    "Assisters": [],
+    "EventID": 42,
+    "EventName": "ChampionKill",
+    "EventTime": 742.3053588867188,
+    "KillerName": "Player10",
+    "VictimName": "Player16"
+   },
+   {
+    "Assisters": [],
+    "EventID": 43,
+    "EventName": "ChampionKill",
+    "EventTime": 745.0247192382812,
+    "KillerName": "트린장로",
+    "VictimName": "Player13"
+   },
+   {
+    "Assisters": [
+     "Player12",
+     "Player14"
+    ],
+    "EventID": 44,
+    "EventName": "TurretKilled",
+    "EventTime": 749.1722412109375,
+    "KillerName": "Player10",
+    "TurretKilled": "Turret_TChaos_L1_P3_2254202041_0"
+   },
+   {
+    "Assisters": [],
+    "EventID": 45,
+    "EventName": "TurretKilled",
+    "EventTime": 750.409423828125,
+    "KillerName": "트린장로",
+    "TurretKilled": "Turret_TOrder_L0_P2_3812066093_0"
+   },
+   {
+    "Assisters": [],
+    "EventID": 46,
+    "EventName": "TurretKilled",
+    "EventTime": 765.6663818359375,
+    "KillerName": "트린장로",
+    "TurretKilled": "Turret_TOrder_L0_P1_3761733236_0"
+   },
+   {
+    "Assisters": [
+     "Player10",
+     "Player14"
+    ],
+    "EventID": 47,
+    "EventName": "ChampionKill",
+    "EventTime": 781.6012573242188,
+    "KillerName": "Player13",
+    "VictimName": "트린장로"
+   },
+   {
+    "Assisters": [],
+    "DragonType": "Hextech",
+    "EventID": 48,
+    "EventName": "DragonKill",
+    "EventTime": 784.4060668945312,
+    "KillerName": "Player12",
+    "Stolen": "False"
+   },
+   {
+    "Assisters": [],
+    "EventID": 49,
+    "EventName": "ChampionKill",
+    "EventTime": 795.6990356445312,
+    "KillerName": "Player11",
+    "VictimName": "Player12"
+   },
+   {
+    "Assisters": [],
+    "EventID": 50,
+    "EventName": "TurretKilled",
+    "EventTime": 802.0880737304688,
+    "KillerName": "Player16",
+    "TurretKilled": "Turret_TOrder_L1_P3_1242677625_0"
+   },
+   {
+    "Assisters": [],
+    "EventID": 51,
+    "EventName": "ChampionKill",
+    "EventTime": 823.56884765625,
+    "KillerName": "Player11",
+    "VictimName": "Player10"
+   },
+   {
+    "Assisters": [
+     "Player17",
+     "Player16"
+    ],
+    "EventID": 52,
+    "EventName": "ChampionKill",
+    "EventTime": 828.5103759765625,
+    "KillerName": "Player18",
+    "VictimName": "Player15"
+   },
+   {
+    "Assisters": [
+     "Player16",
+     "Player18"
+    ],
+    "EventID": 53,
+    "EventName": "ChampionKill",
+    "EventTime": 830.7601928710938,
+    "KillerName": "Player17",
+    "VictimName": "Player14"
+   },
+   {
+    "Assisters": [],
+    "EventID": 54,
+    "EventName": "ChampionKill",
+    "EventTime": 841.6061401367188,
+    "KillerName": "트린장로",
+    "VictimName": "Player13"
+   },
+   {
+    "Assisters": [
+     "Player11",
+     "Player16"
+    ],
+    "EventID": 55,
+    "EventName": "TurretKilled",
+    "EventTime": 850.27783203125,
+    "KillerName": "Player18",
+    "TurretKilled": "Turret_TOrder_L1_P2_1225900006_0"
+   },
+   {
+    "Assisters": [],
+    "EventID": 56,
+    "EventName": "TurretKilled",
+    "EventTime": 867.9658203125,
+    "KillerName": "트린장로",
+    "TurretKilled": "Turret_TOrder_L2_P2_1526764315_0"
+   },
+   {
+    "Assisters": [
+     "Player13",
+     "Player14"
+    ],
+    "EventID": 57,
+    "EventName": "ChampionKill",
+    "EventTime": 879.8089599609375,
+    "KillerName": "Player15",
+    "VictimName": "트린장로"
+   }
+  ]
+ },
+ "gameData": {
+  "gameTime": 881.45361328125,
+  "gameMode": "SWIFTPLAY"
+ }
+}

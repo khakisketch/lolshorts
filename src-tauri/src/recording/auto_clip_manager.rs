@@ -1137,8 +1137,33 @@ impl AutoClipManager {
             return None;
         }
 
-        // Find highest priority event safely
-        let primary_event = events.iter().max_by_key(|e| e.trigger.priority())?;
+        // 대표 이벤트를 고른다.
+        //
+        // 예전에는 `max_by_key(priority)` 로 트리거만 고르고, 정작 메타데이터는
+        // `window.events[0]`(= 시간순 첫 이벤트)에서 뽑았다. 둘이 다른 이벤트를
+        // 가리키는 것이다. 게다가 `max_by_key` 는 동점일 때 **마지막** 원소를
+        // 돌려주는데 킬·포탑·데스가 전부 우선순위 1이라 동점이 흔하다.
+        //
+        // 실게임 한 판에서 실제로 이렇게 깨졌다:
+        //   내 킬 + 포탑  -> `turret_kill` (15점, 정상은 킬 25점)
+        //   내 킬 + 데스  -> `Death`       (10점)
+        // 훅 자막도 「포탑」·「죽는 장면」으로 나갔다.
+        //
+        // 이제 우선순위가 같으면 **하이라이트 기본점**으로 가른다(킬 25 > 포탑 15 >
+        // 데스 10). 진짜 동점이면 먼저 일어난 쪽이 이긴다 — 그게 창의 앵커다.
+        let primary_index = {
+            let mut best_index = 0usize;
+            let mut best_rank = window_rank(&events[0]);
+            for (index, queued) in events.iter().enumerate().skip(1) {
+                let rank = window_rank(queued);
+                if rank > best_rank {
+                    best_rank = rank;
+                    best_index = index;
+                }
+            }
+            best_index
+        };
+        let primary_event = &events[primary_index];
         let priority = primary_event.trigger.priority();
 
         // Calculate time range with NaN-safe comparison
@@ -1166,9 +1191,20 @@ impl AutoClipManager {
             .map(|e| e.received_wall_secs)
             .fold(f64::NEG_INFINITY, f64::max);
 
+        // 대표 이벤트를 맨 앞에 둔다 — 소비하는 쪽(`save_merged_clip`)이 `events[0]` 을
+        // 대표로 읽으므로, 여기서 순서를 맞춰 두면 그 계약이 구조적으로 성립한다.
+        // 나머지는 원래(시간) 순서를 유지한다.
+        let mut ordered_events = Vec::with_capacity(events.len());
+        ordered_events.push(primary_event.event.clone());
+        for (index, queued) in events.iter().enumerate() {
+            if index != primary_index {
+                ordered_events.push(queued.event.clone());
+            }
+        }
+
         Some(EventWindow {
             primary_trigger: primary_event.trigger.clone(),
-            events: events.iter().map(|e| e.event.clone()).collect(),
+            events: ordered_events,
             start_time: start_time as f32,
             end_time: end_time as f32,
             priority,
@@ -1684,14 +1720,42 @@ impl AutoClipManager {
                 None
             };
 
-            // 점수는 이벤트에 실려 온 그 순간의 상황으로 낸다. 상황을 못 찍었으면
-            // (게임 상태 캐시가 비어 있었던 경우) 배수 없이 종류 기본점만 나온다 —
-            // 그래도 `priority` 5단계보다는 촘촘하다.
-            let moment = event.moment.clone().unwrap_or_default();
+            // 점수는 이벤트에 실려 온 그 순간의 상황으로 낸다.
+            //
+            // **상황이 안 실려 오면 큰 소리로 알린다.** 실게임 한 판에서 클립 22개가
+            // 전부 `score_reasons=[]` 였고 점수가 소수점까지 기본점과 일치했다 —
+            // 즉 배수가 하나도 안 걸렸는데, 그게 조용해서 산출물을 열어보기 전까지
+            // 아무도 몰랐다. 이 앱의 유일한 차별점("체력 8%에서 펜타킬")이 여기서
+            // 죽으면 훅 자막도 제목만 남는다. 조용히 기본점으로 떨어지지 않는다.
+            let moment = match event.moment.clone() {
+                Some(moment) => moment,
+                None => {
+                    warn!(
+                        "클립 {}: 그 순간의 상황이 전달되지 않았습니다 — 점수가 종류 기본점만 \
+                         남고 훅 자막에 이유가 빠집니다 (trigger={:?}, event={})",
+                        clip_id, trigger, event.event_name
+                    );
+                    Default::default()
+                }
+            };
+
             let score = crate::recording::highlight_score::score(
                 trigger_to_highlight_kind(trigger, event),
                 &moment,
             );
+
+            if score.reasons.is_empty() {
+                debug!(
+                    "클립 {}: 상황 이유 없음 (체력={:?}, 어시={:?}, 생존={:?}v{:?})",
+                    clip_id,
+                    moment.my_health_ratio,
+                    moment.assist_count,
+                    moment.allies_alive,
+                    moment.enemies_alive
+                );
+            } else {
+                info!("클립 {} 점수 {:.1} — {:?}", clip_id, score.value, score.reasons);
+            }
 
             let metadata = ClipMetadata {
                 file_path: clip_path.to_string_lossy().to_string(),
@@ -1819,6 +1883,19 @@ fn build_event_data(trigger: &EventTrigger, event: &GameEvent, priority: u8) -> 
 struct ClipWindow {
     pre_duration: u32,  // Seconds before event
     post_duration: u32, // Seconds after event
+}
+
+/// 병합 창의 **대표 이벤트**를 고르는 순위 — 큰 쪽이 이긴다.
+///
+/// 1순위는 `priority`(설정의 우선순위 문턱과 같은 눈금이라 이걸 먼저 봐야 한다).
+/// 같으면 하이라이트 **기본점**으로 가른다 — 킬·포탑·데스가 전부 우선순위 1이라
+/// 동점이 흔한데, 그 셋은 볼 가치가 전혀 다르다(25 / 15 / 10).
+///
+/// `base()` 는 `f64` 라 `Ord` 가 없으므로 0.01 단위 정수로 옮긴다. 표의 값이 전부
+/// 소수점 없는 정수라 정보 손실이 없다.
+fn window_rank(queued: &QueuedEvent) -> (u8, i64) {
+    let base = trigger_to_highlight_kind(&queued.trigger, &queued.event).base();
+    (queued.trigger.priority(), (base * 100.0) as i64)
 }
 
 /// 이 트리거를 담기로 되어 있는가 — 트리거 하나와 토글 하나의 대응표.
@@ -2206,6 +2283,91 @@ mod tests {
             storage,
             Arc::new(TokioRwLock::new(settings)),
         )
+    }
+
+    /// 병합 라벨링 회귀 — 킬이 포탑·데스로 둔갑하면 안 된다.
+    ///
+    /// 실게임 한 판에서 실제로 이렇게 나왔다:
+    ///   `merged_433_445` 내 킬 + 포탑 -> `turret_kill` 15점 (정상은 킬 25점)
+    ///   `merged_745_750` 내 킬 + 포탑 -> `turret_kill` 15점
+    ///   `merged_645_659` 내 킬 + 데스 -> `Death`       10점
+    ///
+    /// 원인은 둘이었다. ① `max_by_key` 가 동점에서 **마지막**을 돌려주는데 킬·포탑·
+    /// 데스가 전부 우선순위 1이다. ② 트리거는 그렇게 고르고 메타데이터는
+    /// `events[0]`(시간순 첫)에서 뽑아 서로 다른 이벤트를 가리켰다.
+    #[tokio::test]
+    async fn a_kill_merged_with_a_turret_stays_a_kill() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+        let manager =
+            manager_with_settings(temp_dir.path(), storage, RecordingSettings::default()).await;
+
+        // 킬이 먼저, 포탑이 나중 — 예전에는 나중 것(포탑)이 대표가 됐다.
+        let events = vec![
+            queued_at(EventTrigger::ChampionKill, 433.0, 1_433.0),
+            queued_at(EventTrigger::TurretKill, 445.0, 1_445.0),
+        ];
+
+        let window = manager.merge_events(&events).expect("window");
+        assert_eq!(window.primary_trigger, EventTrigger::ChampionKill);
+        // 대표 이벤트가 맨 앞에 와야 소비하는 쪽(`events[0]`)이 같은 것을 본다.
+        assert_eq!(window.events[0].event_time, 433.0);
+    }
+
+    #[tokio::test]
+    async fn a_kill_merged_with_a_death_stays_a_kill() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+        let manager =
+            manager_with_settings(temp_dir.path(), storage, RecordingSettings::default()).await;
+
+        let events = vec![
+            queued_at(EventTrigger::ChampionKill, 645.0, 1_645.0),
+            queued_at(EventTrigger::Death, 659.0, 1_659.0),
+        ];
+
+        let window = manager.merge_events(&events).expect("window");
+        assert_eq!(window.primary_trigger, EventTrigger::ChampionKill);
+        assert_eq!(window.events[0].event_time, 645.0);
+    }
+
+    /// 우선순위가 다르면 그쪽이 먼저다 — 기본점 타이브레이크가 우선순위를 덮으면 안 된다.
+    #[tokio::test]
+    async fn a_higher_priority_trigger_still_wins_over_a_higher_base_score() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+        let manager =
+            manager_with_settings(temp_dir.path(), storage, RecordingSettings::default()).await;
+
+        // 스틸(우선순위 4)이 킬(1)을 이겨야 한다.
+        let events = vec![
+            queued_at(EventTrigger::ChampionKill, 100.0, 1_100.0),
+            queued_at(EventTrigger::Steal, 105.0, 1_105.0),
+        ];
+
+        let window = manager.merge_events(&events).expect("window");
+        assert_eq!(window.primary_trigger, EventTrigger::Steal);
+        assert_eq!(window.events[0].event_time, 105.0);
+        assert_eq!(window.priority, 4);
+    }
+
+    /// 진짜 동점(같은 종류)이면 먼저 일어난 쪽이 창의 앵커다.
+    #[tokio::test]
+    async fn a_true_tie_keeps_the_earlier_event_as_primary() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+        let manager =
+            manager_with_settings(temp_dir.path(), storage, RecordingSettings::default()).await;
+
+        let events = vec![
+            queued_at(EventTrigger::ChampionKill, 200.0, 1_200.0),
+            queued_at(EventTrigger::ChampionKill, 205.0, 1_205.0),
+        ];
+
+        let window = manager.merge_events(&events).expect("window");
+        assert_eq!(window.events[0].event_time, 200.0);
+        // 나머지도 잃지 않는다.
+        assert_eq!(window.events.len(), 2);
     }
 
     /// 강등 규칙 회귀 — 하위 상황을 끈다고 그 순간이 사라지면 안 된다.

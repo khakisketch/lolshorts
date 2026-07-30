@@ -2,6 +2,18 @@ import fs from 'fs';
 import path from 'path';
 import { CAPTURE_SCENES, evaluateCoverage } from './captureCoverage';
 
+/**
+ * Rust 소스를 읽되 줄바꿈을 LF 로 정규화한다.
+ *
+ * 이 저장소는 git 이 체크아웃 시 CRLF 로 바꾸므로 워킹 카피의 줄바꿈은 환경마다
+ * 다르다. 개행 표식으로 블록을 잘라내는 파서가 그걸 그대로 맞으면, 코드는
+ * 멀쩡한데 테스트만 "블록의 끝을 찾지 못했습니다" 로 죽는다 — 실제로 한 번
+ * 그렇게 깨졌다.
+ */
+function readRustSource(filePath: string): string {
+  return fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n');
+}
+
 const LIVE_CLIENT_RS = path.resolve(
   __dirname,
   '../../../src-tauri/src/recording/live_client.rs',
@@ -12,7 +24,7 @@ const LIVE_CLIENT_RS = path.resolve(
  * 오늘 두 번 그 일이 났고, 두 번 다 한 판 분량의 클립을 잃었다.
  */
 describe('captureCoverage (백엔드 미러)', () => {
-  const source = fs.readFileSync(LIVE_CLIENT_RS, 'utf8');
+  const source = readRustSource(LIVE_CLIENT_RS, 'utf8');
 
   /** `EventTrigger::priority()` 본문에서 `Variant => N` 을 뽑는다. */
   const backendPriorities = (() => {

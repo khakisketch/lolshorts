@@ -47,7 +47,6 @@ import {
 } from "./highlightPreset";
 import {
   BITRATE_MBPS,
-  clipLengthSpecs,
   enabledScenes,
   FRAME_RATE_FPS,
   megabytesPerMinute,
@@ -366,39 +365,6 @@ function SettingRow({
   );
 }
 
-interface SpecTableProps {
-  testId: string;
-  rows: readonly { label: string; value: string }[];
-}
-
-/**
- * 고른 프리셋이 실제로 어떤 값이 되는지 보여주는 표.
- *
- * 여기 들어가는 값은 전부 백엔드에 대응하는 근거가 있어야 한다 — 근거 없는 값을
- * 넣지 않는 이유는 `settingSpecs.ts` 상단에 적어 두었다(해상도 사건).
- */
-function SpecTable({ testId, rows }: SpecTableProps) {
-  if (rows.length === 0) return null;
-  return (
-    <dl
-      data-testid={testId}
-      className="mt-4 divide-y divide-white/5 border-t border-white/5 text-sm"
-    >
-      {rows.map((row) => (
-        <div
-          key={row.label}
-          className="flex items-baseline justify-between gap-4 py-2"
-        >
-          <dt className="text-muted-foreground" style={{ wordBreak: "keep-all" }}>
-            {row.label}
-          </dt>
-          <dd className="shrink-0 font-medium tabular-nums">{row.value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
 interface BasicCardProps {
   testId: string;
   icon: ReactNode;
@@ -638,13 +604,16 @@ export function BasicSettings({
           </div>
         )}
 
-        <SpecTable
-          testId="highlights-specs"
-          rows={clipLengthSpecs(settings.clip_timing).map((row) => ({
-            label: t(`settings.basic.highlights.clipLength.${row.key}`),
-            value: t("settings.basic.seconds", { count: Number(row.value) }),
-          }))}
-        />
+        {/*
+          장면 길이 표를 **일부러 두지 않는다.**
+
+          예전에는 다섯 줄(킬·멀티킬·스틸·죽는 장면·게임 끝)의 초 단위 숫자를
+          여기 보여줬다. 그런데 그중 바꿀 수 있는 것은 셋뿐이고(고급 설정의
+          슬라이더), 죽는 장면과 게임 끝은 숫자만 보이고 어떤 UI로도 바꿀 수
+          없었다. 사용자가 조작할 수 없는 다섯 개의 숫자는 정보가 아니라 소음이다.
+
+          길이가 궁금하거나 바꾸고 싶으면 고급 설정 안의 슬라이더에서 다룬다.
+        */}
       </BasicCard>)}
 
       {/* 2. 화질 */}

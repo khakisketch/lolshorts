@@ -15,12 +15,7 @@
  * 백엔드 표와 어긋나면 `settingSpecs.test.ts` 가 Rust 소스를 직접 읽어 깨뜨린다.
  */
 
-import type {
-  BitratePreset,
-  ClipTimingSettings,
-  EventFilterSettings,
-  FrameRate,
-} from "@/types";
+import type { BitratePreset, EventFilterSettings, FrameRate } from "@/types";
 
 /**
  * `BitratePreset::to_bitrate_bps()` 미러 (`settings/models.rs`).
@@ -52,62 +47,6 @@ export const FRAME_RATE_FPS: Record<FrameRate, number> = {
  */
 export function megabytesPerMinute(bitrateMbps: number): number {
   return Math.round((bitrateMbps / 8) * 60);
-}
-
-/**
- * `AutoClipManager::calculate_clip_window` 가 설정에서 찾아보는 버킷
- * (`src-tauri/src/recording/auto_clip_manager.rs`).
- *
- * 설정 파일의 `event_timings` 에는 이 다섯 이름으로만 키가 붙는다. 나머지
- * 이벤트(에이스·바론·아웃플레이…)는 설정으로 조절할 수 없고 이벤트가 스스로
- * 권장하는 길이를 쓴다 — 그래서 이 표는 "다섯 종류의 길이" 가 아니라
- * "설정으로 바꿀 수 있는 다섯 가지" 다.
- */
-export const CLIP_WINDOW_BUCKETS = [
-  "kill",
-  "multikill",
-  "steal",
-  "death",
-  "game_end",
-] as const;
-
-export type ClipWindowBucket = (typeof CLIP_WINDOW_BUCKETS)[number];
-
-/**
- * 설정에 항목이 없을 때 백엔드가 쓰는 길이 —
- * `EventTrigger::pre_duration()/post_duration()` (`live_client.rs`) 미러.
- *
- * **이 표가 없던 동안 화면은 거짓말을 하고 있었다.** 프론트는 항목이 없으면
- * `default_pre + default_post`(=13초) 라고 적었는데, 백엔드는 그 경로에서
- * 이벤트별 설계값을 쓴다. 그래서 「게임 끝」은 화면상 13초, 실제로는 40초였다.
- * 승리 화면을 길게 담으려고 넣은 설계값이 화면에는 반영되지 않은 것이다.
- *
- * 값이 어긋나면 `settingSpecs.test.ts` 가 Rust 소스를 직접 읽어 깨뜨린다.
- */
-export const TRIGGER_DEFAULT_SECONDS: Record<ClipWindowBucket, number> = {
-  kill: 10 + 3,
-  multikill: 15 + 5,
-  steal: 20 + 3,
-  death: 8 + 3,
-  game_end: 30 + 10,
-};
-
-/**
- * `AutoClipManager::calculate_clip_window` 미러 — 설정에 그 이벤트 항목이 있으면
- * 그 값을, 없으면 이벤트가 스스로 권장하는 길이를 쓴다.
- *
- * `default_pre_duration`/`default_post_duration` 은 **여기에 쓰이지 않는다.**
- * 백엔드가 그 두 값을 이 경로에서 읽지 않기 때문이다.
- */
-export function clipWindowSeconds(
-  timing: ClipTimingSettings,
-  bucket: ClipWindowBucket,
-): number {
-  const specific = timing.event_timings?.[bucket];
-  if (specific) {
-    return specific.pre_duration + specific.post_duration;
-  }
-  return TRIGGER_DEFAULT_SECONDS[bucket];
 }
 
 /**
@@ -187,13 +126,19 @@ export function qualitySpecs(video: {
   return rows;
 }
 
-/** 장면 카드 아래에 붙는 표 — 길이 버킷만. 장면 목록은 별도로 렌더한다. */
-export function clipLengthSpecs(timing: ClipTimingSettings): SpecRow[] {
-  return CLIP_WINDOW_BUCKETS.map((bucket) => ({
-    key: bucket,
-    value: `${clipWindowSeconds(timing, bucket)}`,
-  }));
-}
+/*
+ * 클립 길이 표(`clipLengthSpecs`)는 **일부러 없앴다.**
+ *
+ * 기본 화면에 다섯 버킷의 초 단위 숫자를 보여줬는데, 그중 사용자가 바꿀 수 있는
+ * 것은 셋뿐이었다(고급 설정의 슬라이더 — 킬·멀티킬·스틸). 죽는 장면과 게임 끝은
+ * 숫자만 보이고 어떤 UI로도 바꿀 수 없었다. 조작할 수 없는 숫자 다섯 줄은 정보가
+ * 아니라 소음이라, 표를 지우고 길이는 고급 설정에서만 다루기로 했다.
+ *
+ * 되살리려면 `TRIGGER_DEFAULT_SECONDS` 미러와 그 드리프트 테스트도 함께 되살려야
+ * 한다 — 백엔드는 설정에 키가 없는 버킷에서 `EventTrigger` 설계값으로 폴백하므로,
+ * 미러 없이 숫자를 적으면 화면이 다시 거짓말을 시작한다(한 번 그렇게 깨졌다:
+ * 화면 「게임 끝 13초」, 실제 산출물 40초).
+ */
 
 /** 화면이 실제로 읽는 필터 부분집합. */
 export type SceneFilter = Pick<EventFilterSettings, never> &

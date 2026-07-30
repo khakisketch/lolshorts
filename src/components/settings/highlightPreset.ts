@@ -81,7 +81,7 @@ export const EVENT_FILTER_DEFAULTS: CanonicalEventFilter = {
   record_elder: true,
   record_herald: true,
   record_turret: false,
-  record_inhibitor: true,
+  record_inhibitor: false,
   record_nexus: true,
   record_ace: true,
   record_game_end: true,
