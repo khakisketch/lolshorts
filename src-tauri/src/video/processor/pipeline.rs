@@ -14,7 +14,10 @@ use tracing::{info, warn};
 const DEFAULT_OUTPUT_FPS: u32 = 60;
 
 use super::super::{execute_ffmpeg_command, Result, VideoError};
-use super::types::{ClipSpec, ComposeOptions, LoudnessInfo, TransitionType, VideoEncoder};
+use super::effects::{caption_font_clause, escape_ffmpeg_text};
+use super::types::{
+    CaptionSpec, ClipSpec, ComposeOptions, LoudnessInfo, TransitionType, VideoEncoder,
+};
 use crate::utils::ffmpeg::{get_ffmpeg_path, get_ffprobe_path};
 use crate::utils::process::command_output_with_timeout;
 
@@ -1239,6 +1242,68 @@ impl VideoProcessor {
     /// `effective_durations` is consulted (a) when `transition` is `Some` to
     /// place xfade offsets, and (b) to bound synthesized silence for any silent
     /// clip — callers MUST populate it whenever `has_audio` contains a `false`.
+    /// 클립 앞부분에 띄울 훅 자막을 drawtext 체인으로.
+    ///
+    /// # 왜 자막인가
+    ///
+    /// 지금까지 산출물은 세로로 자른 게임 화면 그 자체였다. 그건 쇼츠가 아니라
+    /// **세로 상자에 든 클립**이다. 경쟁 서비스가 다 넣는 자막·훅 문구가 하나도
+    /// 없었고(7개 중 0개), 처음 3초에 이유를 못 주면 시청자는 넘긴다.
+    ///
+    /// 그런데 우리는 그 이유를 **확언할 수 있는** 유일한 앱이다 — 화면 픽셀을
+    /// 읽어 추정하는 대신 Live Client Data API 로 그 순간의 체력·생존 인원을
+    /// 직접 받는다. "체력 8% · 1v3" 은 그렇게 나온 값이고, 지금까지 저장만 되고
+    /// 화면에도 영상에도 한 번도 나오지 않았다.
+    ///
+    /// # 위치와 escaping
+    ///
+    /// 세로 영상 위쪽 1/8 지점에 놓는다 — YouTube Shorts 는 아래쪽과 오른쪽에
+    /// 자체 UI(설명·좋아요·구독)를 덮으므로 거기 글자를 두면 가려진다.
+    ///
+    /// 표현식 안의 쉼표는 `\,` 로 이스케이프한다. 필터그래프에서 쉼표는 필터
+    /// 구분자라, 안 하면 `enable='lt(t` 와 `2.2)'` 두 필터로 쪼개져 파싱이 깨진다.
+    /// (같은 규칙을 `generate_event_zoom_filter` 가 이미 픽셀로 검증했다.)
+    pub(super) fn build_caption_filter(spec: &CaptionSpec, _width: u32, height: u32) -> String {
+        // 1080x1920 기준 제목 64px. 다른 해상도에서도 같은 비율로 보이도록 높이에 건다.
+        let title_size = (height as f64 * 0.033).round().max(18.0) as u32;
+        let detail_size = (height as f64 * 0.022).round().max(14.0) as u32;
+        let top = (height as f64 * 0.11).round() as u32;
+
+        let font = caption_font_clause();
+        let font_clause = if font.is_empty() {
+            String::new()
+        } else {
+            format!("{font}:")
+        };
+        // `expansion=none` 이 없으면 drawtext 는 텍스트 안의 `%` 와 `{}` 를
+        // strftime / 표현식 확장으로 해석한다. 우리 자막에는 그게 반드시 들어온다 —
+        // 가장 값진 이유가 하필 "체력 8%" 다.
+        //
+        // 이 결함은 문자열 단언으로는 잡히지 않았다. 실제로 렌더해 보고서야
+        // 드러났고, 그마저도 조용하다: ffmpeg 는 `Stray % near ''` 를 155번 찍은 뒤
+        // **exit 0 으로 끝난다**. 글자만 빠진 정상 영상이 나온다.
+        let enable = format!(
+            "expansion=none:enable='lt(t\\,{:.2})'",
+            spec.duration_secs
+        );
+
+        let mut chain = vec![format!(
+            "drawtext={font_clause}text='{text}':x=(w-text_w)/2:y={top}:fontsize={title_size}:fontcolor=white:borderw=4:bordercolor=black@0.85:{enable}",
+            text = escape_ffmpeg_text(&spec.title),
+        )];
+
+        if let Some(detail) = spec.detail.as_ref().filter(|d| !d.trim().is_empty()) {
+            // 제목 바로 아래. 제목 글자 높이 + 여백만큼 내린다.
+            let detail_top = top + (title_size as f64 * 1.35).round() as u32;
+            chain.push(format!(
+                "drawtext={font_clause}text='{text}':x=(w-text_w)/2:y={detail_top}:fontsize={detail_size}:fontcolor=0x4DE3E1:borderw=3:bordercolor=black@0.85:{enable}",
+                text = escape_ffmpeg_text(detail),
+            ));
+        }
+
+        chain.join(",")
+    }
+
     // The parameters are all distinct, independently-sourced scalars/slices that the
     // caller assembles from different places (ComposeOptions, per-clip probes, the
     // trim plan). Bundling them into a struct here would only move the same argument
@@ -1253,6 +1318,7 @@ impl VideoProcessor {
         effective_durations: &[f64],
         has_audio: &[bool],
         event_times: Option<&[f64]>,
+        captions: Option<&[Option<CaptionSpec>]>,
     ) -> String {
         let base_vf = format!(
             "scale=-1:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,format=yuv420p,fps={fps}",
@@ -1265,7 +1331,14 @@ impl VideoProcessor {
 
         let mut parts: Vec<String> = Vec::new();
         for i in 0..n {
-            parts.push(format!("[{i}:v]{base_vf}[v{i}]"));
+            // 훅 자막은 스케일/크롭 **뒤에** 붙는다. 앞에 붙이면 소스 해상도
+            // 기준으로 그려진 글자가 크롭에 잘려 나간다.
+            let caption = captions
+                .and_then(|c| c.get(i))
+                .and_then(|c| c.as_ref())
+                .map(|spec| format!(",{}", Self::build_caption_filter(spec, width, height)))
+                .unwrap_or_default();
+            parts.push(format!("[{i}:v]{base_vf}{caption}[v{i}]"));
             if has_audio.get(i).copied().unwrap_or(true) {
                 parts.push(format!("[{i}:a]{base_af}[a{i}]"));
             } else {
@@ -1511,6 +1584,7 @@ impl VideoProcessor {
             &effective_durations,
             &has_audio,
             opts.event_times.as_deref(),
+            opts.captions.as_deref(),
         );
 
         // When normalizing we render to a temp file first, then loudnorm into
@@ -1731,7 +1805,7 @@ mod tests {
     #[test]
     fn build_compose_filtergraph_single_clip_hardcut() {
         let f =
-            VideoProcessor::build_compose_filtergraph(1, 1080, 1920, 60, None, &[], &[true], None);
+            VideoProcessor::build_compose_filtergraph(1, 1080, 1920, 60, None, &[], &[true], None, None);
         assert!(f.contains("[0:v]"), "{}", f);
         assert!(f.contains("crop=1080:1920"), "{}", f);
         assert!(f.contains("[outv]") && f.ends_with("[outa]"), "{}", f);
@@ -1753,6 +1827,7 @@ mod tests {
             &[],
             &[true, true, true],
             None,
+            None,
         );
         assert!(f.contains("concat=n=3:v=1:a=1[vc][ac]"), "{}", f);
         assert!(f.contains("[v0][a0][v1][a1][v2][a2]"), "{}", f);
@@ -1769,6 +1844,7 @@ mod tests {
             Some(("fade", 0.5)),
             &[5.0, 5.0],
             &[true, true],
+            None,
             None,
         );
         assert!(
@@ -1791,6 +1867,7 @@ mod tests {
             &[5.0, 5.0],
             &[true, true],
             None,
+            None,
         );
         assert!(f.contains("transition=slideleft"), "{}", f);
     }
@@ -1806,9 +1883,131 @@ mod tests {
             &[],
             &[true, true],
             Some(&[3.0]),
+            None,
         );
         assert!(f.contains("zoompan"), "{}", f);
         assert!(f.contains("fps=60"), "{}", f);
+    }
+
+    // ---- 훅 자막 ----
+
+
+    fn caption(title: &str, detail: Option<&str>) -> CaptionSpec {
+        CaptionSpec {
+            title: title.to_string(),
+            detail: detail.map(|d| d.to_string()),
+            duration_secs: 2.6,
+        }
+    }
+
+    #[test]
+    fn caption_is_drawn_after_the_crop_not_before() {
+        // 크롭 전에 그리면 소스 해상도 기준으로 놓인 글자가 잘려 나간다.
+        let f = VideoProcessor::build_compose_filtergraph(
+            1,
+            1080,
+            1920,
+            60,
+            None,
+            &[],
+            &[true],
+            None,
+            Some(&[Some(caption("펜타킬", Some("체력 8%")))]),
+        );
+
+        let crop = f.find("crop=1080:1920").expect("크롭이 있어야 한다");
+        let text = f.find("drawtext").expect("자막이 있어야 한다");
+        assert!(crop < text, "자막이 크롭보다 앞에 있다: {}", f);
+    }
+
+    /// **실제로 렌더해 보고서야 드러난 결함.**
+    ///
+    /// drawtext 는 텍스트 안의 `%` 를 strftime 지시자로 해석한다. 우리 자막에서
+    /// 가장 값진 이유가 하필 "체력 8%" 라서, 클러치 클립마다 둘째 줄이 통째로
+    /// 사라지고 있었다 — 그런데 ffmpeg 는 `Stray % near ''` 를 경고로만 찍고
+    /// **exit 0** 으로 끝난다. 산출물은 정상이고 길이도 맞고 게이트도 초록이다.
+    #[test]
+    fn caption_text_is_never_treated_as_a_format_string() {
+        let f = VideoProcessor::build_caption_filter(
+            &caption("킬", Some("체력 8%")),
+            1080,
+            1920,
+        );
+        assert!(
+            f.contains("expansion=none"),
+            "`%` 가 들어간 자막이 조용히 사라진다: {}",
+            f
+        );
+        // 확장을 끈 뒤에도 `%` 는 텍스트에 그대로 남아야 한다(이스케이프로 도망가지 않게).
+        assert!(f.contains("체력 8%"), "{}", f);
+    }
+
+    #[test]
+    fn caption_escapes_the_comma_inside_its_enable_expression() {
+        // 필터그래프에서 쉼표는 필터 구분자다. `enable='lt(t,2.6)'` 를 그대로 두면
+        // `enable='lt(t` 와 `2.6)'` 두 필터로 쪼개져 ffmpeg 가 파싱에 실패한다.
+        let f = VideoProcessor::build_caption_filter(&caption("킬", None), 1080, 1920);
+        assert!(f.contains(r"enable='lt(t\,2.60)'"), "{}", f);
+    }
+
+    #[test]
+    fn caption_sits_in_the_top_area_where_shorts_ui_does_not_cover_it() {
+        // YouTube Shorts 는 아래쪽·오른쪽을 자체 UI(설명·좋아요·구독)로 덮는다.
+        let f = VideoProcessor::build_caption_filter(&caption("바론", None), 1080, 1920);
+        let y: u32 = f
+            .split(":y=")
+            .nth(1)
+            .and_then(|s| s.split(':').next())
+            .and_then(|s| s.parse().ok())
+            .expect("y 좌표를 읽을 수 있어야 한다");
+        assert!((100..640).contains(&y), "y={} 는 위쪽 1/3 밖이다", y);
+    }
+
+    #[test]
+    fn caption_detail_goes_below_the_title_not_on_top_of_it() {
+        let f = VideoProcessor::build_caption_filter(
+            &caption("펜타킬", Some("혼자서 · 1대3")),
+            1080,
+            1920,
+        );
+        let ys: Vec<u32> = f
+            .split(":y=")
+            .skip(1)
+            .filter_map(|s| s.split(':').next()?.parse().ok())
+            .collect();
+        assert_eq!(ys.len(), 2, "제목과 설명 두 줄이어야 한다: {}", f);
+        assert!(ys[1] > ys[0], "설명이 제목 위에 겹친다: {:?}", ys);
+    }
+
+    #[test]
+    fn a_clip_without_a_caption_gets_no_drawtext() {
+        // 표에 없는 이벤트는 자막을 안 넣는다 — 코드값을 굽느니 비워 둔다.
+        let f = VideoProcessor::build_compose_filtergraph(
+            2,
+            1080,
+            1920,
+            60,
+            None,
+            &[],
+            &[true, true],
+            None,
+            Some(&[Some(caption("킬", None)), None]),
+        );
+        assert_eq!(f.matches("drawtext").count(), 1, "{}", f);
+        // 자막 없는 쪽 체인이 깨지지 않았는지.
+        assert!(f.contains("[v1]"), "{}", f);
+    }
+
+    #[test]
+    fn caption_text_is_escaped_against_filter_injection() {
+        // 챔피언 이름이나 사용자 문자열이 자막에 들어올 수 있는 경로를 막아 둔다.
+        let f = VideoProcessor::build_caption_filter(
+            &caption("a:b[c]", Some("d;e")),
+            1080,
+            1920,
+        );
+        assert!(f.contains(r"a\:b\[c\]"), "{}", f);
+        assert!(f.contains(r"d\;e"), "{}", f);
     }
 
     // ---- silent-clip handling: no [i:a] reference, synthesized silence ----
@@ -1824,6 +2023,7 @@ mod tests {
             None,
             &[5.0, 5.0],
             &[true, true],
+            None,
             None,
         );
         assert!(f.contains("[0:a]"), "audio clip keeps [0:a]: {}", f);
@@ -1847,6 +2047,7 @@ mod tests {
             None,
             &[5.0, 4.0],
             &[true, false],
+            None,
             None,
         );
         assert!(f.contains("[0:a]"), "audio clip keeps [0:a]: {}", f);
@@ -1885,6 +2086,7 @@ mod tests {
             &[3.0, 3.0],
             &[false, false],
             None,
+            None,
         );
         assert!(
             !f.contains("[0:a]") && !f.contains("[1:a]"),
@@ -1911,6 +2113,7 @@ mod tests {
             Some(("fade", 0.5)),
             &[5.0, 5.0],
             &[true, false],
+            None,
             None,
         );
         assert!(

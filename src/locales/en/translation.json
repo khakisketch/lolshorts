@@ -600,6 +600,10 @@
       "label": "Auto zoom on kill events",
       "experimental": "Experimental",
       "description": "Automatically zooms in at kill/event timestamps."
+    },
+    "hookCaption": {
+      "label": "Burn in scene captions",
+      "description": "Opens each scene with what happened — \"Pentakill · Solo · 8% HP\". Captions render in Korean."
     }
   },
   "results": {
@@ -2004,6 +2008,15 @@
       "errorTitle": "Error",
       "errorDesc": "Failed to generate support summary or copy it to the clipboard.",
       "disclaimer": "The support summary contains app version, connection state, system metrics, disk capacity, and diagnostic checks. It does NOT include passwords, OAuth tokens, refresh tokens, payment keys, private keys, private media, screenshots, or personal files."
+    }
+  },
+  "clip": {
+    "reason": {
+      "clutch": "{{percent}}% HP",
+      "solo": "Solo",
+      "outnumbered": "{{allies}}v{{enemies}}",
+      "lateGame": "Late game",
+      "matchPoint": "Match point"
     }
   },
   "events": {

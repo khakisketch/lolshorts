@@ -29,6 +29,26 @@ pub struct ComposeOptions {
     pub fps: Option<u32>,
     /// `Some(target_lufs)` applies a final 2-pass loudnorm to the composite.
     pub normalize_audio: Option<f64>,
+    /// 클립별 훅 자막. `clip_specs` 와 인덱스가 맞는다. `None` = 자막 없음.
+    ///
+    /// 각 클립의 **앞 몇 초** 동안 "왜 이 장면이 여기 있는지"를 한 줄로 띄운다
+    /// ("펜타킬 · 1v3 · 체력 8%"). 클립 단위로 넣는 이유는, 합친 뒤에 넣으면
+    /// 어느 구간이 어느 클립인지 계산해 `enable=between(...)` 을 손으로 맞춰야
+    /// 하는데 그 계산은 전환(xfade)이 붙는 순간 어긋나기 때문이다. 합치기 **전**
+    /// 각 입력에 걸면 `t` 가 그 클립 안에서의 시각이라 어긋날 여지가 없다.
+    #[allow(clippy::type_complexity)]
+    pub captions: Option<Vec<Option<CaptionSpec>>>,
+}
+
+/// 한 클립 위에 띄울 훅 자막.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaptionSpec {
+    /// 굵게 나갈 첫 줄 — 무슨 장면인가("펜타킬").
+    pub title: String,
+    /// 그 아래 작게 — 왜 볼 만한가("혼자서 · 1v3 · 체력 8%"). 없으면 제목만.
+    pub detail: Option<String>,
+    /// 클립 시작부터 몇 초 동안 보일지.
+    pub duration_secs: f64,
 }
 
 /// Types for video transitions and effects

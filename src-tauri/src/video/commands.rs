@@ -444,6 +444,9 @@ pub async fn compose_shorts_v2(
         event_times: None,
         fps: Some(60),
         normalize_audio: export_normalize_lufs(&state).await,
+        // 수동 편집기 내보내기 — 자막은 사용자가 캔버스로 직접 얹는다.
+        // 훅 자막은 자동 편집이 "왜 이 장면인지" 를 아는 경로에만 붙는다.
+        captions: None,
     };
 
     emit_export_progress(&app, 45.0);

@@ -176,8 +176,13 @@ impl RecordingSettings {
             return Ok(PathBuf::from(dir));
         }
 
+        // `needless_return` 오탐: clippy 는 아래 `cfg(not(test))` 블록을 보지 못한다.
+        // `return` 을 지우면 이 블록이 꼬리 표현식이 되어 그 뒤에 또 블록이 오므로
+        // 컴파일이 깨진다. 매번 clippy 출력에 한 줄이 남으면 "경고 0" 이라는 게이트
+        // 신호가 무의미해지므로 여기서 끈다.
         #[cfg(test)]
         {
+            #[allow(clippy::needless_return)]
             return Ok(test_config_dir());
         }
 

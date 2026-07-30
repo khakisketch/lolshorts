@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod caption;
 pub mod composer;
 pub mod processing;
 pub mod types;
@@ -40,6 +41,8 @@ mod tests {
             // 이 헬퍼의 테스트들은 `priority` 로 순서를 검증한다. 점수를 비워 두면
             // 선택기가 priority 폴백 경로를 타므로 그 검증이 그대로 유효하다.
             highlight_score: None,
+            event_offset_secs: None,
+            score_reasons: Vec::new(),
         }
     }
 
@@ -66,6 +69,7 @@ mod tests {
             audio_levels: AudioLevels::default(),
             allow_duplicates: false,
             enable_event_zoom: false,
+            enable_hook_captions: false,
         };
 
         let selected = composer.select_clips(&clips, &config).await.unwrap();
@@ -99,6 +103,7 @@ mod tests {
             audio_levels: AudioLevels::default(),
             allow_duplicates: false,
             enable_event_zoom: false,
+            enable_hook_captions: false,
         };
 
         let selected = composer.select_clips(&clips, &config).await.unwrap();
@@ -129,6 +134,7 @@ mod tests {
             audio_levels: AudioLevels::default(),
             allow_duplicates: false,
             enable_event_zoom: false,
+            enable_hook_captions: false,
         };
 
         let selected = composer.select_clips(&clips, &config).await.unwrap();
@@ -136,6 +142,58 @@ mod tests {
         assert_eq!(selected.len(), 2);
         assert!(selected.iter().any(|c| c.id == 1));
         assert!(selected.iter().any(|c| c.id == 3));
+    }
+
+    /// 줌(과 훅 자막)이 걸리는 시각이 **하이라이트 위**에 오는가.
+    ///
+    /// 예전에는 구간 중앙을 썼다. 클립마다 pre/post 가 다른데 하나의 규칙으로
+    /// 뭉갠 것이라, 게임 종료 클립(pre 30 / post 10)에서는 줌이 승리 순간이
+    /// 아니라 그 20초 전 아무 일 없는 지점에서 걸렸다.
+    #[test]
+    fn event_timeline_lands_on_the_highlight_not_the_middle() {
+        use crate::video::processor::types::ClipSpec;
+        use std::path::PathBuf;
+
+        let mut kill = create_test_clip(1, 1, 13.0, "Kill");
+        kill.event_offset_secs = Some(10.0); // pre 10 / post 3
+        let mut game_end = create_test_clip(2, 3, 40.0, "GameEnd");
+        game_end.event_offset_secs = Some(30.0); // pre 30 / post 10
+
+        let specs = vec![
+            ClipSpec {
+                path: PathBuf::from("a.mp4"),
+                trim_start: None,
+                trim_duration: None,
+            },
+            ClipSpec {
+                path: PathBuf::from("b.mp4"),
+                trim_start: Some(21.0),
+                trim_duration: Some(12.0),
+            },
+        ];
+
+        let times = AutoComposer::event_timeline(&specs, &[kill, game_end]);
+
+        // 첫 클립은 트림 없음 -> 그대로 10초.
+        assert!((times[0] - 10.0).abs() < 0.01, "{:?}", times);
+        // 둘째는 13초(첫 클립 길이) + (30 - 21) = 22초. 중앙 규칙이면 19초였다.
+        assert!((times[1] - 22.0).abs() < 0.01, "{:?}", times);
+    }
+
+    #[test]
+    fn event_timeline_falls_back_to_the_middle_for_older_clips() {
+        use crate::video::processor::types::ClipSpec;
+        use std::path::PathBuf;
+
+        // `event_offset_secs` 가 없는 예전 클립 — 예전 동작(구간 중앙)을 유지한다.
+        let clip = create_test_clip(1, 1, 12.0, "Kill");
+        let specs = vec![ClipSpec {
+            path: PathBuf::from("a.mp4"),
+            trim_start: None,
+            trim_duration: None,
+        }];
+
+        assert_eq!(AutoComposer::event_timeline(&specs, &[clip]), vec![6.0]);
     }
 
     #[test]

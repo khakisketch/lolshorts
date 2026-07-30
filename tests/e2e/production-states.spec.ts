@@ -31,26 +31,29 @@ test.describe("Production candidate browser states", () => {
   }, testInfo) => {
     const errors = collectUnexpectedErrors(page);
     const routes = [
-      { path: "/", assert: page.getByTestId("dashboard"), name: "dashboard" },
+      { path: "/", assert: page.getByTestId("home"), name: "home" },
       {
         path: "/settings",
         assert: page.getByTestId("settings"),
         name: "settings",
       },
+      // `/replays`·`/youtube` 는 결과의 탭으로 리다이렉트된다(옛 링크를 살려 두기
+      // 위해 경로만 남겼다). 그래서 **자기 화면이 아니라 결과가 떠야** 맞다 —
+      // 리다이렉트가 끊기면 여기가 먼저 깨진다.
       {
         path: "/replays",
-        assert: page.getByTestId("replays-page"),
-        name: "replays",
+        assert: page.getByTestId("results-page"),
+        name: "replays-redirect",
+      },
+      {
+        path: "/youtube",
+        assert: page.getByTestId("results-page"),
+        name: "youtube-redirect",
       },
       {
         path: "/auto-edit",
         assert: page.getByText(/Please login to access Auto-Edit/i),
         name: "auto-edit",
-      },
-      {
-        path: "/youtube",
-        assert: page.getByText(/Authentication Required/i),
-        name: "youtube-gated",
       },
     ];
 
@@ -75,6 +78,9 @@ test.describe("Production candidate browser states", () => {
     const settings = page.getByTestId("settings");
     await expect(settings).toBeVisible({ timeout: 30000 });
 
+    // 구독·라이선스는 「계정」 칸으로 내려갔다(설정이 2단 구조로 바뀌면서
+    // 항상 붙어 있던 푸터 카피가 사라졌다).
+    await settings.getByTestId("settings-nav-license").click();
     await settings.getByRole("button", { name: /Upgrade to PRO/i }).click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 10000 });
     await expect(
@@ -88,24 +94,26 @@ test.describe("Production candidate browser states", () => {
     expect(errors).toEqual([]);
   });
 
-  test("FREE user cannot open PRO YouTube workflow from local state alone", async ({
+  test("sharing is entered from results, not as its own gated screen", async ({
     page,
   }, testInfo) => {
+    // **의도적으로 바뀐 규칙이다.** 예전에는 `/youtube` 가 독립 화면이고 FREE 는
+    // "PRO Feature" 벽을 만났다. 지금은 업로드 자체가 로그인만 하면 무료이고
+    // (예약·일괄 업로드만 PRO), 공유는 결과 라이브러리 위에 뜨는 대화상자다.
+    // 그래서 이 테스트가 지키는 것은 PRO 벽이 아니라 **동선이 살아 있는가**다.
     const errors = collectUnexpectedErrors(page);
 
     await loginAsFreeUser(page);
     await page.goto(`${BASE_URL}/youtube`, { waitUntil: "domcontentloaded" });
 
-    await expect(page.getByText(/PRO Feature/i)).toBeVisible({
+    // 옛 경로는 죽지 않고 결과로 넘어간다.
+    await expect(page).toHaveURL(/\/results/);
+    await expect(page.getByTestId("results-page")).toBeVisible({
       timeout: 30000,
     });
-    await expect(page.getByText(/exclusive/i)).toBeVisible();
-    await expect(
-      page.locator("#main-content").getByRole("button", {
-        name: /Upgrade to PRO/i,
-      }),
-    ).toBeVisible();
-    await attachScreenshot(page, testInfo, "youtube-free-gate");
+    // 그리고 그 화면에서 막다른 길("PRO 전용")로 끝나지 않는다.
+    await expect(page.getByText(/PRO Feature/i)).toHaveCount(0);
+    await attachScreenshot(page, testInfo, "youtube-redirects-to-results");
 
     expect(errors).toEqual([]);
   });

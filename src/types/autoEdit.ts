@@ -75,6 +75,11 @@ export interface AutoEditConfig {
   // Experimental: auto zoom-in on kill/event timestamps. Backend defaults to
   // false (serde default) when omitted.
   enable_event_zoom?: boolean;
+  /**
+   * 각 클립 앞머리 훅 자막. 생략하면 백엔드가 **켜진 것으로** 본다
+   * (`#[serde(default = "default_true")]`) — 기본 결과물이 그대로 올릴 만해야 하므로.
+   */
+  enable_hook_captions?: boolean;
 }
 
 // ========================================================================

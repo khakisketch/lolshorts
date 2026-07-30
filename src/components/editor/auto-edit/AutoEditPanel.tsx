@@ -33,6 +33,7 @@ export function AutoEditPanel() {
     selectedGameIds,
     targetDuration,
     enableEventZoom,
+    enableHookCaptions,
     currentTemplate,
     backgroundMusic,
     audioLevels,
@@ -44,6 +45,7 @@ export function AutoEditPanel() {
     toggleGameSelection,
     setTargetDuration,
     setEnableEventZoom,
+    setEnableHookCaptions,
     setCurrentTemplate,
     setBackgroundMusic,
     setAudioLevels,
@@ -211,6 +213,7 @@ export function AutoEditPanel() {
             selectedGameIds={selectedGameIds}
             targetDuration={targetDuration}
             enableEventZoom={enableEventZoom}
+            enableHookCaptions={enableHookCaptions}
             currentTemplate={currentTemplate}
             backgroundMusic={backgroundMusic}
             audioLevels={audioLevels}
@@ -221,6 +224,7 @@ export function AutoEditPanel() {
             onToggleGame={toggleGameSelection}
             onSetDuration={setTargetDuration}
             onToggleEventZoom={setEnableEventZoom}
+            onToggleHookCaptions={setEnableHookCaptions}
             onTemplateChange={(tpl) => setCurrentTemplate(tpl)}
             onBackgroundMusicChange={setBackgroundMusic}
             onAudioLevelsChange={setAudioLevels}

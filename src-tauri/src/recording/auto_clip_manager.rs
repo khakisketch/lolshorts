@@ -1898,7 +1898,7 @@ fn trigger_to_highlight_kind(trigger: &EventTrigger, event: &GameEvent) -> Highl
 }
 
 /// Convert LiveClientMonitor's EventTrigger to storage's EventType
-fn trigger_to_event_type(trigger: &EventTrigger) -> EventType {
+pub(crate) fn trigger_to_event_type(trigger: &EventTrigger) -> EventType {
     match trigger {
         EventTrigger::ChampionKill => EventType::ChampionKill,
         EventTrigger::Death => EventType::Custom("Death".to_string()),

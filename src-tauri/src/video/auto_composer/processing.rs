@@ -2,12 +2,14 @@
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
-use super::super::processor::effects::{escape_ffmpeg_text, validate_ffmpeg_color};
+use super::super::processor::effects::{
+    escape_ffmpeg_text, fontfile_clause, validate_ffmpeg_color,
+};
 use super::super::{execute_ffmpeg_command, ClipInfo, Result, VideoError};
 use super::composer::AutoComposer;
 use super::types::{AudioLevels, BackgroundLayer, BackgroundMusic, CanvasElement, CanvasTemplate};
 use crate::utils::ffmpeg::get_ffmpeg_path;
-use crate::video::processor::types::{ClipSpec, ComposeOptions};
+use crate::video::processor::types::{CaptionSpec, ClipSpec, ComposeOptions};
 
 impl AutoComposer {
     pub(super) async fn prepare_clips(
@@ -76,10 +78,14 @@ impl AutoComposer {
                 continue;
             }
 
-            let start_time = (clip_duration - trimmed_duration) / 2.0;
+            let start_time = trim_start_around_event(
+                clip_duration,
+                trimmed_duration,
+                clip.event_offset_secs,
+            );
             info!(
-                "클립 {} 트림 구간: {:.1}초 -> {:.1}초 (시작점={:.1}초)",
-                idx, clip_duration, trimmed_duration, start_time
+                "클립 {} 트림 구간: {:.1}초 -> {:.1}초 (시작점={:.1}초, 이벤트={:?})",
+                idx, clip_duration, trimmed_duration, start_time, clip.event_offset_secs
             );
             specs.push(ClipSpec {
                 path,
@@ -99,6 +105,7 @@ impl AutoComposer {
         &self,
         clip_specs: &[ClipSpec],
         event_times: Option<&[f64]>,
+        captions: Option<Vec<Option<CaptionSpec>>>,
     ) -> Result<PathBuf> {
         let output_dir = self.stage_dir();
         tokio::fs::create_dir_all(&output_dir)
@@ -120,6 +127,7 @@ impl AutoComposer {
             fps: event_times.map(|_| 60),
             // 라우드니스 정규화는 오디오 믹싱까지 끝난 최종 단계에서 별도 수행.
             normalize_audio: None,
+            captions,
         };
 
         self.video_processor
@@ -492,6 +500,47 @@ impl AutoComposer {
     }
 }
 
+/// 클립을 짧게 줄일 때 어디서부터 자를지 — **하이라이트가 남도록**.
+///
+/// # 왜 중앙이 아닌가
+///
+/// 예전에는 `(clip_duration - trimmed) / 2.0`, 즉 언제나 클립 한가운데를 남겼다.
+/// 킬 클립(pre 10 / post 3)에서는 중앙 6.5초가 이벤트 10초에서 3.5초밖에 안
+/// 떨어져 있어 대충 맞았지만, **게임 종료 클립(pre 30 / post 10)에서는 20초를
+/// 빗나갔다** — 40초를 12초로 줄이면 남는 구간이 14~26초라 정작 승리하는 순간
+/// (30초)이 통째로 빠졌다. 편집 결과에 이긴 판의 마지막 장면이 없는데 게이트는
+/// 전부 초록이었다.
+///
+/// # 어떤 비율로 남기나
+///
+/// 이벤트가 원본 클립에서 차지하던 **상대 위치를 그대로 유지**한다. 트리거가
+/// 정한 pre/post 설계값이 곧 "이 장면은 앞을 얼마나 봐야 하는가" 이므로
+/// (킬 10:3, 멀티킬 15:5, 게임 종료 30:10 — 전부 앞이 3/4), 그 모양을 짧게
+/// 축소하는 것이 새 비율을 지어내는 것보다 근거가 있다.
+///
+/// 이벤트 위치를 모르면(`None` — 예전 클립) 예전처럼 중앙을 남긴다.
+fn trim_start_around_event(
+    clip_duration: f64,
+    trimmed_duration: f64,
+    event_offset_secs: Option<f64>,
+) -> f64 {
+    let max_start = (clip_duration - trimmed_duration).max(0.0);
+
+    let Some(event) = event_offset_secs.filter(|e| e.is_finite() && *e >= 0.0) else {
+        return max_start / 2.0;
+    };
+
+    // 이벤트가 클립 밖을 가리키면(길이 실측이 저장값과 어긋난 경우) 끝으로 본다.
+    let event = event.min(clip_duration);
+    let ratio = if clip_duration > 0.0 {
+        event / clip_duration
+    } else {
+        0.5
+    };
+
+    (event - trimmed_duration * ratio).clamp(0.0, max_start)
+}
+
 /// 캔버스 배경 레이어를 filter_complex 에 `[bg]` 라벨로 추가한다.
 ///
 /// 핵심: 배경을 **비디오 길이만큼** 생성해(color/gradient=d=비디오길이, image=무한 루프)
@@ -638,12 +687,78 @@ fn map_known_font_name(name: &str) -> Option<&'static str> {
     }
 }
 
-/// 폰트 파일 경로를 drawtext `fontfile=` 절로 변환한다:
-/// 역슬래시 → 슬래시 정규화 후 콜론을 이스케이프하고 작은따옴표로 감싼다.
-fn fontfile_clause(path: &str) -> String {
-    let normalized = path.replace('\\', "/");
-    let escaped = normalized.replace(':', "\\:");
-    format!("fontfile='{}'", escaped)
+
+#[cfg(test)]
+mod trim_window_tests {
+    use super::*;
+
+    /// 이 회귀가 없던 동안 자동 편집 결과물에는 **이긴 판의 마지막 장면이 없었다.**
+    ///
+    /// 게임 종료 클립은 pre 30 / post 10 이라 승리 순간이 30초 지점에 있는데,
+    /// 중앙 트림은 14~26초를 남겼다. 산출물은 정상이고 길이도 맞고 게이트도
+    /// 초록이라, 영상을 눈으로 보기 전에는 드러나지 않는 종류의 결함이었다.
+    #[test]
+    fn game_end_clip_keeps_the_winning_moment() {
+        let start = trim_start_around_event(40.0, 12.0, Some(30.0));
+
+        assert!(
+            start <= 30.0 && 30.0 <= start + 12.0,
+            "승리 순간(30초)이 트림 구간 {:.1}~{:.1}초 밖에 있다",
+            start,
+            start + 12.0
+        );
+        // 원본 비율(30/40 = 앞 3/4)이 그대로 유지된다 -> 시작점 21초.
+        assert!((start - 21.0).abs() < 0.01, "start = {}", start);
+    }
+
+    /// 예전 규칙이 정확히 무엇을 놓쳤는지 고정해 둔다 — 되돌리면 이게 깨진다.
+    #[test]
+    fn the_old_centered_rule_would_have_missed_it() {
+        let centered = (40.0 - 12.0) / 2.0;
+        assert!(
+            centered + 12.0 < 30.0,
+            "중앙 트림 {:.1}~{:.1}초는 30초를 담지 못한다",
+            centered,
+            centered + 12.0
+        );
+    }
+
+    #[test]
+    fn kill_clip_keeps_the_approach_before_the_kill() {
+        // pre 10 / post 3 클립을 8초로 줄인다.
+        let start = trim_start_around_event(13.0, 8.0, Some(10.0));
+        assert!(start <= 10.0 && 10.0 <= start + 8.0);
+        // 앞이 뒤보다 길어야 한다 — 킬은 접근 과정이 있어야 읽힌다.
+        let before = 10.0 - start;
+        let after = (start + 8.0) - 10.0;
+        assert!(before > after, "before={before}, after={after}");
+    }
+
+    #[test]
+    fn falls_back_to_the_centre_when_the_offset_is_unknown() {
+        // 예전 클립(`event_offset_secs` 없음)은 예전 동작 그대로.
+        assert!((trim_start_around_event(40.0, 12.0, None) - 14.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn never_runs_past_the_end_of_the_clip() {
+        // 이벤트가 클립 맨 끝이면 마지막 구간을 남긴다(시작점이 음수나 초과가 되면 안 된다).
+        let start = trim_start_around_event(13.0, 8.0, Some(13.0));
+        assert!((0.0..=5.0).contains(&start), "start = {}", start);
+
+        // 저장된 오프셋이 실측 길이를 넘어가는 경우(길이 backfill 과 어긋남).
+        let start = trim_start_around_event(10.0, 6.0, Some(999.0));
+        assert!((0.0..=4.0).contains(&start), "start = {}", start);
+
+        // 이벤트가 맨 앞이면 시작점은 0.
+        assert_eq!(trim_start_around_event(13.0, 8.0, Some(0.0)), 0.0);
+    }
+
+    #[test]
+    fn a_trim_longer_than_the_clip_starts_at_zero() {
+        assert_eq!(trim_start_around_event(5.0, 8.0, Some(3.0)), 0.0);
+        assert_eq!(trim_start_around_event(5.0, 8.0, None), 0.0);
+    }
 }
 
 #[cfg(test)]

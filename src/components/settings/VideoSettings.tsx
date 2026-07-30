@@ -55,10 +55,18 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
 
   // Detect available encoders on mount
   useEffect(() => {
-    invoke<EncoderDetectionResult>("detect_available_encoders")
+    invoke<EncoderDetectionResult | null>("detect_available_encoders")
       .then((result) => {
-        setAvailableEncoders(result.available);
-        setAutoDetected(result.auto_detected);
+        // 응답이 없거나 모양이 다를 수 있다. 예전에는 `result.available` 을 바로
+        // 읽어서 `Cannot read properties of null` 이 터졌고, `.catch` 가 그걸
+        // "인코더 감지 실패" 로 삼켜 콘솔에만 남겼다 — 화면은 조용히 빈 목록이
+        // 되고 사용자는 왜 인코더가 하나도 없는지 알 수 없었다.
+        setAvailableEncoders(
+          Array.isArray(result?.available) ? result.available : [],
+        );
+        if (typeof result?.auto_detected === "string") {
+          setAutoDetected(result.auto_detected);
+        }
         setIsDetecting(false);
       })
       .catch((error) => {

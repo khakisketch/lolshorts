@@ -35,8 +35,9 @@ async function switchLanguage(page: Page, nativeName: string) {
 async function openSettings(page: Page) {
   await page.click('[data-testid="nav-settings"]');
   await expect(page.getByTestId("settings")).toBeVisible({ timeout: 10000 });
-  // 언어 선택기는 기본 5개에 들지 않아 "고급 설정" 안으로 내려갔다.
-  await page.getByTestId("advanced-settings-toggle").click();
+  // 언어 선택기는 「관리 > 앱」 칸에 있다(예전의 단일 "고급 설정" 토글은 없다 —
+  // 그 구조가 각 칸을 세 화면분으로 만들어 칸별 접힘으로 바뀌었다).
+  await page.getByTestId("settings-nav-app").click();
   await expect(page.locator("#language-select")).toBeVisible({
     timeout: 10000,
   });
@@ -45,7 +46,7 @@ async function openSettings(page: Page) {
 test.describe("Internationalization (i18n)", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("dashboard")).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("home")).toBeVisible({ timeout: 30000 });
   });
 
   test("should display language selector in Settings", async ({ page }) => {
@@ -90,30 +91,29 @@ test.describe("Internationalization (i18n)", () => {
       page.getByRole("heading", { name: "설정" }).first(),
     ).toBeVisible();
 
-    // Navigate to Dashboard
+    // 홈으로 — 화면 이름이 "대시보드" 에서 홈으로 바뀌었고, 제목은 그 화면이
+    // 무엇을 하는지 말한다("방금 만들어진 클립").
     await page.click('[data-testid="nav-dashboard"]');
-    await expect(page.getByRole("heading", { name: "대시보드" })).toBeVisible();
-
-    // Navigate to Games
-    await page.click('[data-testid="nav-games"]');
     await expect(
-      page.getByRole("heading", { name: "녹화된 게임" }).first(),
+      page.getByRole("heading", { name: "방금 만들어진 클립" }),
     ).toBeVisible({ timeout: 10000 });
+
+    // 결과로 — `nav-games` 는 사라졌다(가진 것은 모두 결과에 있다).
+    await page.click('[data-testid="nav-results"]');
+    await expect(page).toHaveURL(/\/results/);
   });
 
-  test("should translate Dashboard page correctly", async ({ page }) => {
+  test("should translate the home page correctly", async ({ page }) => {
     await expect(
-      page.getByRole("heading", { name: /Dashboard/i }),
+      page.getByRole("heading", { name: /Fresh clips/i }),
     ).toBeVisible();
 
-    // Switch to Korean
     await openSettings(page);
     await switchLanguage(page, "한국어");
 
-    // Go back to Dashboard
     await page.click('[data-testid="nav-dashboard"]');
 
-    await expect(page.getByText(/대시보드/).first()).toBeVisible();
+    await expect(page.getByText(/방금 만들어진 클립/).first()).toBeVisible();
   });
 
   test("should translate Settings page completely", async ({ page }) => {

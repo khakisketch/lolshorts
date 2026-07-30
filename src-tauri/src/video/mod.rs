@@ -253,6 +253,21 @@ pub struct ClipInfo {
     /// 퍼블·바론·게임종료가 전부 3점이라 어느 것이 먼저 나올지가 사실상 우연이었다.
     #[serde(default)]
     pub highlight_score: Option<f64>,
+    /// 이 클립 **안에서** 하이라이트가 일어나는 지점(초). `ClipMetadata` 와 같은 값.
+    ///
+    /// 저장 시점엔 알고 있는 값인데(`pre_duration`) 여기까지 오지 않아서, 하류가
+    /// 전부 "하이라이트 = 클립 중앙" 이라고 가정했다. 그 가정은 킬 클립(pre 10 /
+    /// post 3, 중앙 6.5초 ≈ 이벤트 10초)에서는 대충 맞지만 **게임 종료 클립
+    /// (pre 30 / post 10)에서는 20초를 빗나간다** — 40초를 12초로 줄이면 잘리는
+    /// 구간이 14~26초라 승리 순간(30초)이 통째로 빠졌다.
+    ///
+    /// 예전 클립에는 없다(`None`). 소비하는 쪽이 중앙으로 되돌아간다.
+    #[serde(default)]
+    pub event_offset_secs: Option<f64>,
+    /// 점수가 그렇게 나온 이유. 훅 자막의 둘째 줄이 되는 값이다
+    /// ("혼자서 · 1v3 · 체력 8%").
+    #[serde(default)]
+    pub score_reasons: Vec<crate::recording::highlight_score::ScoreReason>,
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/utils";
 import { clipSeconds, eventLabel } from "@/lib/eventLabel";
+import { reasonLabels } from "@/lib/scoreReason";
 import type { ClipMetadata } from "@/types/storage";
 
 /**
@@ -54,9 +55,13 @@ function ClipCard({
   const thumbnailSrc = clip.thumbnail_path
     ? convertFileSrc(clip.thumbnail_path)
     : undefined;
+  // 이 클립이 왜 뽑혔는지. 앱이 확언할 수 있는 유일한 것이고(Live Client API 로
+  // 그 순간의 체력·생존 인원을 직접 받는다) 지금까지 저장만 되고 화면에는
+  // 한 번도 나오지 않았다.
+  const reasons = reasonLabels(clip.score_reasons);
 
   return (
-    <div className="group relative">
+    <div className="group relative h-full">
       <button
         type="button"
         onClick={onToggle}
@@ -64,7 +69,10 @@ function ClipCard({
         aria-label={t("home.clips.toggleLabel", { event: label, seconds })}
         data-testid={`home-clip-${clip.file_path}`}
         className={[
-          "block w-full overflow-hidden rounded-lg border text-left transition-colors",
+          // `h-full`: 이유 줄이 없는 카드(상황을 못 찍은 클립)가 한 줄만큼
+          // 짧아져 격자 아래 모서리가 들쭉날쭉해졌다. 칸을 채우게 두면 한 행의
+          // 카드가 가장 큰 것에 맞춰 정렬된다.
+          "block h-full w-full overflow-hidden rounded-lg border text-left transition-colors",
           selected
             ? "border-gaming-cyan bg-gaming-cyan/10"
             : "border-white/5 bg-white/[0.02] hover:border-gaming-cyan/40",
@@ -100,11 +108,24 @@ function ClipCard({
             </span>
           )}
         </span>
-        <span
-          className="block truncate px-3 py-2 text-sm font-medium"
-          style={{ wordBreak: "keep-all" }}
-        >
-          {label}
+        <span className="block px-3 py-2">
+          <span
+            className="block truncate text-sm font-medium"
+            style={{ wordBreak: "keep-all" }}
+          >
+            {label}
+          </span>
+          {reasons.length > 0 && (
+            <span
+              className="mt-0.5 block truncate text-xs text-gaming-cyan/80"
+              style={{ wordBreak: "keep-all" }}
+              data-testid={`home-clip-reasons-${clip.file_path}`}
+            >
+              {/* 가운뎃점으로 잇는다 — 배지 다섯 개는 카드 폭을 넘고, 이 줄은
+                  읽히는 것이 목적이지 클릭 대상이 아니다. */}
+              {reasons.map((r) => t(r.key, r.params)).join(" · ")}
+            </span>
+          )}
         </span>
       </button>
 

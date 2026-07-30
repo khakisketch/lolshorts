@@ -14,10 +14,10 @@ test.describe("LoLShorts Basic Functionality", () => {
     await expect(page.locator('[data-testid="app-shell"]')).toBeVisible();
   });
 
-  test("dashboard renders correctly", async ({ page }) => {
+  test("home renders correctly", async ({ page }) => {
     await page.goto(BASE_URL);
-    await expect(page.locator('[data-testid="dashboard"]')).toBeVisible();
-    await expect(page.locator('[data-testid="lcu-status"]')).toBeVisible();
+    await expect(page.locator('[data-testid="home"]')).toBeVisible();
+    await expect(page.locator('[data-testid="home-status"]')).toBeVisible();
   });
 
   test("settings page is accessible", async ({ page }) => {
@@ -32,9 +32,10 @@ test.describe("LoLShorts Basic Functionality", () => {
     await page.click('[data-testid="nav-settings"]');
     await page.waitForLoadState("networkidle");
     await expect(page.locator('[data-testid="settings"]')).toBeVisible();
-    // 오디오 상세는 "고급 설정" 안의 탭으로 내려갔다.
-    await page.getByTestId("advanced-settings-toggle").click();
-    await page.getByRole("tab", { name: "Audio" }).click();
+    // 오디오 상세는 「소리」 칸의 접힌 「고급 설정」 안으로 내려갔다.
+    await page.getByTestId("settings-nav-sound").click();
+    // `<details>` 는 `<summary>` 를 눌러야 열린다 — details 자체를 클릭해도 안 열린다.
+    await page.getByTestId("advanced-sound").locator("summary").click();
     await expect(page.locator('[data-testid="audio-settings"]')).toBeVisible();
   });
 
@@ -45,21 +46,20 @@ test.describe("LoLShorts Basic Functionality", () => {
     await page.click('[data-testid="nav-settings"]');
     await expect(page.locator('[data-testid="settings"]')).toBeVisible();
 
-    // Navigate to replays
-    await page.click('[data-testid="nav-library"]');
-    await expect(page.locator('[data-testid="replays-page"]')).toBeVisible();
+    // Navigate to results
+    await page.click('[data-testid="nav-results"]');
+    await expect(page).toHaveURL(/\/results/);
 
-    // Navigate back to dashboard
+    // Navigate back to home
     await page.click('[data-testid="nav-dashboard"]');
-    await expect(page.locator('[data-testid="dashboard"]')).toBeVisible();
+    await expect(page.locator('[data-testid="home"]')).toBeVisible();
   });
 
-  test("lcu status indicator is visible on dashboard", async ({ page }) => {
+  test("connection status is visible on home", async ({ page }) => {
     await page.goto(BASE_URL);
-    const lcuStatus = page.locator('[data-testid="lcu-status"]');
-    await expect(lcuStatus).toBeVisible();
-    const text = await lcuStatus.textContent();
-    expect(text).toBeTruthy();
+    const status = page.locator('[data-testid="home-status"]');
+    await expect(status).toBeVisible();
+    expect(await status.textContent()).toBeTruthy();
   });
 
   test("responsive design works correctly", async ({ page }) => {

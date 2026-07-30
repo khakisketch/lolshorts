@@ -39,6 +39,22 @@ pub struct AutoEditConfig {
     /// compose_with_options 로 전달, 소스 fps 60 기준 zoompan 을 적용한다.
     #[serde(default)]
     pub enable_event_zoom: bool,
+
+    /// 각 클립 앞머리에 훅 자막을 굽는다 (기본값: 켜짐).
+    ///
+    /// **기본이 켜짐인 이유**: 자막 없는 세로 클립은 쇼츠가 아니라 세로 상자에
+    /// 든 클립이다. 앞 3초에 볼 이유를 주지 못하면 넘어가므로, 아무것도 설정하지
+    /// 않은 사용자의 결과물이 그대로 올릴 만해야 한다.
+    ///
+    /// 끄고 싶은 경우(직접 자막을 얹는 편집자)를 위해 남긴다. 프론트가 이 필드를
+    /// 생략하면 켜진 것으로 본다 — `#[serde(default)]` 는 bool 에서 `false` 라
+    /// 전용 기본값 함수가 필요하다.
+    #[serde(default = "default_true")]
+    pub enable_hook_captions: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// 오버레이용 캔버스 템플릿
@@ -246,6 +262,7 @@ mod tests {
             audio_levels: AudioLevels::default(),
             allow_duplicates: false,
             enable_event_zoom: false,
+            enable_hook_captions: false,
         };
 
         let json = serde_json::to_string(&config).expect("serialization should succeed");
@@ -268,6 +285,7 @@ mod tests {
             },
             allow_duplicates: true,
             enable_event_zoom: true,
+            enable_hook_captions: false,
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed");

@@ -31,6 +31,7 @@ interface AutoEditSettingsProps {
   selectedGameIds: string[];
   targetDuration: DurationOption;
   enableEventZoom: boolean;
+  enableHookCaptions: boolean;
   currentTemplate: CanvasTemplate | null;
   backgroundMusic: BackgroundMusic | null;
   audioLevels: AudioLevels;
@@ -41,6 +42,7 @@ interface AutoEditSettingsProps {
   onToggleGame: (gameId: string) => void;
   onSetDuration: (duration: DurationOption) => void;
   onToggleEventZoom: (enabled: boolean) => void;
+  onToggleHookCaptions: (enabled: boolean) => void;
   onTemplateChange: (template: CanvasTemplate) => void;
   onBackgroundMusicChange: (music: BackgroundMusic | null) => void;
   onAudioLevelsChange: (levels: Partial<AudioLevels>) => void;
@@ -53,6 +55,7 @@ export function AutoEditSettings({
   selectedGameIds,
   targetDuration,
   enableEventZoom,
+  enableHookCaptions,
   currentTemplate,
   backgroundMusic,
   audioLevels,
@@ -63,6 +66,7 @@ export function AutoEditSettings({
   onToggleGame,
   onSetDuration,
   onToggleEventZoom,
+  onToggleHookCaptions,
   onTemplateChange,
   onBackgroundMusicChange,
   onAudioLevelsChange,
@@ -254,6 +258,37 @@ export function AutoEditSettings({
             data-testid="enable-event-zoom-toggle"
           />
         </div>
+
+        {/*
+          훅 자막 — 기본 켜짐. 자막 없는 세로 클립은 쇼츠가 아니라 세로 상자에
+          든 클립이라, 아무것도 건드리지 않은 사용자의 결과물이 그대로 올릴 만해야
+          한다. 직접 자막을 얹는 사람을 위해 끌 수 있게만 남긴다.
+        */}
+        <label
+          htmlFor="enable-hook-captions"
+          className="mt-3 flex min-h-[44px] cursor-pointer items-center justify-between gap-3 rounded-lg border border-white/5 bg-black/40 p-3"
+        >
+          <div className="flex items-start gap-2">
+            <Type className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <div>
+              <div className="text-sm font-medium">
+                {t('autoEdit.hookCaption.label')}
+              </div>
+              <p
+                className="mt-0.5 text-xs text-muted-foreground"
+                style={{ wordBreak: 'keep-all' }}
+              >
+                {t('autoEdit.hookCaption.description')}
+              </p>
+            </div>
+          </div>
+          <Switch
+            id="enable-hook-captions"
+            checked={enableHookCaptions}
+            onCheckedChange={onToggleHookCaptions}
+            data-testid="enable-hook-captions-toggle"
+          />
+        </label>
       </div>
 
       {/* Shorts Planning */}

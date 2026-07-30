@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, Stethoscope } from "lucide-react";
+import { AlertTriangle, ChevronDown, Stethoscope } from "lucide-react";
 import { useRecordingStore } from "@/stores/recordingStore";
 import { utilsApi } from "@/api/utils";
 import { youtubeApi } from "@/api/youtube";
@@ -109,6 +109,15 @@ export function DiagnosticsSection() {
           })
         : t(`dashboard.services.status.${statusToKey[storageStatus]}`);
 
+  // 막는 것 먼저, 그다음 경고. 백엔드가 만든 문구를 그대로 쓴다 — 여기서
+  // 다시 쓰면 원인과 화면이 어긋나기 시작한다.
+  //
+  // `blockers` 는 이미 정규화 계층(`api/recording.ts`)이 백엔드의 blockers +
+  // warnings 를 `severity` 로 구분해 하나로 합쳐 둔 목록이다.
+  const readinessIssues = [...(readiness?.blockers ?? [])].sort((a, b) =>
+    a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1,
+  );
+
   const captureOk =
     readiness?.component_statuses.ffmpeg.status === "ok" &&
     readiness?.component_statuses.audio.status === "ok" &&
@@ -215,6 +224,48 @@ export function DiagnosticsSection() {
 
       {open && (
         <div className="space-y-4 border-t border-white/5 p-6">
+          {/*
+            막고 있는 것을 **구체적으로** 먼저 말한다.
+
+            백엔드는 "FFmpeg 없음 / 번들 FFmpeg 설치" 처럼 무엇이 문제이고 무엇을
+            하면 되는지까지 만들어 보낸다(`readiness.blockers[].message/action`).
+            그런데 화면은 그 값을 버리고 카드에 "확인 필요" 라고만 적었다 — 녹화가
+            안 되는 사용자가 마지막으로 열어 볼 화면에서 아무것도 알 수 없었다.
+            아래 카드들은 여전히 한눈에 보는 요약이고, 이 목록이 답이다.
+          */}
+          {readinessIssues.length > 0 && (
+            <ul className="space-y-2" data-testid="diagnostics-blockers">
+              {readinessIssues.map((issue) => (
+                <li
+                  key={`${issue.severity}-${issue.id}`}
+                  className={[
+                    "flex items-start gap-2 rounded-lg border p-3 text-sm",
+                    issue.severity === "critical"
+                      ? "border-red-500/30 bg-red-500/10"
+                      : "border-yellow-500/30 bg-yellow-500/10",
+                  ].join(" ")}
+                >
+                  <AlertTriangle
+                    className={[
+                      "mt-0.5 h-4 w-4 shrink-0",
+                      issue.severity === "critical"
+                        ? "text-red-400"
+                        : "text-yellow-400",
+                    ].join(" ")}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0" style={{ wordBreak: "keep-all" }}>
+                    <span className="block font-medium">{issue.message}</span>
+                    {issue.action && (
+                      <span className="block text-xs text-muted-foreground">
+                        {issue.action}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
           <div>
             <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">
               {t("dashboard.services.title")}

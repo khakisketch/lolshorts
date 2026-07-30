@@ -34,6 +34,15 @@ interface AutoEditStore {
   enableEventZoom: boolean;
   setEnableEventZoom: (enabled: boolean) => void;
 
+  /**
+   * 훅 자막 — 각 클립 앞머리에 "무슨 장면이고 왜 볼 만한지" 한 줄.
+   *
+   * 기본이 켜짐인 이유: 자막 없는 세로 클립은 쇼츠가 아니라 세로 상자에 든
+   * 클립이다. 아무것도 건드리지 않은 사용자의 결과물이 그대로 올릴 만해야 한다.
+   */
+  enableHookCaptions: boolean;
+  setEnableHookCaptions: (enabled: boolean) => void;
+
   // Canvas template
   currentTemplate: CanvasTemplate | null;
   availableTemplates: CanvasTemplateInfo[];
@@ -83,6 +92,7 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
   targetDuration: 60,
 
   enableEventZoom: false,
+  enableHookCaptions: true,
 
   currentTemplate: null,
   availableTemplates: [],
@@ -127,6 +137,8 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
   // Effects (experimental)
   setEnableEventZoom: (enabled) => set({ enableEventZoom: enabled }),
 
+  setEnableHookCaptions: (enabled) => set({ enableHookCaptions: enabled }),
+
   // Canvas template
   setCurrentTemplate: (template) => set({ currentTemplate: template }),
 
@@ -170,12 +182,14 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
       backgroundMusic,
       audioLevels,
       enableEventZoom,
+      enableHookCaptions,
     } = get();
 
     const config: AutoEditConfig = {
       game_ids: selectedGameIds,
       target_duration: targetDuration,
       enable_event_zoom: enableEventZoom,
+      enable_hook_captions: enableHookCaptions,
       // Always sent: `audio_levels` also carries the GAME audio volume, so it is
       // meaningful without background music. The Rust side takes it by value
       // (AutoEditConfig.audio_levels is not Option), so omitting it used to fail

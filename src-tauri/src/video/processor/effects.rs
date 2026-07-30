@@ -7,6 +7,37 @@ use super::super::{execute_ffmpeg_command, Result, VideoError};
 use super::pipeline::VideoProcessor;
 use super::types::{ChainedEffects, ColorGrading, TextPosition, TextStyle, TransitionType};
 
+/// 폰트 파일 경로를 drawtext `fontfile=` 절로 변환한다:
+/// 역슬래시 → 슬래시 정규화 후 콜론을 이스케이프하고 작은따옴표로 감싼다.
+///
+/// (픽셀로 검증된 정상 동작: `fontfile='C\:/Windows/Fonts/malgun.ttf'`. 이름만
+/// 넘기면 fontconfig 폴백으로 조용히 성공(exit 0)하지만 한글 글리프가 없는 폰트로
+/// 떨어져 텍스트가 빈 네모(tofu)로 렌더링된다.)
+pub(crate) fn fontfile_clause(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let escaped = normalized.replace(':', "\\:");
+    format!("fontfile='{}'", escaped)
+}
+
+/// 훅 자막처럼 **앱이 스스로 그리는** 글자에 쓸 폰트 절.
+///
+/// 캔버스 텍스트(`resolve_font_clause`)와 달리 사용자가 고르는 축이 아니다 —
+/// 필요한 성질이 하나뿐이기 때문이다: 한글 글리프가 있을 것. 맑은 고딕이 없는
+/// 환경(비 Windows)에서는 빈 문자열을 돌려주어 drawtext 가 fontconfig 기본 폰트를
+/// 쓰게 한다(글자가 안 나오느니 다른 폰트로라도 나오는 편이 낫다).
+pub(crate) fn caption_font_clause() -> String {
+    for candidate in [
+        r"C:\Windows\Fonts\malgun.ttf",
+        r"C:\Windows\Fonts\NanumGothic.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+    ] {
+        if Path::new(candidate).exists() {
+            return fontfile_clause(candidate);
+        }
+    }
+    String::new()
+}
+
 /// Escape text for FFmpeg drawtext filter to prevent filter injection.
 /// Escapes characters that have special meaning in FFmpeg filter expressions.
 pub fn escape_ffmpeg_text(text: &str) -> String {

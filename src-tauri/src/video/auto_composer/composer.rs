@@ -6,8 +6,10 @@ use tracing::{info, warn};
 
 use super::super::thumbnail::auto_generate_thumbnail;
 use super::super::{ClipInfo, Result, VideoError, VideoProcessor};
+use super::caption::clip_caption;
 use super::types::{AutoEditConfig, AutoEditProgress, AutoEditResult, AutoEditStatus};
 use crate::storage::Storage;
+use crate::video::processor::types::{CaptionSpec, ClipSpec};
 
 /// YouTube Shorts 최대 길이(초). YouTube Shorts는 최대 3분(180초)까지 지원한다.
 pub(super) const MAX_TARGET_DURATION_SECS: u32 = 180;
@@ -146,20 +148,21 @@ impl AutoComposer {
             .prepare_clips(&selected_clips, config.target_duration)
             .await?;
 
-        // 이벤트 줌: 활성화 시 각 클립이 최종 타임라인에서 차지하는 구간의 중앙을
-        // 줌 이벤트 시각으로 사용한다(하이라이트는 대체로 클립 중앙에 위치).
+        // 최종 타임라인에서 각 하이라이트가 놓이는 시각. 줌·훅 자막이 같은 값을 쓴다.
+        //
+        // 예전에는 구간 중앙을 썼다("하이라이트는 대체로 클립 중앙에 위치"). 그
+        // 가정은 클립마다 pre/post 가 다르므로 틀렸고, 게임 종료 클립에서는 20초
+        // 어긋났다 — 줌이 승리 순간이 아니라 그 20초 전 아무 일 없는 지점에서
+        // 걸렸다. 이제 저장된 `event_offset_secs` 를 트림 구간 기준으로 옮겨 쓴다.
+        let timeline = Self::event_timeline(&prepared_clips, &selected_clips);
+
         let event_times: Option<Vec<f64>> = if config.enable_event_zoom {
-            let mut times = Vec::with_capacity(prepared_clips.len());
-            let mut offset = 0.0f64;
-            for (spec, clip) in prepared_clips.iter().zip(selected_clips.iter()) {
-                let effective = spec
-                    .trim_duration
-                    .unwrap_or_else(|| clip.duration.unwrap_or(10.0));
-                times.push(offset + effective / 2.0);
-                offset += effective;
-            }
-            info!("이벤트 줌 활성화: {}개 줌 시점 {:?}", times.len(), times);
-            Some(times)
+            info!(
+                "이벤트 줌 활성화: {}개 줌 시점 {:?}",
+                timeline.len(),
+                timeline
+            );
+            Some(timeline.clone())
         } else {
             None
         };
@@ -172,9 +175,24 @@ impl AutoComposer {
         )
         .await;
 
-        // 단일 패스 합성(트림 + 9:16 스케일/크롭 + 선택적 이벤트 줌).
+        // 훅 자막: 각 클립 앞머리에 "무슨 장면이고 왜 볼 만한지" 한 줄.
+        //
+        // 산출물이 세로로 자른 게임 화면 그 자체였던 동안, 이 앱이 유일하게
+        // 확언할 수 있는 것(그 순간의 체력·생존 인원)은 저장만 되고 영상에는
+        // 한 번도 나오지 않았다. 끄고 싶은 사람을 위해 설정으로 남긴다.
+        let captions: Option<Vec<Option<CaptionSpec>>> = if config.enable_hook_captions {
+            let built: Vec<Option<CaptionSpec>> =
+                selected_clips.iter().map(clip_caption).collect();
+            let shown = built.iter().filter(|c| c.is_some()).count();
+            info!("훅 자막 {}개 / 클립 {}개", shown, built.len());
+            Some(built)
+        } else {
+            None
+        };
+
+        // 단일 패스 합성(트림 + 9:16 스케일/크롭 + 선택적 이벤트 줌 + 훅 자막).
         let concatenated_path = self
-            .concatenate_clips(&prepared_clips, event_times.as_deref())
+            .concatenate_clips(&prepared_clips, event_times.as_deref(), captions)
             .await?;
 
         // 완료 후 정리할 중간 산출물 추적(마지막 rendered 포함).
@@ -417,6 +435,37 @@ impl AutoComposer {
         Ok(selected)
     }
 
+    /// 합쳐진 타임라인에서 각 클립의 **하이라이트 순간**이 놓이는 시각(초).
+    ///
+    /// 줌과 훅 자막이 같은 값을 봐야 한다 — 따로 계산하면 한쪽만 고쳐졌을 때
+    /// 자막은 킬 순간에, 줌은 그 5초 전에 걸리는 식으로 조용히 어긋난다.
+    ///
+    /// `event_offset_secs` 가 없는 예전 클립은 구간 중앙으로 되돌아간다(예전 동작).
+    pub(super) fn event_timeline(prepared: &[ClipSpec], selected: &[ClipInfo]) -> Vec<f64> {
+        let mut times = Vec::with_capacity(prepared.len());
+        let mut offset = 0.0f64;
+
+        for (spec, clip) in prepared.iter().zip(selected.iter()) {
+            let effective = spec
+                .trim_duration
+                .unwrap_or_else(|| clip.duration.unwrap_or(10.0));
+
+            // 트림했으면 이벤트도 그만큼 앞으로 당겨진다. 구간을 벗어나면
+            // (예전 클립 + 새 트림 조합) 가장자리로 붙인다.
+            let within = match clip.event_offset_secs {
+                Some(e) if e.is_finite() && e >= 0.0 => {
+                    (e - spec.trim_start.unwrap_or(0.0)).clamp(0.0, effective)
+                }
+                _ => effective / 2.0,
+            };
+
+            times.push(offset + within);
+            offset += effective;
+        }
+
+        times
+    }
+
     pub(super) async fn load_clips_from_games(&self, game_ids: &[String]) -> Result<Vec<ClipInfo>> {
         let mut all_clips = Vec::new();
         let mut clip_id_counter = 0i64;
@@ -482,6 +531,8 @@ impl AutoComposer {
                     duration: Some(duration),
                     usage_count: clip.usage_count,
                     highlight_score: clip.highlight_score,
+                    event_offset_secs: clip.event_offset_secs,
+                    score_reasons: clip.score_reasons.clone(),
                 });
 
                 clip_id_counter += 1;
