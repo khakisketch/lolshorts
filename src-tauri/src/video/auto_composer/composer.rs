@@ -181,8 +181,10 @@ impl AutoComposer {
         // 확언할 수 있는 것(그 순간의 체력·생존 인원)은 저장만 되고 영상에는
         // 한 번도 나오지 않았다. 끄고 싶은 사람을 위해 설정으로 남긴다.
         let captions: Option<Vec<Option<CaptionSpec>>> = if config.enable_hook_captions {
-            let built: Vec<Option<CaptionSpec>> =
-                selected_clips.iter().map(clip_caption).collect();
+            let built: Vec<Option<CaptionSpec>> = selected_clips
+                .iter()
+                .map(|clip| clip_caption(clip, config.caption_locale))
+                .collect();
             let shown = built.iter().filter(|c| c.is_some()).count();
             info!("훅 자막 {}개 / 클립 {}개", shown, built.len());
             Some(built)

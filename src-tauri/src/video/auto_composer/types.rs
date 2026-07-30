@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::ClipInfo;
+use super::caption::CaptionLocale;
 
 /// 자동 편집(Auto-Edit) 구성 설정
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +52,14 @@ pub struct AutoEditConfig {
     /// 전용 기본값 함수가 필요하다.
     #[serde(default = "default_true")]
     pub enable_hook_captions: bool,
+
+    /// 훅 자막을 구울 언어 — 요청 시점의 UI 언어 스냅샷.
+    ///
+    /// 자막은 픽셀로 구워지므로 나중에 UI 언어를 바꿔도 이미 만든 영상은 그대로
+    /// 남는다. 그래서 프론트가 그 순간의 `i18next` 언어를 값으로 넘긴다.
+    /// 생략하면 영어로 본다(`CaptionLocale::default()`, 앱의 `fallbackLng` 과 동일).
+    #[serde(default)]
+    pub caption_locale: CaptionLocale,
 }
 
 fn default_true() -> bool {
@@ -263,6 +272,7 @@ mod tests {
             allow_duplicates: false,
             enable_event_zoom: false,
             enable_hook_captions: false,
+            caption_locale: CaptionLocale::default(),
         };
 
         let json = serde_json::to_string(&config).expect("serialization should succeed");
@@ -286,6 +296,7 @@ mod tests {
             allow_duplicates: true,
             enable_event_zoom: true,
             enable_hook_captions: false,
+            caption_locale: CaptionLocale::default(),
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed");

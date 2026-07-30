@@ -80,6 +80,15 @@ export interface AutoEditConfig {
    * (`#[serde(default = "default_true")]`) — 기본 결과물이 그대로 올릴 만해야 하므로.
    */
   enable_hook_captions?: boolean;
+  /**
+   * 훅 자막을 구울 언어. 자막은 픽셀로 구워져서 나중에 UI 언어를 바꿔도 이미
+   * 만든 영상은 안 바뀐다 — 그래서 요청 시점의 `i18next` 언어(`i18n.language`,
+   * `ko-KR` 처럼 지역 서브태그가 붙을 수 있음)를 그대로 스냅샷해 보낸다.
+   * 백엔드는 `ko` 로 시작하지 않으면 전부 영어로 본다(ko/en 둘만 사람이 다듬어
+   * 유지되는 로케일 — 나머지 18개는 자막 문구가 없다).
+   * 생략하면 백엔드가 영어로 본다(`CaptionLocale::default()`).
+   */
+  caption_locale?: string;
 }
 
 // ========================================================================

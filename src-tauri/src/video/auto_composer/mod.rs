@@ -14,6 +14,7 @@ pub use types::{
 #[cfg(test)]
 mod tests {
     use super::super::{ClipInfo, VideoProcessor};
+    use super::caption::CaptionLocale;
     use super::*;
     use crate::storage::Storage;
     use std::sync::Arc;
@@ -70,6 +71,7 @@ mod tests {
             allow_duplicates: false,
             enable_event_zoom: false,
             enable_hook_captions: false,
+            caption_locale: CaptionLocale::default(),
         };
 
         let selected = composer.select_clips(&clips, &config).await.unwrap();
@@ -104,6 +106,7 @@ mod tests {
             allow_duplicates: false,
             enable_event_zoom: false,
             enable_hook_captions: false,
+            caption_locale: CaptionLocale::default(),
         };
 
         let selected = composer.select_clips(&clips, &config).await.unwrap();
@@ -135,6 +138,7 @@ mod tests {
             allow_duplicates: false,
             enable_event_zoom: false,
             enable_hook_captions: false,
+            caption_locale: CaptionLocale::default(),
         };
 
         let selected = composer.select_clips(&clips, &config).await.unwrap();
