@@ -22,6 +22,12 @@ export function parseAction(value: unknown): QuotaAction | null {
   return value === "check" || value === "consume" ? value : null;
 }
 
+export function parseJobId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 160 ? trimmed : null;
+}
+
 /** UTC calendar month key, 'YYYY-MM'. */
 export function currentMonth(date: Date = new Date()): string {
   const year = date.getUTCFullYear();

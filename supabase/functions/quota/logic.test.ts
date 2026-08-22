@@ -5,6 +5,7 @@ import {
   FREE_MONTHLY_AUTO_EDIT_LIMIT,
   licenseNotExpired,
   parseAction,
+  parseJobId,
   userIsProFromLicenses,
 } from "./logic.ts";
 
@@ -16,6 +17,14 @@ Deno.test("parseAction accepts check/consume, rejects everything else", () => {
   assertEquals(parseAction(undefined), null);
   assertEquals(parseAction(null), null);
   assertEquals(parseAction(42), null);
+});
+
+Deno.test("parseJobId accepts stable bounded keys", () => {
+  assertEquals(parseJobId("auto_edit_123"), "auto_edit_123");
+  assertEquals(parseJobId("  job  "), "job");
+  assertEquals(parseJobId(""), null);
+  assertEquals(parseJobId("x".repeat(161)), null);
+  assertEquals(parseJobId(undefined), null);
 });
 
 Deno.test("currentMonth formats YYYY-MM in UTC", () => {

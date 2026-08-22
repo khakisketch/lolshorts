@@ -4,18 +4,9 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Create auth schema if needed
-CREATE SCHEMA IF NOT EXISTS auth;
-
--- Create auth.users table (simplified version for local dev)
-CREATE TABLE IF NOT EXISTS auth.users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email TEXT UNIQUE NOT NULL,
-    encrypted_password TEXT,
-    email_confirmed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- Supabase Auth owns the auth schema and auth.users table in both hosted and
+-- local Supabase runtimes. Never create or alter those objects from the app
+-- migration; public tables may reference auth.users safely.
 
 -- Create custom user profiles table
 CREATE TABLE IF NOT EXISTS public.user_profiles (

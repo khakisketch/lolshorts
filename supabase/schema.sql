@@ -1,5 +1,6 @@
--- LoLShorts Database Schema
--- Supabase PostgreSQL Schema for LoLShorts Application
+-- LoLShorts legacy dashboard reference snapshot.
+-- The ordered files in supabase/migrations are the authoritative schema.
+-- Do not use this snapshot in place of `supabase db push`.
 
 -- =============================================================================
 -- Enable Required Extensions

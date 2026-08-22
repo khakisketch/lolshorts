@@ -5,6 +5,7 @@ import {
   FREE_MONTHLY_AUTO_EDIT_LIMIT,
   type LicenseRecord,
   parseAction,
+  parseJobId,
   userIsProFromLicenses,
 } from "./logic.ts";
 
@@ -69,7 +70,11 @@ Deno.serve(async (req) => {
     }
 
     // consume: atomic increment-under-limit via the SECURITY DEFINER RPC.
-    const consumed = await consumeQuota(user.id, month, FREE_MONTHLY_AUTO_EDIT_LIMIT);
+    const jobId = parseJobId(body.job_id);
+    if (!jobId) {
+      return errorResponse(400, "INVALID_JOB_ID", "consume requires a non-empty job_id.");
+    }
+    const consumed = await consumeQuota(user.id, month, FREE_MONTHLY_AUTO_EDIT_LIMIT, jobId);
     return jsonResponse({ ...consumed, tier: "FREE" });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
@@ -104,11 +109,13 @@ async function consumeQuota(
   userId: string,
   month: string,
   limit: number,
+  jobId: string,
 ): Promise<ConsumeRow> {
   const rows = await restRpc<ConsumeRow>("consume_auto_edit_quota", {
     p_user_id: userId,
     p_month: month,
     p_limit: limit,
+    p_job_id: jobId,
   });
   const row = rows[0];
   if (!row) {

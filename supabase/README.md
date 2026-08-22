@@ -110,7 +110,8 @@ public.auto_edit_usage (
 
 ## Applying Schema
 
-Use the consolidated migration:
+Use the complete ordered migration chain (the migrations directory is the
+authoritative production schema):
 
 ```bash
 supabase init
@@ -118,13 +119,10 @@ supabase start
 supabase db push
 ```
 
-Or apply the SQL directly from the Supabase dashboard:
-
-```text
-supabase/migrations/001_initial_schema.sql
-```
-
-`supabase/schema.sql` mirrors the intended production schema for dashboard/manual setup.
+Do not apply only `001_initial_schema.sql`: later migrations contain billing
+authority, idempotent quota enforcement, and RLS hardening. `supabase/schema.sql`
+is a legacy dashboard reference snapshot and must not be used in place of the
+ordered migrations.
 
 ## Billing Edge Function
 
