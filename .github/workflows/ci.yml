@@ -229,13 +229,30 @@ jobs:
         shell: powershell
         run: ./src-tauri/build_scripts/prepare_ffmpeg.ps1 -Source Download
 
+      - name: Generate ephemeral updater signing fixture
+        id: fixture-key
+        shell: powershell
+        run: |
+          # CI validates that installers can be produced without depending on
+          # production signing secrets. The release workflow is the only job
+          # allowed to consume the real private key.
+          $keyPath = Join-Path $env:RUNNER_TEMP "lolshorts-ci.key"
+          npx tauri signer generate --ci --password "ci-fixture-only" --write-keys $keyPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "private_key_path=$keyPath" >> $env:GITHUB_OUTPUT
+          "public_key_path=$keyPath.pub" >> $env:GITHUB_OUTPUT
+
       - name: Build application (release mode)
-        # Use the pinned project-local CLI. The runner does not install the
-        # optional `cargo-tauri` subcommand, while npm ci provides the exact
-        # @tauri-apps/cli version used by the application.
-        run: npm run tauri build -- --verbose
+        # Use the pinned project-local CLI from package-lock.json. A runner's
+        # global cargo-tauri installation is not part of our reproducible toolchain.
+        shell: powershell
+        run: |
+          $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath '${{ steps.fixture-key.outputs.private_key_path }}' -Raw
+          $env:TAURI_UPDATER_PUBKEY = Get-Content -LiteralPath '${{ steps.fixture-key.outputs.public_key_path }}' -Raw
+          npm run tauri build -- --verbose
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         env:
-          CARGO_TARGET_DIR: target
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ci-fixture-only
 
       - name: Verify installers created
         run: |

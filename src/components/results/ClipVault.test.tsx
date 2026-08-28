@@ -39,10 +39,14 @@ jest.mock("@/components/video/VideoPlayer", () => ({
 
 const mockListPage = jest.fn();
 const mockEnsureThumbnail = jest.fn();
+const mockGetStorageStats = jest.fn();
+const mockDeleteGame = jest.fn();
 jest.mock("@/api/storage", () => ({
   storageApi: {
     listClipVaultPage: (...args: unknown[]) => mockListPage(...args),
     ensureClipThumbnail: (...args: unknown[]) => mockEnsureThumbnail(...args),
+    getStorageStats: (...args: unknown[]) => mockGetStorageStats(...args),
+    deleteGame: (...args: unknown[]) => mockDeleteGame(...args),
   },
 }));
 
@@ -78,9 +82,13 @@ function group(
   return {
     game_id: gameId,
     game: {
+      game_id: gameId,
       champion,
+      game_mode: "CLASSIC",
       result: "Win",
       start_time: "2026-08-01T00:00:00Z",
+      end_time: "2026-08-01T00:30:00Z",
+      kda: { kills: 5, deaths: 2, assists: 7 },
     },
     clips,
     clip_count: clips.length,
@@ -102,6 +110,12 @@ function page(
 beforeEach(() => {
   jest.clearAllMocks();
   mockEnsureThumbnail.mockResolvedValue("C:/clips/generated.jpg");
+  mockGetStorageStats.mockResolvedValue({
+    total_games: 1,
+    total_clips: 1,
+    total_size_bytes: 1024,
+  });
+  mockDeleteGame.mockResolvedValue(undefined);
   mockListPage.mockResolvedValue(page([group("game-a", [clip()], "Ahri")]));
 });
 
@@ -124,12 +138,79 @@ describe("ClipVault", () => {
     render(<ClipVault />);
 
     expect(await screen.findByText("Ahri")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("clip-vault-card-C:/clips/one.mp4"),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("clip-vault-disclosure-game-a"));
     expect(mockListPage).toHaveBeenCalledWith({
       sort: "best",
       cursor: null,
       game_limit: 6,
     });
     expect(screen.getAllByText(/results\.clips\.gameRank/)).toHaveLength(3);
+  });
+
+  it("opens and closes one game group without affecting another", async () => {
+    mockListPage.mockResolvedValue(
+      page([
+        group("game-a", [clip({ file_path: "C:/clips/a.mp4" })]),
+        group("game-b", [clip({ file_path: "C:/clips/b.mp4" })]),
+      ]),
+    );
+
+    render(<ClipVault />);
+
+    const first = await screen.findByTestId("clip-vault-disclosure-game-a");
+    const second = screen.getByTestId("clip-vault-disclosure-game-b");
+    expect(first).toHaveAttribute("aria-expanded", "false");
+    expect(second).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(first);
+    expect(first).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.getByTestId("clip-vault-card-C:/clips/a.mp4"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("clip-vault-card-C:/clips/b.mp4"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(first);
+    expect(first).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByTestId("clip-vault-card-C:/clips/a.mp4"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("expands and collapses all groups without rendering folded cards", async () => {
+    mockListPage.mockResolvedValue(
+      page([
+        group("game-a", [clip({ file_path: "C:/clips/a.mp4" })]),
+        group("game-b", [clip({ file_path: "C:/clips/b.mp4" })]),
+      ]),
+    );
+
+    render(<ClipVault />);
+    await screen.findByTestId("clip-vault-disclosure-game-a");
+
+    fireEvent.click(screen.getByTestId("clip-vault-expand-all"));
+    expect(screen.getByTestId("clip-vault-grid-game-a")).toHaveAttribute(
+      "role",
+      "region",
+    );
+    expect(
+      screen.getByTestId("clip-vault-card-C:/clips/a.mp4"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("clip-vault-card-C:/clips/b.mp4"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("clip-vault-collapse-all"));
+    expect(
+      screen.queryByTestId("clip-vault-card-C:/clips/a.mp4"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("clip-vault-card-C:/clips/b.mp4"),
+    ).not.toBeInTheDocument();
   });
 
   it("loads the opaque next page without dropping the first page", async () => {
@@ -177,6 +258,7 @@ describe("ClipVault", () => {
     );
 
     render(<ClipVault />);
+    fireEvent.click(await screen.findByTestId("clip-vault-disclosure-game-a"));
     fireEvent.click(
       await screen.findByRole("checkbox", { name: /results\.clips\.select/ }),
     );
@@ -203,6 +285,25 @@ describe("ClipVault", () => {
     );
   });
 
+  it("sends the debounced search query to the storage page request", async () => {
+    render(<ClipVault />);
+    await screen.findByTestId("clip-vault-game-game-a");
+
+    fireEvent.change(screen.getByTestId("clip-vault-search"), {
+      target: { value: "Ahri" },
+    });
+
+    await waitFor(() =>
+      expect(mockListPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          cursor: null,
+          query: "Ahri",
+          sort: "best",
+        }),
+      ),
+    );
+  });
+
   it("selects and clears a whole game group", async () => {
     mockListPage.mockResolvedValue(
       page([
@@ -217,6 +318,8 @@ describe("ClipVault", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "results.clips.selectGame" }),
     );
+    expect(screen.getByTestId("clip-vault-action-bar")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("clip-vault-disclosure-game-a"));
     expect(screen.getAllByRole("checkbox")).toEqual([
       expect.objectContaining({ checked: true }),
       expect.objectContaining({ checked: true }),
@@ -233,6 +336,7 @@ describe("ClipVault", () => {
     const onSelectionChange = jest.fn();
     render(<ClipVault onSelectionChange={onSelectionChange} />);
 
+    fireEvent.click(await screen.findByTestId("clip-vault-disclosure-game-a"));
     await screen.findByTestId("clip-vault-card-C:/clips/default.mp4");
     fireEvent.click(
       screen.getByRole("button", { name: /results\.clips\.play/ }),
@@ -244,7 +348,11 @@ describe("ClipVault", () => {
   it("can collapse the contextual event list without closing the selected player", async () => {
     render(<ClipVault />);
 
+    fireEvent.click(await screen.findByTestId("clip-vault-disclosure-game-a"));
     await screen.findByTestId("clip-vault-card-C:/clips/default.mp4");
+    fireEvent.click(
+      screen.getByRole("button", { name: /results\.clips\.play/ }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "common.close" }));
 
     expect(screen.getByTestId("clip-workspace-player")).toBeInTheDocument();
@@ -263,6 +371,8 @@ describe("ClipVault", () => {
     );
     render(<ClipVault onCreateMontage={onCreateMontage} />);
 
+    fireEvent.click(await screen.findByTestId("clip-vault-disclosure-game-a"));
+    fireEvent.click(await screen.findByTestId("clip-vault-disclosure-game-b"));
     const checkboxes = await screen.findAllByRole("checkbox");
     fireEvent.click(checkboxes[0]);
     fireEvent.click(checkboxes[1]);
@@ -325,6 +435,9 @@ describe("ClipVault", () => {
     );
 
     render(<ClipVault />);
+    fireEvent.click(
+      await screen.findByTestId("clip-vault-disclosure-game-visible"),
+    );
     await screen.findByTestId("clip-vault-card-C:/clips/visible-only.mp4");
     expect(mockEnsureThumbnail).not.toHaveBeenCalled();
     act(() => reveal?.([{ isIntersecting: true }]));

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { Results } from "./Results";
 
 let mockTab: "clips" | "highlights" | "games" | "replays" | undefined;
@@ -32,10 +33,6 @@ jest.mock("@/components/results/ClipVault", () => ({
   ClipVault: () => <div data-testid="clips-list">clips</div>,
 }));
 
-jest.mock("@/pages/Games", () => ({
-  Games: () => <div data-testid="games-list">games</div>,
-}));
-
 jest.mock("@/pages/Replays", () => ({
   Replays: () => <div data-testid="replays-list">replays</div>,
 }));
@@ -52,13 +49,13 @@ describe("Results (unified library)", () => {
     expect(screen.getByTestId("clips-list")).toBeInTheDocument();
   });
 
-  it("offers original clips, finished videos, recorded games and replays in one screen", () => {
+  it("offers game records, finished videos and replays in one screen", () => {
     render(<Results />);
 
     expect(screen.getByTestId("results-tab-clips")).toBeInTheDocument();
     expect(screen.getByTestId("results-tab-highlights")).toBeInTheDocument();
-    expect(screen.getByTestId("results-tab-games")).toBeInTheDocument();
     expect(screen.getByTestId("results-tab-replays")).toBeInTheDocument();
+    expect(screen.queryByTestId("results-tab-games")).not.toBeInTheDocument();
   });
 
   it("writes finished-video tab changes to the router search state", () => {
@@ -78,12 +75,28 @@ describe("Results (unified library)", () => {
     render(<Results />);
 
     // Radix tabs activate on mouse down, not on a synthesized click.
-    fireEvent.mouseDown(screen.getByTestId("results-tab-games"), { button: 0 });
+    fireEvent.mouseDown(screen.getByTestId("results-tab-replays"), {
+      button: 0,
+    });
 
     expect(mockNavigate).toHaveBeenCalledWith({
-      search: { tab: "games" },
+      search: { tab: "replays" },
       replace: false,
     });
+  });
+
+  it("normalizes the legacy games tab to the game records tab", async () => {
+    mockTab = "games";
+
+    render(<Results />);
+
+    expect(screen.getByTestId("clips-list")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockNavigate).toHaveBeenCalledWith({
+        search: { tab: "clips" },
+        replace: true,
+      }),
+    );
   });
 
   it("opens the tab named by ?tab= so redirected deep links keep working", () => {
@@ -97,7 +110,7 @@ describe("Results (unified library)", () => {
   it("restores the active tab when router history changes", () => {
     mockTab = "games";
     const { rerender } = render(<Results />);
-    expect(screen.getByTestId("games-list")).toBeInTheDocument();
+    expect(screen.getByTestId("clips-list")).toBeInTheDocument();
 
     mockTab = "highlights";
     rerender(<Results />);

@@ -72,24 +72,16 @@ jobs:
         shell: powershell
         env:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: readiness-fixture-only
-          CARGO_TARGET_DIR: target
         run: |
           $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath '${{ steps.fixture-key.outputs.private_key_path }}' -Raw
-          $env:TAURI_UPDATER_PUBKEY = (Get-Content -LiteralPath '${{ steps.fixture-key.outputs.public_key_path }}' -Raw).Trim()
-          $config = Get-Content -LiteralPath 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json
-          $config.bundle.createUpdaterArtifacts = $true
-          $config.plugins | Add-Member -MemberType NoteProperty -Name updater -Value ([pscustomobject]@{
-            pubkey = $env:TAURI_UPDATER_PUBKEY
-            endpoints = @('https://github.com/KhakiSkech/lolshorts/releases/latest/download/latest.json')
-          }) -Force
-          $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath 'readiness-signing-config.json' -Encoding utf8
-          npx tauri build --bundles msi,nsis --config readiness-signing-config.json
+          $env:TAURI_UPDATER_PUBKEY = Get-Content -LiteralPath '${{ steps.fixture-key.outputs.public_key_path }}' -Raw
+          npx tauri build --bundles msi,nsis
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate fixture contract and silent install lifecycle
         shell: powershell
         run: |
-          ./scripts/verify-release-contract.ps1 -ConfigPath readiness-signing-config.json -BundleDir src-tauri/target/release/bundle
+          ./scripts/verify-release-contract.ps1 -BundleDir src-tauri/target/release/bundle
           $msi = Get-ChildItem src-tauri/target/release/bundle/msi -Filter *.msi | Select-Object -First 1
           $nsis = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
           ./tests/installer/validate-installer.ps1 -InstallerPath $msi.FullName -InstallerType MSI -NonInteractive -RunSilentInstall

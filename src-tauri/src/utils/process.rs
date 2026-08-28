@@ -54,13 +54,40 @@ pub fn command_output_with_timeout(
         }
 
         if started_at.elapsed() >= timeout_after {
-            let _ = child.kill();
-            // Reap the killed direct child without adding another timeout to
-            // the caller's latency budget. `Child::wait` can block under heavy
-            // Windows load, so an owned detached reaper closes that handle as
-            // soon as the OS reports termination. Pipe drainers likewise end
-            // when their inherited handles close.
+            let pid = child.id();
+            // `cmd /C`, PowerShell, and a few vendor probes can create a
+            // grandchild that inherits the stdout/stderr pipe. Killing only
+            // the direct child leaves the drainer threads blocked until that
+            // grandchild exits naturally, which defeats the timeout's
+            // purpose and can keep the test/application alive for seconds.
+            // Ask Windows to terminate the scoped process tree asynchronously
+            // while retaining the direct-child fallback below. The helper is
+            // deliberately detached so the caller's latency budget is not
+            // extended by a best-effort cleanup command.
+            #[cfg(windows)]
+            {
+                let mut tree_kill = Command::new("taskkill");
+                tree_kill
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+                use std::os::windows::process::CommandExt;
+                tree_kill.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                if let Ok(mut tree_kill) = tree_kill.spawn() {
+                    thread::spawn(move || {
+                        let _ = tree_kill.wait();
+                    });
+                }
+            }
+            // Kill and reap the direct child on a detached thread as well.
+            // `Child::kill` may block while Windows tears down a process that
+            // has inherited pipe handles; performing it here would make the
+            // nominal timeout depend on the child tree and on system load.
+            // The caller's latency budget ends as soon as this reaper is
+            // scheduled, while pipe drainers finish when inherited handles
+            // close.
             thread::spawn(move || {
+                let _ = child.kill();
                 let _ = child.wait();
             });
             return Err(io::Error::new(

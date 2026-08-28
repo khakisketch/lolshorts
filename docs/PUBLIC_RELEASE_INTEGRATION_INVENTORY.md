@@ -74,6 +74,32 @@ Snapshot date: 2026-08-21 (Asia/Seoul)
 These results certify only the current game-independent candidate baseline.
 They do not convert any unrun E5 field row into a pass.
 
+## Latest dirty-checkout verification
+
+Validation rerun on 2026-08-27 (Asia/Seoul) after the final integration fixes:
+
+- Frontend lint, typecheck, production build, formatting, and Jest passed: 61
+  suites / 477 tests. The generated Rust/build trees remain outside the lint
+  scope.
+- Rust formatting, warning-denying Clippy, and the full test matrix passed:
+  738 library tests passed with 3 intentional ignores; all auxiliary binaries
+  and integration targets passed with only their documented ignored cases.
+- The real FFmpeg media regression, release-contract check, field-evidence
+  tool tests, npm runtime audit, and RustSec audit passed. RustSec still reports
+  only the documented 17 allowed unmaintained warnings and no vulnerabilities.
+- CI installer jobs now use the pinned project-local Tauri CLI and the current
+  `TAURI_SIGNING_PRIVATE_KEY*` variables. The normal CI build creates an
+  ephemeral updater key so it does not depend on production secrets; only the
+  production release workflow consumes the protected signing values.
+- The development server was intentionally left stopped. Playwright/Chromium,
+  Firefox, and Edge E2E was not rerun in this turn because that suite starts a
+  local server; the existing browser results above remain historical evidence,
+  not a new current-checkout pass.
+
+This rerun is still game-independent. Live League/LCU, Desktop Duplication/GDI
+capture, GPU/audio measurements, YouTube OAuth/upload, signed installer update
+and rollback, and the two-machine E5 packet remain external field gates.
+
 ## Deliberately external release blockers
 
 - Production Supabase, YouTube desktop OAuth, Authenticode, and Tauri updater

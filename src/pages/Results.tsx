@@ -1,9 +1,9 @@
+import { useEffect } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { ResultsViewer } from "@/components/results/ResultsViewer";
 import { ClipVault } from "@/components/results/ClipVault";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Games } from "@/pages/Games";
 import { Replays } from "@/pages/Replays";
 
 type ResultsTab = "clips" | "highlights" | "games" | "replays";
@@ -23,7 +23,16 @@ export function Results() {
   const { t } = useTranslation();
   const search = useSearch({ from: "/results" });
   const navigate = useNavigate({ from: "/results" });
-  const tab: ResultsTab = search.tab ?? "clips";
+  const requestedTab: ResultsTab = search.tab ?? "clips";
+  const tab = requestedTab === "games" ? "clips" : requestedTab;
+
+  useEffect(() => {
+    if (requestedTab !== "games") return;
+    void navigate({
+      search: { tab: "clips" },
+      replace: true,
+    });
+  }, [navigate, requestedTab]);
 
   return (
     <div data-testid="results-page" className="space-y-6">
@@ -52,7 +61,7 @@ export function Results() {
           })
         }
       >
-        <TabsList className="grid w-full max-w-2xl grid-cols-4 h-auto">
+        <TabsList className="grid w-full max-w-2xl grid-cols-3 h-auto">
           <TabsTrigger
             value="clips"
             className="min-h-[44px]"
@@ -66,13 +75,6 @@ export function Results() {
             data-testid="results-tab-highlights"
           >
             {t("results.tabs.highlights")}
-          </TabsTrigger>
-          <TabsTrigger
-            value="games"
-            className="min-h-[44px]"
-            data-testid="results-tab-games"
-          >
-            {t("results.tabs.games")}
           </TabsTrigger>
           <TabsTrigger
             value="replays"
@@ -89,10 +91,6 @@ export function Results() {
 
         <TabsContent value="highlights" className="mt-6">
           <ResultsViewer />
-        </TabsContent>
-
-        <TabsContent value="games" className="mt-6">
-          <Games />
         </TabsContent>
 
         <TabsContent value="replays" className="mt-6">

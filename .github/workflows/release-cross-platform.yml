@@ -159,10 +159,10 @@ jobs:
           .\prepare_ffmpeg.ps1 -Source Download
 
       - name: Build application (Release)
-        run: cargo tauri build --verbose
+        run: npm run tauri build -- --verbose
         env:
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
       - name: Code signing setup (Windows)
         if: secrets.WINDOWS_CERTIFICATE_BASE64 != ''
@@ -184,11 +184,11 @@ jobs:
           $nsisPath = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1
 
           if ($msiPath) {
-            signtool sign /f "Cert:\CurrentUser\My\${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}" /p "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" /t http://timestamp.digicert.com /fd sha256 $msiPath.FullName
+            signtool sign /f "Cert:\CurrentUser\My\${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}" /p "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" /tr https://timestamp.digicert.com /td sha256 /fd sha256 $msiPath.FullName
           }
 
           if ($nsisPath) {
-            signtool sign /f "Cert:\CurrentUser\My\${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}" /p "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" /t http://timestamp.digicert.com /fd sha256 $nsisPath.FullName
+            signtool sign /f "Cert:\CurrentUser\My\${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}" /p "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" /tr https://timestamp.digicert.com /td sha256 /fd sha256 $nsisPath.FullName
           }
 
       - name: Get installer paths
@@ -267,10 +267,10 @@ jobs:
           sed -i '' 's/"targets": \["nsis", "msi"\]/"targets": ["dmg", "app"]/' src-tauri/tauri.conf.json
 
       - name: Build application (Release)
-        run: cargo tauri build --verbose
+        run: npm run tauri build -- --verbose
         env:
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
       - name: Code signing setup (macOS)
         if: secrets.MACOS_CERTIFICATE_BASE64 != ''

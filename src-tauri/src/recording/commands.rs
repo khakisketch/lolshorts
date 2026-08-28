@@ -1723,26 +1723,21 @@ pub async fn detect_available_encoders() -> AppResult<serde_json::Value> {
 }
 
 #[tauri::command]
-pub async fn get_disk_usage_info() -> AppResult<serde_json::Value> {
-    tokio::task::spawn_blocking(collect_disk_usage_info)
+pub async fn get_disk_usage_info(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let recordings_dir = state.recordings_dir.clone();
+    let logs_dir = state.storage.base_path().join("logs");
+    tokio::task::spawn_blocking(move || collect_disk_usage_info(recordings_dir, logs_dir))
         .await
         .map_err(|error| AppError::Internal(format!("Disk usage scan failed: {error}")))
 }
 
-fn collect_disk_usage_info() -> serde_json::Value {
+fn collect_disk_usage_info(recordings_dir: PathBuf, logs_dir: PathBuf) -> serde_json::Value {
     use serde_json::json;
 
-    // Use actual app data directory (same as main.rs)
-    let app_data = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lolshorts");
-
-    let recordings_dir = app_data.join("recordings");
     // The rolling-buffer segments (the actual temp footage + loopback WAV) live in
     // recordings/segments, not the non-existent recordings/temp_segments the UI used
     // to scan (which always reported ~0 bytes).
-    let temp_dir = app_data.join("recordings").join("segments");
-    let logs_dir = app_data.join("logs");
+    let temp_dir = recordings_dir.join("segments");
 
     // The application directories contain nested per-game and per-job folders.
     // Reuse the recursive storage scanner; the previous one-level sum counted
@@ -1753,7 +1748,7 @@ fn collect_disk_usage_info() -> serde_json::Value {
 
     // One atomic volume probe keeps total/free values from different moments
     // from being combined and halves the WMI/Win32 call overhead.
-    let disk_space = crate::utils::disk::query_disk_space(&app_data).ok();
+    let disk_space = crate::utils::disk::query_disk_space(&recordings_dir).ok();
     let disk_known = disk_space.is_some();
     let (total_space, free_space) = disk_space
         .map(|snapshot| (snapshot.total_bytes, snapshot.available_bytes))
@@ -1780,11 +1775,7 @@ fn collect_disk_usage_info() -> serde_json::Value {
 #[tauri::command]
 pub async fn cleanup_temp_files(state: State<'_, AppState>) -> AppResult<u64> {
     // Actual rolling-buffer footage lives in recordings/segments (not temp_segments).
-    let segments_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lolshorts")
-        .join("recordings")
-        .join("segments");
+    let segments_dir = state.recordings_dir.join("segments");
 
     // Always run the standard startup cleanup (logs + legacy temp dirs).
     state

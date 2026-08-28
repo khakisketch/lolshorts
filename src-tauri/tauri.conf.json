@@ -50,14 +50,14 @@
   },
   "bundle": {
     "active": true,
-      "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis", "msi"],
     "resources": ["resources/*"],
     "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
-      "timestampUrl": "http://timestamp.digicert.com",
+      "timestampUrl": "https://timestamp.digicert.com",
       "allowDowngrades": false,
       "wix": {
         "language": ["en-US"],
@@ -105,6 +105,11 @@
   "plugins": {
     "shell": {
       "open": true
+    },
+    "updater": {
+      "endpoints": [
+        "https://github.com/KhakiSkech/lolshorts/releases/latest/download/latest.json"
+      ]
     }
   }
 }

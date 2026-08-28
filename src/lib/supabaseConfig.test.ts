@@ -45,6 +45,19 @@ describe("resolveFrontendSupabaseConfig", () => {
     ).toThrow("public anon/publishable key");
   });
 
+  it("rejects credentials, ports, and query/fragment components", () => {
+    for (const url of [
+      "https://user:password@project.supabase.co",
+      "https://project.supabase.co:8443",
+      "https://project.supabase.co?tenant=other",
+      "https://project.supabase.co#fragment",
+    ]) {
+      expect(() =>
+        resolveFrontendSupabaseConfig(url, "public-key", true),
+      ).toThrow("must use HTTPS");
+    }
+  });
+
   it("preserves a valid public production configuration", () => {
     expect(
       resolveFrontendSupabaseConfig(

@@ -91,7 +91,7 @@ const gamesRoute = new Route({
   getParentRoute: () => rootRoute,
   path: "/games",
   beforeLoad: () => {
-    throw redirect({ to: "/results", search: { tab: "games" } });
+    throw redirect({ to: "/results", search: { tab: "clips" } });
   },
 });
 

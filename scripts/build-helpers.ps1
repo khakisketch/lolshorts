@@ -219,13 +219,13 @@ function Sign-WindowsBinaries {
         # Sign MSI
         if ($msiPath) {
             Write-ColorOutput "Signing MSI: $($msiPath.Name)" "Yellow"
-            signtool sign /f $certPath /p $env:WINDOWS_CERTIFICATE_PASSWORD /t http://timestamp.digicert.com /fd sha256 $msiPath.FullName
+            signtool sign /f $certPath /p $env:WINDOWS_CERTIFICATE_PASSWORD /tr https://timestamp.digicert.com /td sha256 /fd sha256 $msiPath.FullName
         }
 
         # Sign NSIS
         if ($nsisPath) {
             Write-ColorOutput "Signing NSIS: $($nsisPath.Name)" "Yellow"
-            signtool sign /f $certPath /p $env:WINDOWS_CERTIFICATE_PASSWORD /t http://timestamp.digicert.com /fd sha256 $nsisPath.FullName
+            signtool sign /f $certPath /p $env:WINDOWS_CERTIFICATE_PASSWORD /tr https://timestamp.digicert.com /td sha256 /fd sha256 $nsisPath.FullName
         }
 
         Write-ColorOutput "✅ Binary signing completed" "Green"

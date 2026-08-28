@@ -497,6 +497,11 @@ pub struct VideoSettingsConfig {
     pub bitrate: u32,
     pub use_h265: bool,
     pub encoder_preference: String,
+    /// Optional monitor index for multi-monitor capture (0/None uses the
+    /// primary monitor). Keeping this in the initialization DTO ensures a
+    /// saved monitor choice is honoured from the first recording after app
+    /// startup, not only after the settings screen is opened.
+    pub monitor_index: Option<u32>,
 }
 
 impl Default for VideoSettingsConfig {
@@ -507,6 +512,7 @@ impl Default for VideoSettingsConfig {
             bitrate: 20_000_000,
             use_h265: false,
             encoder_preference: "auto".to_string(),
+            monitor_index: None,
         }
     }
 }

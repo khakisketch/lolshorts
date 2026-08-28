@@ -15,7 +15,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration
-REPO_URL="https://github.com/LoLShorts/lolshorts.git"
+REPO_URL="https://github.com/khakisketch/lolshorts.git"
 DEV_DIR="$HOME/Development"
 PROJECT_NAME="lolshorts"
 

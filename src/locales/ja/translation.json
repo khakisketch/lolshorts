@@ -16,7 +16,13 @@
     "results": "結果",
     "proRequired": "PROが必要です",
     "replays": "リプレイ",
-    "userProfile": "ユーザープロフィール"
+    "userProfile": "ユーザープロフィール",
+    "recording": "録画",
+    "library": "ライブラリ",
+    "studio": "スタジオ",
+    "quit": "LoLShortsを終了",
+    "expandSidebar": "サイドバーを展開",
+    "collapseSidebar": "サイドバーを折りたたむ"
   },
   "auth": {
     "login": "ログイン",
@@ -396,6 +402,17 @@
   },
   "settings": {
     "title": "設定",
+    "basic": {
+      "storage": {
+        "currentMedia": "アプリ内メディア: {{size}}",
+        "freeSpace": "空き容量: {{size}}",
+        "checking": "確認中…",
+        "recordingEstimate": "録画の目安: {{bitrate}} Mbpsで1時間あたり約{{size}} GB",
+        "lowSpaceRisk": "容量不足の恐れ: 現在の画質ではあと約{{hours}}時間録画できます。",
+        "retentionPeriod": "保持期間",
+        "retentionDescription": "自動削除は有効にした場合のみ動作し、エクスポート済みクリップは標準では削除しません。"
+      }
+    },
     "license": {
       "title": "ライセンスとサブスクリプション",
       "description": "現在のプランとサブスクリプション情報",
@@ -747,9 +764,13 @@
   },
   "results": {
     "tabs": {
-      "clips": "Clip vault"
+      "clips": "ゲーム記録",
+      "highlights": "完成動画",
+      "replays": "リプレイ"
     },
     "clips": {
+      "title": "ゲーム記録",
+      "description": "ゲームごとに、見どころのクリップをまとめています。",
       "title": "Recommended clips",
       "description": "Original game clips, ranked by the moments most worth watching.",
       "sortLabel": "Sort clips",
@@ -767,9 +788,23 @@
       "emptyDescription": "Play a game and your strongest moments will appear here.",
       "unknownDate": "Date unavailable",
       "clipCount": "{{count}} clips",
+      "selectedCount": "{{count}} selected",
       "selectGame": "Select all",
       "clearGameSelection": "Clear game",
       "gameRank": "This game #{{rank}}",
+      "gameCount": "{{count}} games",
+      "expandAll": "Expand all",
+      "collapseAll": "Collapse all",
+      "searchLabel": "ゲームを検索",
+      "searchPlaceholder": "チャンピオン・モード・ゲームIDで検索",
+      "modeFilterLabel": "ゲームモードの絞り込み",
+      "allModes": "すべてのゲームモード",
+      "noMatches": "条件に一致するゲームがありません",
+      "clearFilters": "条件をクリア",
+      "storageStats": "ライブラリの容量概要",
+      "totalGames": "ゲーム数",
+      "totalClips": "クリップ数",
+      "storageUsed": "使用容量",
       "selectionActions": "Selected clip actions",
       "selectionSummary": "{{clips}} clips · {{games}} games · about {{duration}}",
       "clearAll": "Clear all",

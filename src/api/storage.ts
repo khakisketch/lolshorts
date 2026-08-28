@@ -31,6 +31,8 @@ export const storageApi = {
     sort: ClipVaultSort;
     cursor: string | null;
     game_limit: number;
+    query?: string;
+    game_mode?: string;
   }) => cmd<ClipVaultPage>("list_clip_vault_page", { input }),
 
   ensureClipThumbnail: (gameId: string, clipFilePath: string) =>

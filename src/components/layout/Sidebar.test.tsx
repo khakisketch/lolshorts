@@ -66,15 +66,26 @@ describe("Sidebar", () => {
     });
   });
 
-  it("uses a compact icon rail outside Settings and retains the expanded Settings navigation", () => {
+  it("uses a compact icon rail on every desktop route and expands explicitly", () => {
     const { rerender } = render(<Sidebar />);
     expect(screen.getByRole("complementary")).toHaveClass("w-16");
     expect(screen.getByText("녹화")).toHaveClass("sr-only");
 
     mockPathname = "/settings";
     rerender(<Sidebar />);
+    expect(screen.getByRole("complementary")).toHaveClass("w-16");
+    expect(screen.getByText("녹화")).toHaveClass("sr-only");
+
+    fireEvent.click(screen.getByTestId("sidebar-toggle"));
     expect(screen.getByRole("complementary")).toHaveClass("w-64");
     expect(screen.getByText("녹화")).not.toHaveClass("sr-only");
+    expect(screen.getByTestId("sidebar-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    fireEvent.click(screen.getByTestId("sidebar-toggle"));
+    expect(screen.getByRole("complementary")).toHaveClass("w-16");
   });
 
   it("shows four top-level destinations: 녹화 / 라이브러리 / 스튜디오 / 설정", () => {

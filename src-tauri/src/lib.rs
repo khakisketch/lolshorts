@@ -25,6 +25,10 @@ pub use error::{AppError, AppResult};
 #[derive(Clone)]
 pub struct AppState {
     pub storage: Arc<storage::Storage>,
+    /// The directory currently used by the recording backend. This can differ
+    /// from `storage.base_path()/recordings` when startup enters a recovery
+    /// recording path, so commands must not reconstruct it from `dirs`.
+    pub recordings_dir: std::path::PathBuf,
     pub auth: Arc<auth::AuthManager>,
     pub recording_manager: Arc<RwLock<recording::RecordingManager>>,
     pub clip_manager: Arc<recording::auto_clip_manager::AutoClipManager>,

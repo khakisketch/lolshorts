@@ -2955,15 +2955,13 @@ mod capture_lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn normal_child_exit_is_reported_as_graceful() {
-        let mut command = tokio::process::Command::new("cmd.exe");
+    async fn graceful_q_shutdown_is_preferred() {
+        let mut command = tokio::process::Command::new("powershell");
         command.args([
-            "/C",
-            // cmd.exe executes the command line without treating redirected
-            // stdin as a PowerShell command stream. Keep this test focused on
-            // termination classification; the production path remains
-            // responsible for writing q to FFmpeg.
-            "timeout /T 1 /NOBREAK > NUL & exit /B 0",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$line = [Console]::In.ReadLine(); if ($line -eq 'q') { exit 0 } else { exit 2 }",
         ]);
         command
             .stdin(Stdio::piped())
@@ -2972,7 +2970,11 @@ mod capture_lifecycle_tests {
         let child = command.spawn().expect("spawn q-aware child");
 
         assert_eq!(
-            terminate_ffmpeg_process(child, Duration::from_secs(3), Duration::from_secs(1)).await,
+            // Windows CI can briefly starve a freshly spawned PowerShell child
+            // when the full crate suite is running. Keep the graceful budget
+            // aligned with the production stop path while leaving the forced
+            // fallback test below intentionally short.
+            terminate_ffmpeg_process(child, Duration::from_secs(2), Duration::from_secs(1)).await,
             FfmpegTermination::Graceful
         );
     }

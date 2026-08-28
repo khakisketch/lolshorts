@@ -189,7 +189,10 @@ pub async fn set_session(
     email: String,
     expires_at: Option<i64>,
 ) -> AppResult<SessionSyncResponse> {
-    info!("Syncing session for user: {}", email);
+    // Keep account identifiers out of the persistent application log. The
+    // session is still fully validated below, but an email/user id is not
+    // needed to diagnose a renderer-to-Rust sync failure.
+    info!("Syncing Supabase session");
 
     let previous_user_id = state
         .auth
@@ -213,26 +216,17 @@ pub async fn set_session(
         .map_err(|e| AppError::Internal(format!("Failed to get Supabase client: {}", e)))?;
 
     let verified_user = supabase_client.get_user(&access_token).await.map_err(|e| {
-        warn!(
-            "Token validation failed for claimed user {}: {}",
-            user_id, e
-        );
+        warn!("Token validation failed during session sync: {}", e);
         session_validation_error(e)
     })?;
 
     if verified_user.id != user_id {
-        warn!(
-            "Rejected session sync: token subject {} does not match claimed user {}",
-            verified_user.id, user_id
-        );
+        warn!("Rejected session sync: token subject does not match claimed user");
         return Err(AppError::Auth("Token subject mismatch".to_string()));
     }
 
     if !verified_user.email.eq_ignore_ascii_case(&email) {
-        warn!(
-            "Rejected session sync: token email {} does not match claimed email {}",
-            verified_user.email, email
-        );
+        warn!("Rejected session sync: token email does not match claimed email");
         return Err(AppError::Auth("Token email mismatch".to_string()));
     }
 

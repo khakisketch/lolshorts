@@ -241,7 +241,13 @@ pub async fn list_clip_vault_page(
         ));
     }
     run_storage_blocking(state.storage.clone(), move |storage| {
-        storage.list_clip_vault_page(input.sort, input.cursor.as_deref(), game_limit)
+        storage.list_clip_vault_page(
+            input.sort,
+            input.cursor.as_deref(),
+            game_limit,
+            input.query.as_deref(),
+            input.game_mode.as_deref(),
+        )
     })
     .await
 }

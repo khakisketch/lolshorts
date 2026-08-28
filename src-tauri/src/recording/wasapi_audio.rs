@@ -1014,16 +1014,13 @@ mod tests {
 
     #[test]
     fn test_wasapi_capture_creation() {
-        let temp_dir = std::env::temp_dir().join("lolshorts_wasapi_test");
-        let result = WasapiCapture::new(&temp_dir, None);
+        let temp_dir = tempfile::tempdir().expect("temporary capture directory");
+        let result = WasapiCapture::new(temp_dir.path(), None);
         assert!(result.is_ok());
 
         let capture = result.unwrap();
         assert!(!capture.flags.is_capturing.load(Ordering::SeqCst));
         assert!(capture.output_path().ends_with("wasapi_loopback.wav"));
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
@@ -1031,29 +1028,23 @@ mod tests {
         // Microphone capture must target the shared `mic_capture.wav` contract path,
         // distinct from the loopback `wasapi_loopback.wav`, so both can coexist in the
         // same segment directory without clobbering each other.
-        let temp_dir = std::env::temp_dir().join("lolshorts_mic_test");
-        let result = WasapiCapture::new_microphone(&temp_dir, None);
+        let temp_dir = tempfile::tempdir().expect("temporary microphone directory");
+        let result = WasapiCapture::new_microphone(temp_dir.path(), None);
         assert!(result.is_ok());
 
         let capture = result.unwrap();
         assert!(!capture.flags.is_capturing.load(Ordering::SeqCst));
         assert_eq!(capture.source, CaptureSource::Microphone);
         assert!(capture.output_path().ends_with("mic_capture.wav"));
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_wasapi_stop_when_not_capturing() {
-        let temp_dir = std::env::temp_dir().join("lolshorts_wasapi_stop_test");
-        let mut capture = WasapiCapture::new(&temp_dir, None).unwrap();
+        let temp_dir = tempfile::tempdir().expect("temporary stop directory");
+        let mut capture = WasapiCapture::new(temp_dir.path(), None).unwrap();
 
         // Stop without starting should return None
         assert!(capture.stop().is_none());
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
@@ -1179,10 +1170,8 @@ mod tests {
         // finalize()/drop, so a WAV that is still being captured advertises 0 bytes of
         // audio. save_clip muxes this file WHILE capture runs, and FFmpeg reads a
         // zero-length data chunk as "no audio" -> silent clip.
-        let dir = std::env::temp_dir().join("lolshorts_wav_flush_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("checkpoint.wav");
-        let _ = std::fs::remove_file(&path);
+        let dir = tempfile::tempdir().expect("temporary WAV directory");
+        let path = dir.path().join("checkpoint.wav");
 
         let spec = hound::WavSpec {
             channels: 2,
@@ -1211,8 +1200,6 @@ mod tests {
         }
         writer.finalize().unwrap();
         assert_eq!(wav_data_chunk_len(&path), Some(400));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1220,10 +1207,8 @@ mod tests {
         // The complement of the previous test: after a checkpoint the WAV parses as a
         // valid file with the expected sample count, which is what FFmpeg needs when
         // save_clip muxes a still-open capture.
-        let dir = std::env::temp_dir().join("lolshorts_wav_readable_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("readable.wav");
-        let _ = std::fs::remove_file(&path);
+        let dir = tempfile::tempdir().expect("temporary readable WAV directory");
+        let path = dir.path().join("readable.wav");
 
         let spec = hound::WavSpec {
             channels: 1,
@@ -1243,6 +1228,5 @@ mod tests {
         drop(reader);
 
         writer.finalize().unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

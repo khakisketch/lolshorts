@@ -798,32 +798,25 @@ mod tests {
 
     #[test]
     fn check_ffmpeg_in_dir_returns_none_for_empty_temp_directory() {
-        let tmp = std::env::temp_dir().join("lolshorts_test_empty_ffmpeg_dir");
-        let _ = std::fs::create_dir_all(&tmp);
-        let result = check_ffmpeg_in_dir(&tmp);
-        let _ = std::fs::remove_dir(&tmp);
+        let tmp = tempfile::tempdir().expect("temporary FFmpeg directory");
+        let result = check_ffmpeg_in_dir(tmp.path());
         assert!(result.is_none());
     }
 
     #[test]
     fn check_ffmpeg_in_dir_finds_ffmpeg_exe_in_directory() {
         // Create a temp dir with a fake ffmpeg.exe to verify detection logic
-        let tmp = std::env::temp_dir().join("lolshorts_test_ffmpeg_detection");
-        let _ = std::fs::create_dir_all(&tmp);
+        let tmp = tempfile::tempdir().expect("temporary FFmpeg directory");
 
         let ffmpeg_name = if cfg!(target_os = "windows") {
             "ffmpeg.exe"
         } else {
             "ffmpeg"
         };
-        let fake_ffmpeg = tmp.join(ffmpeg_name);
+        let fake_ffmpeg = tmp.path().join(ffmpeg_name);
         std::fs::write(&fake_ffmpeg, b"").expect("should write fake ffmpeg");
 
-        let result = check_ffmpeg_in_dir(&tmp);
-
-        // Clean up before asserting
-        let _ = std::fs::remove_file(&fake_ffmpeg);
-        let _ = std::fs::remove_dir(&tmp);
+        let result = check_ffmpeg_in_dir(tmp.path());
 
         assert!(result.is_some());
         assert_eq!(result.unwrap(), fake_ffmpeg);
@@ -831,42 +824,34 @@ mod tests {
 
     #[test]
     fn check_usable_ffmpeg_in_dir_rejects_non_executable_candidate() {
-        let tmp = std::env::temp_dir().join("lolshorts_test_ffmpeg_usability_detection");
-        let _ = std::fs::create_dir_all(&tmp);
+        let tmp = tempfile::tempdir().expect("temporary FFmpeg usability directory");
 
         let ffmpeg_name = if cfg!(target_os = "windows") {
             "ffmpeg.exe"
         } else {
             "ffmpeg"
         };
-        let fake_ffmpeg = tmp.join(ffmpeg_name);
+        let fake_ffmpeg = tmp.path().join(ffmpeg_name);
         std::fs::write(&fake_ffmpeg, b"").expect("should write fake ffmpeg");
 
-        let result = check_usable_ffmpeg_in_dir(&tmp);
-
-        let _ = std::fs::remove_file(&fake_ffmpeg);
-        let _ = std::fs::remove_dir(&tmp);
+        let result = check_usable_ffmpeg_in_dir(tmp.path());
 
         assert!(result.is_none());
     }
 
     #[test]
     fn check_ffprobe_in_dir_finds_tauri_sidecar_name() {
-        let tmp = std::env::temp_dir().join("lolshorts_test_ffprobe_detection");
-        let _ = std::fs::create_dir_all(&tmp);
+        let tmp = tempfile::tempdir().expect("temporary FFprobe directory");
 
         let ffprobe_name = if cfg!(target_os = "windows") {
             "ffprobe-x86_64-pc-windows-msvc.exe"
         } else {
             "ffprobe"
         };
-        let fake_ffprobe = tmp.join(ffprobe_name);
+        let fake_ffprobe = tmp.path().join(ffprobe_name);
         std::fs::write(&fake_ffprobe, b"").expect("should write fake ffprobe");
 
-        let result = check_ffprobe_in_dir(&tmp);
-
-        let _ = std::fs::remove_file(&fake_ffprobe);
-        let _ = std::fs::remove_dir(&tmp);
+        let result = check_ffprobe_in_dir(tmp.path());
 
         assert!(result.is_some());
         assert_eq!(result.unwrap(), fake_ffprobe);
@@ -882,23 +867,19 @@ mod tests {
 
     #[test]
     fn check_ffmpeg_in_dir_finds_flat_sidecar_triple_name() {
-        let tmp = std::env::temp_dir().join("lolshorts_test_ffmpeg_flat_sidecar");
-        let _ = std::fs::create_dir_all(&tmp);
+        let tmp = tempfile::tempdir().expect("temporary FFmpeg sidecar directory");
 
         let ffmpeg_name = if cfg!(target_os = "windows") {
             "ffmpeg-x86_64-pc-windows-msvc.exe"
         } else {
             "ffmpeg"
         };
-        let fake_ffmpeg = tmp.join(ffmpeg_name);
+        let fake_ffmpeg = tmp.path().join(ffmpeg_name);
         std::fs::write(&fake_ffmpeg, b"").expect("should write fake ffmpeg sidecar");
 
         // Simulates get_ffmpeg_path step 2: checking the exe directory itself
         // (not exe_dir/binaries) for the sidecar binary.
-        let result = check_ffmpeg_in_dir(&tmp);
-
-        let _ = std::fs::remove_file(&fake_ffmpeg);
-        let _ = std::fs::remove_dir(&tmp);
+        let result = check_ffmpeg_in_dir(tmp.path());
 
         assert!(result.is_some());
         assert_eq!(result.unwrap(), fake_ffmpeg);
@@ -906,23 +887,19 @@ mod tests {
 
     #[test]
     fn check_ffprobe_in_dir_finds_flat_sidecar_triple_name() {
-        let tmp = std::env::temp_dir().join("lolshorts_test_ffprobe_flat_sidecar");
-        let _ = std::fs::create_dir_all(&tmp);
+        let tmp = tempfile::tempdir().expect("temporary FFprobe sidecar directory");
 
         let ffprobe_name = if cfg!(target_os = "windows") {
             "ffprobe-x86_64-pc-windows-msvc.exe"
         } else {
             "ffprobe"
         };
-        let fake_ffprobe = tmp.join(ffprobe_name);
+        let fake_ffprobe = tmp.path().join(ffprobe_name);
         std::fs::write(&fake_ffprobe, b"").expect("should write fake ffprobe sidecar");
 
         // Simulates get_ffprobe_path step 2: checking the exe directory itself
         // (not exe_dir/binaries) for the sidecar binary.
-        let result = check_ffprobe_in_dir(&tmp);
-
-        let _ = std::fs::remove_file(&fake_ffprobe);
-        let _ = std::fs::remove_dir(&tmp);
+        let result = check_ffprobe_in_dir(tmp.path());
 
         assert!(result.is_some());
         assert_eq!(result.unwrap(), fake_ffprobe);

@@ -477,7 +477,7 @@ RECORDING_RESOLUTION=1920x1080
 
 - **Discord**: https://discord.gg/lolshorts
 - **Email**: support@lolshorts.com
-- **GitHub Issues**: https://github.com/lolshorts/lolshorts/issues
+- **GitHub Issues**: https://github.com/khakisketch/lolshorts/issues
 
 ### Feedback Collection
 

@@ -277,6 +277,27 @@ pub async fn install_app_update(
             "Stop recording and wait for media jobs to finish before installing",
         ));
     }
+    let storage = Arc::clone(&state.storage);
+    let media_jobs_active = tokio::task::spawn_blocking(move || storage.has_active_media_jobs())
+        .await
+        .map_err(|error| {
+            AppUpdateManager::updater_error(
+                "update_busy_check_failed",
+                format!("Could not inspect media jobs before update: {error}"),
+            )
+        })?
+        .map_err(|error| {
+            AppUpdateManager::updater_error(
+                "update_busy_check_failed",
+                format!("Could not inspect media jobs before update: {error}"),
+            )
+        })?;
+    if media_jobs_active {
+        return Err(AppUpdateManager::updater_error(
+            "update_busy",
+            "Wait for queued or running media jobs to finish before installing",
+        ));
+    }
     state.update_manager.install(&app).await
 }
 

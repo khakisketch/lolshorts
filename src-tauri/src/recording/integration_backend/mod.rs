@@ -59,6 +59,7 @@ pub async fn initialize_recording_backend_full(
         hw_accel,
         output_dir,
         audio_config,
+        monitor_index: video.monitor_index,
         ..Default::default()
     };
 

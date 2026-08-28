@@ -503,6 +503,12 @@ export function BasicSettings({
   const coverage = evaluateCoverage(
     settings.event_filter as unknown as Record<string, boolean | number>,
   );
+  const bitrateMbps = BITRATE_MBPS[settings.video.bitrate_preset];
+  const estimatedGbPerHour = (bitrateMbps * 3600) / (8 * 1000);
+  const estimatedHoursRemaining =
+    availableStorageGb === null || estimatedGbPerHour <= 0
+      ? null
+      : availableStorageGb / estimatedGbPerHour;
 
   const handlePresetChange = (value: string) => {
     onChange({
@@ -872,20 +878,36 @@ export function BasicSettings({
               className="grid gap-2 rounded-lg border border-white/5 bg-white/[0.02] p-3 text-xs text-muted-foreground sm:grid-cols-3"
               data-testid="storage-estimate"
             >
-              <span>Current app media: {formatBytes(storageUsageBytes)}</span>
               <span>
-                Free space:{" "}
-                {availableStorageGb === null
-                  ? "Checking…"
-                  : `${availableStorageGb.toFixed(1)} GB`}
+                {t("settings.basic.storage.currentMedia", {
+                  size: formatBytes(
+                    storageUsageBytes,
+                    t("settings.basic.storage.checking", "Checking…"),
+                  ),
+                })}
               </span>
-              <span>Recording estimate: about 9 GB/hour at 20 Mbps</span>
-              {availableStorageGb !== null && availableStorageGb < 18 && (
-                <strong className="text-amber-300 sm:col-span-3">
-                  Low-space risk: less than roughly two hours of 20 Mbps capture
-                  remains.
-                </strong>
-              )}
+              <span>
+                {t("settings.basic.storage.freeSpace", {
+                  size:
+                    availableStorageGb === null
+                      ? t("settings.basic.storage.checking", "Checking…")
+                      : `${availableStorageGb.toFixed(1)} GB`,
+                })}
+              </span>
+              <span>
+                {t("settings.basic.storage.recordingEstimate", {
+                  size: estimatedGbPerHour.toFixed(1),
+                  bitrate: bitrateMbps,
+                })}
+              </span>
+              {estimatedHoursRemaining !== null &&
+                estimatedHoursRemaining < 2 && (
+                  <strong className="text-amber-300 sm:col-span-3">
+                    {t("settings.basic.storage.lowSpaceRisk", {
+                      hours: estimatedHoursRemaining.toFixed(1),
+                    })}
+                  </strong>
+                )}
             </div>
 
             <div className="flex items-center justify-between gap-4">
@@ -921,10 +943,11 @@ export function BasicSettings({
 
             <div className="flex items-center justify-between gap-4">
               <div className="space-y-0.5">
-                <Label htmlFor="basic-auto-delete-days">Retention period</Label>
+                <Label htmlFor="basic-auto-delete-days">
+                  {t("settings.basic.storage.retentionPeriod")}
+                </Label>
                 <p className="text-sm text-muted-foreground">
-                  Automatic deletion remains opt-in and never deletes exported
-                  clips by default.
+                  {t("settings.basic.storage.retentionDescription")}
                 </p>
               </div>
               <Input
@@ -990,8 +1013,8 @@ function clampRetentionDays(raw: string): number {
   return Math.min(3650, Math.max(1, parsed));
 }
 
-function formatBytes(bytes: number | null): string {
-  if (bytes === null) return "Checking…";
+function formatBytes(bytes: number | null, unknownLabel = "Checking…"): string {
+  if (bytes === null) return unknownLabel;
   if (bytes < 1024 * 1024 * 1024)
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;

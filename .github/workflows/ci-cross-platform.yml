@@ -150,7 +150,7 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Build application (debug)
-        run: cargo tauri build -- --debug
+        run: npm run tauri build -- --debug
 
       - name: Run E2E tests
         run: npx playwright test
@@ -193,7 +193,7 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Build application (debug)
-        run: cargo tauri build -- --debug
+        run: npm run tauri build -- --debug
 
       - name: Run E2E tests
         run: npx playwright test
@@ -298,10 +298,10 @@ jobs:
           fi
 
       - name: Build application (Release)
-        run: cargo tauri build --verbose
+        run: npm run tauri build -- --verbose
         env:
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
       - name: Verify build artifacts
         run: |

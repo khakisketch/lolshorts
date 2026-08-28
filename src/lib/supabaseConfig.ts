@@ -59,7 +59,15 @@ export const resolveFrontendSupabaseConfig = (
         "[Security] VITE_SUPABASE_URL must use HTTPS in production",
       );
     }
-    if (parsed.protocol !== "https:" || !parsed.hostname) {
+    if (
+      parsed.protocol !== "https:" ||
+      !parsed.hostname ||
+      parsed.username ||
+      parsed.password ||
+      parsed.port ||
+      parsed.search ||
+      parsed.hash
+    ) {
       throw new Error(
         "[Security] VITE_SUPABASE_URL must use HTTPS in production",
       );

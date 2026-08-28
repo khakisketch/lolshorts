@@ -49,14 +49,25 @@ impl Default for CleanupConfig {
 pub struct CleanupManager {
     config: CleanupConfig,
     app_data_dir: PathBuf,
+    recordings_dir: PathBuf,
 }
 
 impl CleanupManager {
     pub fn new(app_data_dir: PathBuf, config: CleanupConfig) -> Self {
+        let recordings_dir = app_data_dir.join("recordings");
         Self {
             config,
             app_data_dir,
+            recordings_dir,
         }
+    }
+
+    /// Override the recording directory when the backend is running in a
+    /// recovery location. The default remains `app_data_dir/recordings` so
+    /// existing callers and tests retain their original layout.
+    pub fn with_recordings_dir(mut self, recordings_dir: PathBuf) -> Self {
+        self.recordings_dir = recordings_dir;
+        self
     }
 
     /// Run startup cleanup
@@ -82,7 +93,7 @@ impl CleanupManager {
         // crash/kill. The actual segment directory is recordings/segments
         // (segment mp4s + WASAPI loopback WAV + concat list) -- NOT
         // recordings/temp_segments, which nothing ever writes to.
-        let segments_dir = self.app_data_dir.join("recordings").join("segments");
+        let segments_dir = self.recordings_dir.join("segments");
         if segments_dir.exists() {
             total_freed_mb +=
                 self.cleanup_old_files_blocking(&segments_dir, self.config.temp_file_max_age)?;
@@ -118,7 +129,7 @@ impl CleanupManager {
 
         // Clean all rolling-buffer segments (fresh start on next launch).
         // See cleanup_on_startup for why this targets recordings/segments.
-        let segments_dir = self.app_data_dir.join("recordings").join("segments");
+        let segments_dir = self.recordings_dir.join("segments");
         if segments_dir.exists() {
             self.clear_directory_blocking(&segments_dir)?;
         }
@@ -462,7 +473,7 @@ impl CleanupManager {
     ///
     /// Returns available space in GB
     pub fn check_disk_space(&self) -> Result<f64> {
-        let snapshot = crate::utils::disk::query_disk_space(&self.app_data_dir)
+        let snapshot = crate::utils::disk::query_disk_space(&self.recordings_dir)
             .context("Failed to query application disk space")?;
         Ok(snapshot.available_bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
@@ -471,7 +482,7 @@ impl CleanupManager {
     ///
     /// Returns (available_gb, total_gb) for the disk where app data is stored
     pub fn get_disk_space_info(&self) -> Result<(f64, f64)> {
-        let snapshot = crate::utils::disk::query_disk_space(&self.app_data_dir)
+        let snapshot = crate::utils::disk::query_disk_space(&self.recordings_dir)
             .context("Failed to query application disk space")?;
         let available_gb = snapshot.available_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
         let total_gb = snapshot.total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
@@ -798,6 +809,27 @@ mod tests {
         assert!(
             !fresh_segment.exists(),
             "shutdown cleanup should clear the entire segment buffer, even fresh files"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_uses_overridden_recovery_recordings_directory() {
+        let app_data_dir = tempdir().unwrap();
+        let recovery_recordings_dir = tempdir().unwrap();
+        let manager =
+            CleanupManager::new(app_data_dir.path().to_path_buf(), CleanupConfig::default())
+                .with_recordings_dir(recovery_recordings_dir.path().to_path_buf());
+
+        let recovery_segments = recovery_recordings_dir.path().join("segments");
+        fs::create_dir_all(&recovery_segments).unwrap();
+        let recovery_segment = recovery_segments.join("recovery.mp4");
+        File::create(&recovery_segment).unwrap();
+
+        manager.cleanup_on_shutdown().await.unwrap();
+
+        assert!(
+            !recovery_segment.exists(),
+            "cleanup must follow the recording backend's recovery path"
         );
     }
 

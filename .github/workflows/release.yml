@@ -103,8 +103,12 @@ jobs:
           if ($env:YOUTUBE_CLIENT_ID -notmatch '\.apps\.googleusercontent\.com$') {
             throw 'YOUTUBE_CLIENT_ID must be a Google desktop OAuth client id'
           }
-          if ($env:YOUTUBE_REDIRECT_URI -notmatch '^http://(localhost|127\.0\.0\.1)(:\d+)?/') {
-            throw 'YOUTUBE_REDIRECT_URI must use an HTTP loopback address'
+          if ($env:YOUTUBE_REDIRECT_URI -notmatch '^http://(localhost|127\.0\.0\.1):[1-9]\d{0,4}/[^?#/]+(?:/[^?#]*)?$') {
+            throw 'YOUTUBE_REDIRECT_URI must use an HTTP loopback address with an explicit port and callback path'
+          }
+          $redirectUri = [Uri]$env:YOUTUBE_REDIRECT_URI
+          if ($redirectUri.Port -gt 65535 -or $redirectUri.Query -or $redirectUri.Fragment) {
+            throw 'YOUTUBE_REDIRECT_URI must use a valid port and may not contain a query or fragment'
           }
 
       - name: Install dependencies and browsers
@@ -140,7 +144,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
-          CARGO_TARGET_DIR: target
         run: |
           $channel = '${{ inputs.channel }}'
           $endpoint = if ($channel -eq 'stable') {
@@ -148,21 +151,17 @@ jobs:
           } else {
             'https://github.com/${{ github.repository }}/releases/download/updater-preview/latest.json'
           }
-          $config = Get-Content -LiteralPath 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json
-          $config.bundle.createUpdaterArtifacts = $true
-          $config.bundle.windows.certificateThumbprint = '${{ steps.cert.outputs.thumbprint }}'
-          $config.plugins | Add-Member -MemberType NoteProperty -Name updater -Value ([pscustomobject]@{
-            pubkey = $env:TAURI_UPDATER_PUBKEY.Trim()
-            endpoints = @($endpoint)
-          }) -Force
-          $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath release-signing-config.json -Encoding utf8
+          @{
+            bundle = @{ windows = @{ certificateThumbprint = '${{ steps.cert.outputs.thumbprint }}' } }
+            plugins = @{ updater = @{ endpoints = @($endpoint) } }
+          } | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath release-signing-config.json -Encoding utf8
           npx tauri build --bundles msi,nsis --config release-signing-config.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate signed installers and sidecars fail-closed
         shell: powershell
         run: |
-          ./scripts/verify-release-contract.ps1 -ConfigPath release-signing-config.json -BundleDir src-tauri/target/release/bundle
+          ./scripts/verify-release-contract.ps1 -BundleDir src-tauri/target/release/bundle
           $msi = Get-ChildItem src-tauri/target/release/bundle/msi -Filter *.msi | Select-Object -First 1
           $nsis = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
           ./tests/installer/validate-installer.ps1 -InstallerPath $msi.FullName -InstallerType MSI -NonInteractive -RunSilentInstall -ReleaseChannel

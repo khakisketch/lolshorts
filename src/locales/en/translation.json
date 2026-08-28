@@ -13,7 +13,9 @@
     "sidebarLabel": "Application sidebar",
     "mainNavigation": "Main navigation",
     "userProfile": "User profile",
-    "home": "Home"
+    "home": "Home",
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar"
   },
   "studio": {
     "modeNavigation": "Studio mode",
@@ -408,7 +410,7 @@
     "clipLibrary": {
       "title": "Clip Library",
       "noClipsAvailable": "No Clips Available",
-      "noClipsDescription": "Select a game from the Games page to load clips for editing.",
+      "noClipsDescription": "Select a game from the Library to load clips for editing.",
       "clipsCount": "{{count}} clips available",
       "rankedDescription": "Best highlights first"
     },
@@ -698,13 +700,13 @@
     "withMusic": "With Music",
     "play": "Play",
     "delete": "Delete",
-    "pageDescription": "Browse original clips, finished videos, recorded games and replays in one place.",
+    "pageDescription": "Browse game clips, finished videos and replays in one place.",
     "thumbnailAlt": "Video thumbnail",
     "polish": "Polish",
     "share": "Share",
     "tabs": {
       "highlights": "Finished videos",
-      "clips": "Clip vault",
+      "clips": "Game records",
       "games": "Recorded games",
       "replays": "Replays"
     },
@@ -730,9 +732,23 @@
       "emptyDescription": "Play a game and your strongest moments will appear here.",
       "unknownDate": "Date unavailable",
       "clipCount": "{{count}} clips",
+      "selectedCount": "{{count}} selected",
       "selectGame": "Select all",
       "clearGameSelection": "Clear game",
       "gameRank": "This game #{{rank}}",
+      "gameCount": "{{count}} games",
+      "expandAll": "Expand all",
+      "collapseAll": "Collapse all",
+      "searchLabel": "Search games",
+      "searchPlaceholder": "Search by champion, mode or game ID",
+      "modeFilterLabel": "Game mode filter",
+      "allModes": "All game modes",
+      "noMatches": "No games match these filters",
+      "clearFilters": "Clear filters",
+      "storageStats": "Library storage summary",
+      "totalGames": "Total games",
+      "totalClips": "Total clips",
+      "storageUsed": "Storage used",
       "selectionActions": "Selected clip actions",
       "selectionSummary": "{{clips}} clips · {{games}} games · about {{duration}}",
       "clearAll": "Clear all",
@@ -1044,7 +1060,14 @@
         "autoCleanupDescription": "Deletes the oldest clips first to free space",
         "limitLabel": "Storage limit (GB)",
         "limitDescription": "Once total usage passes this, the oldest clips are deleted",
-        "limitDisabledHint": "Turn on automatic cleanup for this limit to apply"
+        "limitDisabledHint": "Turn on automatic cleanup for this limit to apply",
+        "currentMedia": "Current app media: {{size}}",
+        "freeSpace": "Free space: {{size}}",
+        "checking": "Checking…",
+        "recordingEstimate": "Recording estimate: about {{size}} GB/hour at {{bitrate}} Mbps",
+        "lowSpaceRisk": "Low-space risk: about {{hours}} hours of capture remain at the current quality.",
+        "retentionPeriod": "Retention period",
+        "retentionDescription": "Automatic deletion remains opt-in and never deletes exported clips by default."
       },
       "autoStart": {
         "title": "Launch on Windows startup",

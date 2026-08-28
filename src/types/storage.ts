@@ -94,7 +94,7 @@ export type ClipVaultSort = "best" | "newest";
 
 export interface ClipVaultGameGroup {
   game_id: string;
-  game: Pick<GameMetadata, "champion" | "result" | "start_time"> | null;
+  game: GameMetadata | null;
   clips: ClipMetadata[];
   clip_count: number;
 }

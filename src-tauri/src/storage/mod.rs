@@ -46,6 +46,10 @@ const AUTO_EDIT_USAGE_USER_SCOPED_MIGRATION: &str = "auto_edit_usage_user_scoped
 struct ClipVaultCursor {
     sort: ClipVaultSort,
     game_id: String,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    game_mode: Option<String>,
 }
 
 /// SQLite-backed local storage for app-owned metadata.
@@ -583,12 +587,16 @@ impl Storage {
         sort: ClipVaultSort,
         cursor: Option<&str>,
         game_limit: usize,
+        query: Option<&str>,
+        game_mode: Option<&str>,
     ) -> Result<ClipVaultPage> {
         if !(1..=12).contains(&game_limit) {
             return Err(StorageError::Lock(
                 "game_limit must be between 1 and 12".to_string(),
             ));
         }
+        let query = normalize_clip_vault_query(query);
+        let game_mode = normalize_clip_vault_game_mode(game_mode);
         let after_game_id = match cursor {
             Some(cursor) => {
                 let bytes = URL_SAFE_NO_PAD
@@ -599,6 +607,11 @@ impl Storage {
                 if decoded.sort != sort {
                     return Err(StorageError::Lock(
                         "clip vault cursor sort does not match request".to_string(),
+                    ));
+                }
+                if decoded.query != query || decoded.game_mode != game_mode {
+                    return Err(StorageError::Lock(
+                        "clip vault cursor filters do not match request".to_string(),
                     ));
                 }
                 Some(decoded.game_id)
@@ -650,6 +663,14 @@ impl Storage {
         let mut games: Vec<ClipVaultGameGroup> = grouped
             .into_iter()
             .filter(|(_, (_, clips))| !clips.is_empty())
+            .filter(|(game_id, (game, _))| {
+                clip_vault_game_matches_filters(
+                    game_id,
+                    game.as_ref(),
+                    query.as_deref(),
+                    game_mode.as_deref(),
+                )
+            })
             .map(|(game_id, (game, mut clips))| {
                 clips.sort_by(|a, b| match sort {
                     ClipVaultSort::Best => clip_score(b)
@@ -698,6 +719,8 @@ impl Storage {
                     serde_json::to_vec(&ClipVaultCursor {
                         sort,
                         game_id: group.game_id.clone(),
+                        query: query.clone(),
+                        game_mode: game_mode.clone(),
                     })
                     .expect("cursor serialization is infallible"),
                 )
@@ -1408,6 +1431,20 @@ impl Storage {
             rows
         };
         ids.iter().map(|id| self.load_media_job(id)).collect()
+    }
+
+    /// Return whether any durable media job can still spawn or is currently
+    /// running. Updater installation must wait for these jobs; checking only
+    /// the legacy in-memory composer misses jobs resumed from SQLite or a
+    /// platform-export task.
+    pub fn has_active_media_jobs(&self) -> Result<bool> {
+        let conn = self.conn()?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM media_jobs WHERE status IN ('queued','running','validating'))",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(StorageError::from)
     }
 
     fn recover_interrupted_media_jobs(&self) -> Result<()> {
@@ -2184,6 +2221,43 @@ fn clip_score(clip: &ClipMetadata) -> f64 {
     clip.highlight_score
         .filter(|score| score.is_finite())
         .unwrap_or((clip.priority as f64) * 20.0)
+}
+
+fn normalize_clip_vault_query(query: Option<&str>) -> Option<String> {
+    query
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .map(|query| query.to_lowercase())
+}
+
+fn normalize_clip_vault_game_mode(game_mode: Option<&str>) -> Option<String> {
+    game_mode
+        .map(str::trim)
+        .filter(|game_mode| !game_mode.is_empty())
+        .map(str::to_owned)
+}
+
+fn clip_vault_game_matches_filters(
+    game_id: &str,
+    game: Option<&GameMetadata>,
+    query: Option<&str>,
+    game_mode: Option<&str>,
+) -> bool {
+    let Some(game) = game else {
+        return query.is_none() && game_mode.is_none();
+    };
+
+    if let Some(game_mode) = game_mode {
+        if game.game_mode != game_mode {
+            return false;
+        }
+    }
+
+    query.is_none_or(|query| {
+        game_id.to_lowercase().contains(query)
+            || game.champion.to_lowercase().contains(query)
+            || game.game_mode.to_lowercase().contains(query)
+    })
 }
 
 fn game_best_score(game: &ClipVaultGameGroup) -> f64 {
@@ -3014,10 +3088,19 @@ mod tests {
     }
 
     fn vault_game(game_id: &str, start_time: chrono::DateTime<Utc>) -> GameMetadata {
+        vault_game_with_metadata(game_id, game_id, "CLASSIC", start_time)
+    }
+
+    fn vault_game_with_metadata(
+        game_id: &str,
+        champion: &str,
+        game_mode: &str,
+        start_time: chrono::DateTime<Utc>,
+    ) -> GameMetadata {
         GameMetadata {
             game_id: game_id.to_string(),
-            champion: game_id.to_string(),
-            game_mode: "CLASSIC".to_string(),
+            champion: champion.to_string(),
+            game_mode: game_mode.to_string(),
             start_time,
             end_time: None,
             result: None,
@@ -3069,7 +3152,7 @@ mod tests {
             .unwrap();
 
         let first = storage
-            .list_clip_vault_page(ClipVaultSort::Best, None, 2)
+            .list_clip_vault_page(ClipVaultSort::Best, None, 2, None, None)
             .unwrap();
         assert_eq!(
             first
@@ -3080,7 +3163,13 @@ mod tests {
             vec!["new", "old"]
         );
         let second = storage
-            .list_clip_vault_page(ClipVaultSort::Best, first.next_cursor.as_deref(), 2)
+            .list_clip_vault_page(
+                ClipVaultSort::Best,
+                first.next_cursor.as_deref(),
+                2,
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!(
             second
@@ -3091,10 +3180,176 @@ mod tests {
             vec!["mid"]
         );
         let newest = storage
-            .list_clip_vault_page(ClipVaultSort::Newest, None, 3)
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 3, None, None)
             .unwrap();
         assert_eq!(newest.groups[0].game_id, "new");
         assert!(newest.next_cursor.is_none());
+    }
+
+    #[test]
+    fn clip_vault_filters_by_query_and_exact_game_mode_before_pagination() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        let games = [
+            (
+                "ahri-classic",
+                "Ahri",
+                "CLASSIC",
+                now - chrono::Duration::hours(2),
+            ),
+            (
+                "ahri-aram",
+                "Ahri",
+                "ARAM",
+                now - chrono::Duration::hours(1),
+            ),
+            ("jinx-classic", "Jinx", "CLASSIC", now),
+        ];
+        for (game_id, champion, game_mode, start_time) in games {
+            storage
+                .create_game(
+                    game_id,
+                    &vault_game_with_metadata(game_id, champion, game_mode, start_time),
+                )
+                .unwrap();
+            storage
+                .save_clip_metadata(
+                    game_id,
+                    &vault_clip(&format!("C:\\{game_id}.mp4"), now, 1, None),
+                )
+                .unwrap();
+        }
+
+        let ahri = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 12, Some(" aHrI "), None)
+            .unwrap();
+        assert_eq!(
+            ahri.groups
+                .iter()
+                .map(|group| group.game_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ahri-aram", "ahri-classic"]
+        );
+
+        let aram = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 12, Some("aram"), Some("ARAM"))
+            .unwrap();
+        assert_eq!(aram.groups.len(), 1);
+        assert_eq!(aram.groups[0].game_id, "ahri-aram");
+
+        let game_id_match = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 12, Some("jinx-classic"), None)
+            .unwrap();
+        assert_eq!(game_id_match.groups.len(), 1);
+        assert_eq!(game_id_match.groups[0].game_id, "jinx-classic");
+
+        let classic = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 12, None, Some("CLASSIC"))
+            .unwrap();
+        assert_eq!(
+            classic
+                .groups
+                .iter()
+                .map(|group| group.game_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["jinx-classic", "ahri-classic"]
+        );
+    }
+
+    #[test]
+    fn clip_vault_filter_cursor_preserves_order_and_rejects_different_filters() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        for (game_id, start_time) in [
+            ("ahri-old", now - chrono::Duration::hours(2)),
+            ("ahri-mid", now - chrono::Duration::hours(1)),
+            ("ahri-new", now),
+        ] {
+            storage
+                .create_game(
+                    game_id,
+                    &vault_game_with_metadata(game_id, "Ahri", "CLASSIC", start_time),
+                )
+                .unwrap();
+            storage
+                .save_clip_metadata(
+                    game_id,
+                    &vault_clip(&format!("C:\\{game_id}.mp4"), now, 1, None),
+                )
+                .unwrap();
+        }
+
+        let first = storage
+            .list_clip_vault_page(
+                ClipVaultSort::Newest,
+                None,
+                2,
+                Some("ahri"),
+                Some("CLASSIC"),
+            )
+            .unwrap();
+        assert_eq!(
+            first
+                .groups
+                .iter()
+                .map(|group| group.game_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ahri-new", "ahri-mid"]
+        );
+        let second = storage
+            .list_clip_vault_page(
+                ClipVaultSort::Newest,
+                first.next_cursor.as_deref(),
+                2,
+                Some("ahri"),
+                Some("CLASSIC"),
+            )
+            .unwrap();
+        assert_eq!(
+            second
+                .groups
+                .iter()
+                .map(|group| group.game_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ahri-old"]
+        );
+        assert!(storage
+            .list_clip_vault_page(
+                ClipVaultSort::Newest,
+                first.next_cursor.as_deref(),
+                2,
+                Some("ahri-new"),
+                Some("CLASSIC"),
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn clip_vault_blank_filters_match_unfiltered_legacy_results() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        storage
+            .create_game("game", &vault_game("game", now))
+            .unwrap();
+        storage
+            .save_clip_metadata("game", &vault_clip("C:\\game.mp4", now, 1, None))
+            .unwrap();
+
+        let unfiltered = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 1, None, None)
+            .unwrap();
+        let blank_filters = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 1, Some("  "), Some("  "))
+            .unwrap();
+        assert_eq!(unfiltered.groups.len(), blank_filters.groups.len());
+        assert_eq!(
+            unfiltered.groups[0].game_id,
+            blank_filters.groups[0].game_id
+        );
+        assert_eq!(unfiltered.next_cursor, blank_filters.next_cursor);
     }
 
     #[test]
@@ -3121,11 +3376,11 @@ mod tests {
             .unwrap();
 
         let best = storage
-            .list_clip_vault_page(ClipVaultSort::Best, None, 1)
+            .list_clip_vault_page(ClipVaultSort::Best, None, 1, None, None)
             .unwrap();
         assert_eq!(best.groups[0].clips[0].file_path, "C:\\old-best.mp4");
         let newest = storage
-            .list_clip_vault_page(ClipVaultSort::Newest, None, 1)
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 1, None, None)
             .unwrap();
         assert_eq!(newest.groups[0].clips[0].file_path, "C:\\new-low.mp4");
     }
@@ -3146,7 +3401,7 @@ mod tests {
             params!["game", "C:\\corrupt.mp4", "{not-json", now.to_rfc3339()],
         ).unwrap();
         let page = storage
-            .list_clip_vault_page(ClipVaultSort::Newest, None, 1)
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 1, None, None)
             .unwrap();
         assert_eq!(page.groups[0].clips.len(), 1);
         assert_eq!(page.skipped_item_count, 1);
@@ -3173,7 +3428,7 @@ mod tests {
             .unwrap();
 
         let page = storage
-            .list_clip_vault_page(ClipVaultSort::Newest, None, 1)
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 1, None, None)
             .unwrap();
         assert_eq!(page.groups[0].game_id, "game");
         assert!(page.groups[0].game.is_none());
@@ -3252,6 +3507,54 @@ mod tests {
         let snapshot = storage.load_media_job("job-1").unwrap();
         assert_eq!(snapshot.status, MediaJobStatus::Complete);
         assert!(snapshot.quota_sync_pending);
+    }
+
+    #[test]
+    fn active_media_job_probe_covers_queued_running_and_validating_states() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+
+        assert!(!storage.has_active_media_jobs().unwrap());
+        storage
+            .create_media_job("job-active", "user-active", MediaJobKind::AutoEdit, "{}")
+            .unwrap();
+        assert!(storage.has_active_media_jobs().unwrap());
+
+        storage
+            .update_media_job_status(
+                "job-active",
+                MediaJobStatus::Running,
+                "rendering",
+                20.0,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(storage.has_active_media_jobs().unwrap());
+
+        storage
+            .update_media_job_status(
+                "job-active",
+                MediaJobStatus::Validating,
+                "validating",
+                90.0,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(storage.has_active_media_jobs().unwrap());
+
+        storage
+            .update_media_job_status(
+                "job-active",
+                MediaJobStatus::Complete,
+                "complete",
+                100.0,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(!storage.has_active_media_jobs().unwrap());
     }
 
     #[test]

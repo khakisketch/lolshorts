@@ -177,9 +177,12 @@ async fn main() {
     // Honour the persisted privacy preference. A configured DSN alone must
     // never turn telemetry on for an existing or new user who left this off.
     let crash_reporting_enabled = recording_settings.read().await.crash_reporting_enabled;
-    let _sentry_guard = if crash_reporting_enabled {
-        public_service_config
-            .sentry_dsn()
+    let sentry_dsn = public_service_config.sentry_dsn();
+    let telemetry_enabled = crash_reporting_enabled && sentry_dsn.is_some();
+    utils::telemetry::set_enabled(telemetry_enabled);
+    let _sentry_guard = if telemetry_enabled {
+        sentry_dsn
+            .clone()
             .and_then(|value| value.parse().ok())
             .map(|dsn| {
                 sentry::init(sentry::ClientOptions {
@@ -187,6 +190,17 @@ async fn main() {
                     release: sentry::release_name!(),
                     auto_session_tracking: true,
                     send_default_pii: false,
+                    // Keep the client installed so the preference can be
+                    // changed without rebuilding the process, but gate every
+                    // event (including panic integration events) at the final
+                    // Sentry boundary. Operational callers use the same gate.
+                    before_send: Some(std::sync::Arc::new(|event| {
+                        if utils::telemetry::is_enabled() {
+                            Some(event)
+                        } else {
+                            None
+                        }
+                    })),
                     ..Default::default()
                 })
             })
@@ -194,8 +208,8 @@ async fn main() {
         None
     };
     tracing::info!(
-        configured = public_service_config.sentry_dsn().is_some(),
-        enabled = crash_reporting_enabled,
+        configured = sentry_dsn.is_some(),
+        enabled = telemetry_enabled,
         "Anonymous crash reporting preference applied"
     );
 
@@ -217,6 +231,8 @@ async fn main() {
         bitrate: settings_read.video.get_bitrate(),
         use_h265: settings_read.video.is_h265(),
         encoder_preference: encoder_pref.to_string(),
+        monitor_index: (settings_read.video.monitor_index > 0)
+            .then_some(settings_read.video.monitor_index),
     });
     drop(settings_read);
 
@@ -303,10 +319,10 @@ async fn main() {
 
     // 정리 관리자(Cleanup Manager) 초기화
     let cleanup_config = utils::cleanup::CleanupConfig::default();
-    let cleanup_manager = Arc::new(utils::cleanup::CleanupManager::new(
-        app_data_dir.clone(),
-        cleanup_config,
-    ));
+    let cleanup_manager = Arc::new(
+        utils::cleanup::CleanupManager::new(app_data_dir.clone(), cleanup_config)
+            .with_recordings_dir(recordings_dir.clone()),
+    );
 
     // 시작 시 정리 실행
     if let Err(e) = cleanup_manager.cleanup_on_startup().await {
@@ -421,6 +437,7 @@ async fn main() {
 
     let app_state = AppState {
         storage,
+        recordings_dir: recordings_dir.clone(),
         auth,
         recording_manager: Arc::clone(&recording_manager),
         clip_manager: Arc::clone(&auto_clip_manager),
@@ -1098,27 +1115,10 @@ fn validate_redirect_uri(uri: &str, platform: &str) -> bool {
         tracing::info!("{} OAuth disabled (no redirect URI configured)", platform);
         return false;
     }
-    let Some(rest) = uri.strip_prefix("http://") else {
-        tracing::error!("{} redirect URI must be localhost, got: {}", platform, uri);
-        return false;
-    };
-
-    let authority = rest.split('/').next().unwrap_or_default();
-    let Some((host, port)) = authority.split_once(':') else {
-        if matches!(authority, "localhost" | "127.0.0.1") {
-            return true;
-        }
-        tracing::error!("{} redirect URI must be localhost, got: {}", platform, uri);
-        return false;
-    };
-
-    let valid_host = matches!(host, "localhost" | "127.0.0.1");
-    let valid_port = !port.is_empty() && port.chars().all(|character| character.is_ascii_digit());
-    if !valid_host || !valid_port {
+    if !public_service_config::valid_loopback_redirect(uri) {
         tracing::error!("{} redirect URI must be localhost, got: {}", platform, uri);
         return false;
     }
-
     true
 }
 

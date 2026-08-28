@@ -13,7 +13,9 @@
     "sidebarLabel": "애플리케이션 사이드바",
     "mainNavigation": "메인 내비게이션",
     "userProfile": "사용자 프로필",
-    "home": "홈"
+    "home": "홈",
+    "expandSidebar": "사이드바 펼치기",
+    "collapseSidebar": "사이드바 접기"
   },
   "studio": {
     "modeNavigation": "스튜디오 모드",
@@ -453,7 +455,7 @@
     "clipLibrary": {
       "title": "클립 라이브러리",
       "noClipsAvailable": "클립 없음",
-      "noClipsDescription": "게임 페이지에서 게임을 선택하여 편집할 클립을 불러오세요.",
+      "noClipsDescription": "라이브러리에서 게임을 선택하여 편집할 클립을 불러오세요.",
       "clipsCount": "{{count}}개 클립 사용 가능",
       "rankedDescription": "좋은 장면부터 보여줍니다"
     },
@@ -743,13 +745,13 @@
     "withMusic": "음악 포함",
     "play": "재생",
     "delete": "삭제",
-    "pageDescription": "원본 클립·완성 영상·녹화 게임·리플레이를 한곳에서 찾아보세요.",
+    "pageDescription": "게임별 클립·완성 영상·리플레이를 한곳에서 찾아보세요.",
     "thumbnailAlt": "영상 미리보기 이미지",
     "polish": "다듬기",
     "share": "공유",
     "tabs": {
       "highlights": "완성 영상",
-      "clips": "클립 보관함",
+      "clips": "게임 기록",
       "games": "녹화 게임",
       "replays": "리플레이"
     },
@@ -775,9 +777,23 @@
       "emptyDescription": "한 판 플레이하면 볼 만한 장면이 여기에 모입니다.",
       "unknownDate": "경기 시각 없음",
       "clipCount": "클립 {{count}}개",
+      "selectedCount": "선택 {{count}}개",
       "selectGame": "전체 선택",
       "clearGameSelection": "전체 해제",
       "gameRank": "이 게임 #{{rank}}",
+      "gameCount": "게임 {{count}}개",
+      "expandAll": "모두 펼치기",
+      "collapseAll": "모두 접기",
+      "searchLabel": "게임 검색",
+      "searchPlaceholder": "챔피언·게임 모드·게임 ID로 검색",
+      "modeFilterLabel": "게임 모드 필터",
+      "allModes": "모든 게임 모드",
+      "noMatches": "조건에 맞는 게임이 없습니다",
+      "clearFilters": "조건 지우기",
+      "storageStats": "라이브러리 저장공간 요약",
+      "totalGames": "전체 게임",
+      "totalClips": "전체 클립",
+      "storageUsed": "사용 중인 공간",
       "selectionActions": "선택한 클립 작업",
       "selectionSummary": "클립 {{clips}}개 · 게임 {{games}}개 · 약 {{duration}}",
       "clearAll": "전체 해제",
@@ -1094,7 +1110,14 @@
         "autoCleanupDescription": "오래된 클립부터 지워 공간을 확보합니다",
         "limitLabel": "용량 한도 (GB)",
         "limitDescription": "총 사용량이 이 값을 넘으면 오래된 클립부터 지웁니다",
-        "limitDisabledHint": "자동 정리를 켜야 용량 한도가 적용됩니다"
+        "limitDisabledHint": "자동 정리를 켜야 용량 한도가 적용됩니다",
+        "currentMedia": "현재 앱 미디어: {{size}}",
+        "freeSpace": "남은 공간: {{size}}",
+        "checking": "확인 중…",
+        "recordingEstimate": "녹화 예상 용량: {{bitrate}} Mbps 기준 시간당 약 {{size}} GB",
+        "lowSpaceRisk": "저장공간 부족 위험: 현재 화질로 약 {{hours}}시간만 더 녹화할 수 있습니다.",
+        "retentionPeriod": "보존 기간",
+        "retentionDescription": "자동 삭제는 직접 켠 경우에만 작동하며 내보낸 클립은 기본적으로 삭제하지 않습니다."
       },
       "autoStart": {
         "title": "Windows 시작 시 실행",

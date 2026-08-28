@@ -155,6 +155,12 @@ pub struct ClipVaultPageInput {
     pub sort: ClipVaultSort,
     pub cursor: Option<String>,
     pub game_limit: Option<usize>,
+    /// Optional case-insensitive search across a game's champion, mode, and id.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Optional exact game-mode filter.
+    #[serde(default)]
+    pub game_mode: Option<String>,
 }
 
 // ============================================================================
@@ -523,7 +529,17 @@ pub struct StorageStats {
 
 #[cfg(test)]
 mod tests {
-    use super::UploadStatus;
+    use super::{ClipVaultPageInput, ClipVaultSort, UploadStatus};
+
+    #[test]
+    fn clip_vault_page_input_accepts_legacy_payload_without_filters() {
+        let input: ClipVaultPageInput =
+            serde_json::from_str(r#"{"sort":"newest","cursor":null,"game_limit":6}"#).unwrap();
+
+        assert_eq!(input.sort, ClipVaultSort::Newest);
+        assert!(input.query.is_none());
+        assert!(input.game_mode.is_none());
+    }
 
     #[test]
     fn upload_status_serializes_pascal_case_and_reads_legacy_lowercase() {

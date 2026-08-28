@@ -69,4 +69,24 @@ describe("storage API contract", () => {
       ],
     ]);
   });
+
+  it("serializes clip-vault search and mode filters without changing the base contract", async () => {
+    await storageApi.listClipVaultPage({
+      sort: "best",
+      cursor: "cursor-1",
+      game_limit: 6,
+      query: "Ahri",
+      game_mode: "CLASSIC",
+    });
+
+    expect(mockedCmd).toHaveBeenCalledWith("list_clip_vault_page", {
+      input: {
+        sort: "best",
+        cursor: "cursor-1",
+        game_limit: 6,
+        query: "Ahri",
+        game_mode: "CLASSIC",
+      },
+    });
+  });
 });

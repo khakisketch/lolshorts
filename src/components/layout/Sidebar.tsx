@@ -4,6 +4,8 @@ import {
   Home,
   LogIn,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   Power,
   Settings,
   WandSparkles,
@@ -18,7 +20,7 @@ import { AuthModal } from "@/components/auth/AuthModal";
 
 interface SidebarProps {
   className?: string;
-  /** Mobile navigation and Settings keep the full destination labels. */
+  /** Mobile navigation keeps the full destination labels. */
   expanded?: boolean;
 }
 
@@ -26,15 +28,18 @@ export function Sidebar({ className = "", expanded }: SidebarProps) {
   const { user, entitlement, isAuthenticated, logout } = useAuthStore();
   const { t } = useTranslation();
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [desktopExpanded, setDesktopExpanded] = useState(false);
   const hasProEntitlement =
     entitlement?.tier === "PRO" && entitlement.status === "active";
   const tierLabel = hasProEntitlement ? "PRO" : "FREE";
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  const isCompact = expanded !== true && !pathname.startsWith("/settings");
+  const isCompact = expanded !== true && !desktopExpanded;
   const isStudioRoute =
     pathname.startsWith("/auto-edit") || pathname.startsWith("/editor");
+  const sidebarId =
+    expanded === true ? "mobile-sidebar-content" : "desktop-sidebar-content";
 
   const requestAppExit = () => {
     // This intentionally requests AppHandle::exit instead of closing the main
@@ -45,8 +50,9 @@ export function Sidebar({ className = "", expanded }: SidebarProps) {
     });
   };
 
-  // The primary product flow is record → find → create. Settings remains a
-  // utility destination, and only expands the rail while it is open.
+  // The primary product flow is record → find → create. Every desktop route
+  // starts with the same compact rail; users can expand it explicitly when
+  // they need the labels. Mobile navigation remains expanded by the shell.
   const navItems = [
     {
       path: "/",
@@ -78,12 +84,13 @@ export function Sidebar({ className = "", expanded }: SidebarProps) {
 
   return (
     <aside
+      id={sidebarId}
       className={`${isCompact ? "w-16" : "w-64"} bg-gaming-sidebar border-r border-white/5 flex flex-col shadow-[5px_0_15px_rgba(0,0,0,0.5)] transition-[width] duration-200 ${className}`}
       aria-label={t("nav.sidebarLabel")}
     >
       {/* Logo */}
       <div
-        className={`${isCompact ? "p-4 justify-center" : "p-6"} flex items-center gap-3`}
+        className={`${isCompact ? "p-4 justify-center flex-col gap-2" : "p-6"} flex items-center gap-3`}
       >
         <div
           className="w-8 h-8 rounded bg-gradient-to-br from-gaming-cyan to-gaming-purple flex items-center justify-center font-bold text-black -skew-x-12"
@@ -96,6 +103,34 @@ export function Sidebar({ className = "", expanded }: SidebarProps) {
         >
           LoLShorts
         </span>
+        {expanded !== true && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={`${isCompact ? "" : "ml-auto"} h-8 w-8 text-muted-foreground hover:text-foreground`}
+            onClick={() => setDesktopExpanded((open) => !open)}
+            aria-expanded={!isCompact}
+            aria-controls={sidebarId}
+            aria-label={
+              isCompact
+                ? t("nav.expandSidebar", "사이드바 펼치기")
+                : t("nav.collapseSidebar", "사이드바 접기")
+            }
+            data-testid="sidebar-toggle"
+            title={
+              isCompact
+                ? t("nav.expandSidebar", "사이드바 펼치기")
+                : t("nav.collapseSidebar", "사이드바 접기")
+            }
+          >
+            {isCompact ? (
+              <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
+            )}
+          </Button>
+        )}
       </div>
 
       {/* Navigation */}
