@@ -20,20 +20,62 @@ on:
           - rc
           - stable
 
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
+  supabase-release-gate:
+    name: Supabase migration and security gate
+    if: ${{ inputs.confirmation == 'RELEASE' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1.7.1
+        with:
+          version: 2.101.0
+
+      - name: Rebuild migrations and run pgTAP
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p release-logs
+          supabase start 2>&1 | tee release-logs/supabase-start.log
+          supabase db reset 2>&1 | tee release-logs/supabase-db-reset.log
+          supabase test db 2>&1 | tee release-logs/supabase-db-tests.log
+
+      - name: Stop isolated Supabase stack
+        if: always()
+        shell: bash
+        run: supabase stop --no-backup 2>&1 | tee release-logs/supabase-stop.log
+
+      - name: Upload Supabase release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-release-supabase-${{ github.sha }}
+          path: release-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
   release-windows:
     name: Approved signed Windows release
     if: ${{ inputs.confirmation == 'RELEASE' }}
+    needs: supabase-release-gate
     runs-on: windows-latest
     timeout-minutes: 120
     environment: production-release
+    permissions:
+      contents: write
     env:
       VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
@@ -47,9 +89,9 @@ jobs:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.2.0
           cache: npm
@@ -57,8 +99,9 @@ jobs:
       - name: Pin npm
         run: npm install --global npm@11.6.3
 
-      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: dtolnay/rust-toolchain@75be91dd2711b583df57c31d0873b4145c89f1d9 # 1.94.1
         with:
+          toolchain: 1.94.1
           targets: x86_64-pc-windows-msvc
 
       - name: Validate requested version and release secrets
@@ -192,7 +235,7 @@ jobs:
           $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath latest.json -Encoding utf8
 
       - name: Create approved draft release and upload assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: v${{ inputs.version }}
           name: LoLShorts ${{ inputs.version }}
@@ -209,7 +252,7 @@ jobs:
 
       - name: Publish beta/RC updater preview feed
         if: ${{ inputs.channel != 'stable' }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: updater-preview
           name: LoLShorts updater preview feed
