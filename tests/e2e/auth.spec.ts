@@ -1,4 +1,4 @@
-import { test, expect, BASE_URL } from './fixtures/tauri-fixture';
+import { test, expect, BASE_URL, waitForAppReady } from './fixtures/tauri-fixture';
 
 /**
  * E2E Tests for Authentication System
@@ -11,7 +11,7 @@ import { test, expect, BASE_URL } from './fixtures/tauri-fixture';
 test.describe('Auth Modal UI', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForLoadState('networkidle');
+    await waitForAppReady(page);
   });
 
   test('should display login button for unauthenticated users', async ({ page }) => {
@@ -77,7 +77,7 @@ test.describe('Auth Modal UI', () => {
 test.describe('Signup Form', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForLoadState('networkidle');
+    await waitForAppReady(page);
     // Open auth modal
     await page.getByTestId('sidebar-login-button').click();
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
@@ -127,20 +127,19 @@ test.describe('Signup Form', () => {
 test.describe('Protected Features (unauthenticated)', () => {
   test('should show sidebar login button on all pages', async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForLoadState('networkidle');
+    await waitForAppReady(page);
 
     // Login button visible on dashboard
     await expect(page.getByTestId('sidebar-login-button')).toBeVisible();
 
     // Navigate to settings - login button still visible
     await page.getByTestId('nav-settings').click();
-    await page.waitForLoadState('networkidle');
     await expect(page.getByTestId('sidebar-login-button')).toBeVisible();
   });
 
   test('should handle settings page when unauthenticated', async ({ page }) => {
     await page.goto(`${BASE_URL}/settings`);
-    await page.waitForLoadState('networkidle');
+    await waitForAppReady(page);
 
     // Settings page should still load (shows login prompt in license section)
     await expect(page.getByTestId('settings')).toBeVisible({ timeout: 5000 });

@@ -1,4 +1,4 @@
-import { test, expect } from './fixtures/tauri-fixture';
+import { test, expect, waitForAppReady } from './fixtures/tauri-fixture';
 import path from 'path';
 import fs from 'fs';
 
@@ -32,7 +32,7 @@ test.describe('Game Integration Tests', () => {
   test.beforeEach(async ({ page }) => {
     await page.context().clearCookies();
     await page.goto(BASE_URL);
-    await page.waitForLoadState('networkidle');
+    await waitForAppReady(page);
   });
 
   test('should show LCU connection status on dashboard', async ({ page }) => {
@@ -78,7 +78,6 @@ test.describe('Game Integration Tests', () => {
   test('should navigate to replays page for clips', async ({ page }) => {
     // Navigate to replays (clips are here, not on /clips)
     await page.click('[data-testid="nav-library"]');
-    await page.waitForLoadState('networkidle');
 
     await expect(page.locator('[data-testid="clip-library"]')).toBeVisible();
   });

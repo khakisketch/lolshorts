@@ -712,7 +712,8 @@
     },
     "highlights": {
       "title": "Finished highlight videos",
-      "description": "Videos made from your clips. Play, polish or share them."
+      "description": "Videos made from your clips. Play, polish or share them.",
+      "loadError": "Could not load finished videos. Check the diagnostics and try again."
     },
     "clips": {
       "title": "Recommended clips",

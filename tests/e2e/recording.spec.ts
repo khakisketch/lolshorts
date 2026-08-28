@@ -1,4 +1,9 @@
-import { test, expect, BASE_URL } from "./fixtures/tauri-fixture";
+import {
+  test,
+  expect,
+  BASE_URL,
+  waitForAppReady,
+} from "./fixtures/tauri-fixture";
 
 /**
  * E2E Tests for Recording & Game Status
@@ -15,7 +20,7 @@ import { test, expect, BASE_URL } from "./fixtures/tauri-fixture";
 test.describe("Home Game Status", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForLoadState("networkidle");
+    await waitForAppReady(page);
   });
 
   test("should show connection status on home", async ({ page }) => {
@@ -60,7 +65,6 @@ test.describe("Home Game Status", () => {
     // 되는지"까지 만들어 보내는데, 화면이 그걸 버리고 "확인 필요" 라고만 적으면
     // 막힌 사용자는 여전히 아무것도 알 수 없다.
     await page.getByTestId("nav-settings").click();
-    await page.waitForLoadState("networkidle");
 
     const settings = page.getByTestId("settings");
     await expect(settings).toBeVisible({ timeout: 10000 });
@@ -89,13 +93,12 @@ test.describe("Home Game Status", () => {
 test.describe("Navigation", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForLoadState("networkidle");
+    await waitForAppReady(page);
   });
 
   test("should navigate to results", async ({ page }) => {
     // 예전 `nav-library`/`nav-games` 는 사라졌다 — 사용자가 가진 것은 모두 결과로.
     await page.getByTestId("nav-library").click();
-    await page.waitForLoadState("networkidle");
 
     await expect(page).toHaveURL(/\/results/);
   });
@@ -109,14 +112,13 @@ test.describe("Navigation", () => {
       ["/replays", "replays"],
     ] as const) {
       await page.goto(`${BASE_URL}${legacy}`);
-      await page.waitForLoadState("networkidle");
+      await waitForAppReady(page);
       await expect(page).toHaveURL(new RegExp(`/results\\?tab=${tab}$`));
     }
   });
 
   test("should navigate to settings page", async ({ page }) => {
     await page.getByTestId("nav-settings").click();
-    await page.waitForLoadState("networkidle");
 
     await expect(page.getByTestId("settings")).toBeVisible({ timeout: 5000 });
   });
@@ -125,7 +127,6 @@ test.describe("Navigation", () => {
     page,
   }) => {
     await page.getByTestId("nav-settings").click();
-    await page.waitForLoadState("networkidle");
 
     const sidebar = page.locator("#desktop-sidebar-content");
     const toggle = page.getByTestId("sidebar-toggle");
@@ -138,7 +139,7 @@ test.describe("Navigation", () => {
 
     // The explicit expansion is session-scoped and survives route changes.
     await page.getByTestId("nav-library").click();
-    await page.waitForLoadState("networkidle");
+    await expect(page).toHaveURL(/\/results/);
     await expect(sidebar).toHaveClass(/w-64/);
   });
 
@@ -146,7 +147,7 @@ test.describe("Navigation", () => {
     page,
   }) => {
     await page.goto(`${BASE_URL}/results?tab=games`);
-    await page.waitForLoadState("networkidle");
+    await waitForAppReady(page);
 
     await expect(page).toHaveURL(/\/results\?tab=clips$/);
     await expect(page.getByTestId("results-tab-clips")).toHaveAttribute(
@@ -160,7 +161,6 @@ test.describe("Navigation", () => {
     page,
   }) => {
     await page.getByTestId("nav-settings").click();
-    await page.waitForLoadState("networkidle");
 
     const settings = page.getByTestId("settings");
     await expect(settings).toBeVisible({ timeout: 5000 });
@@ -183,16 +183,14 @@ test.describe("Navigation", () => {
     // `nav-editor` 는 사라졌다 — 편집은 결과에서 클립을 골라 들어가는 동작이다.
     // 경로 자체는 살아 있어야 한다(딥링크·홈의 「다듬기」 버튼이 여기로 온다).
     await page.goto(`${BASE_URL}/editor`);
-    await page.waitForLoadState("networkidle");
+    await waitForAppReady(page);
     await expect(page).toHaveURL(/\/editor/);
   });
 
   test("should navigate back to home", async ({ page }) => {
     await page.getByTestId("nav-settings").click();
-    await page.waitForLoadState("networkidle");
 
     await page.getByTestId("nav-dashboard").click();
-    await page.waitForLoadState("networkidle");
 
     await expect(page.getByTestId("home")).toBeVisible({ timeout: 5000 });
   });
@@ -202,7 +200,7 @@ test.describe("Results — replays tab", () => {
   test.beforeEach(async ({ page }) => {
     // `/replays` 는 결과의 replays 탭으로 리다이렉트된다.
     await page.goto(`${BASE_URL}/replays`);
-    await page.waitForLoadState("networkidle");
+    await waitForAppReady(page);
   });
 
   test("should land on the results page", async ({ page }) => {
@@ -232,7 +230,7 @@ test.describe("Performance", () => {
   }) => {
     const startTime = Date.now();
     await page.goto(BASE_URL);
-    await page.waitForLoadState("networkidle");
+    await waitForAppReady(page);
     const loadTime = Date.now() - startTime;
 
     // Dev-mode Vite and mocked Tauri initialization can vary on Windows.
@@ -242,19 +240,19 @@ test.describe("Performance", () => {
 
   test("should navigate between pages smoothly", async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForLoadState("networkidle");
+    await waitForAppReady(page);
 
     const startTime = Date.now();
 
     // Quick navigation sequence
     await page.getByTestId("nav-settings").click();
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByTestId("settings")).toBeVisible();
 
     await page.getByTestId("nav-dashboard").click();
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByTestId("home")).toBeVisible();
 
     await page.getByTestId("nav-library").click();
-    await page.waitForLoadState("networkidle");
+    await expect(page).toHaveURL(/\/results/);
 
     const elapsed = Date.now() - startTime;
     expect(elapsed).toBeLessThan(10000);

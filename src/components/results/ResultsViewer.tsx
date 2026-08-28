@@ -53,6 +53,8 @@ export function ResultsViewer() {
     useState<AutoEditResultMetadata | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [isLoadingResults, setIsLoadingResults] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [shareTarget, setShareTarget] = useState<AutoEditResultMetadata | null>(
     null,
   );
@@ -61,6 +63,8 @@ export function ResultsViewer() {
   const setSelectedGameId = useEditorStore((state) => state.setSelectedGameId);
 
   const loadResults = useCallback(async () => {
+    setIsLoadingResults(true);
+    setLoadFailed(false);
     try {
       const fetchedGroups = await storageApi.getAutoEditResultGroups();
       const safeGroups = Array.isArray(fetchedGroups) ? fetchedGroups : [];
@@ -74,8 +78,13 @@ export function ResultsViewer() {
       setGroups(safeGroups);
     } catch (err) {
       logger.error("Failed to load results:", err);
+      setLoadFailed(true);
+    } finally {
+      setIsLoadingResults(false);
     }
   }, []);
+
+  const isBusy = isLoading || isLoadingResults;
 
   const filteredResults = (results ?? []).filter((result) => {
     const searchLower = searchQuery.toLowerCase();
@@ -270,8 +279,8 @@ export function ResultsViewer() {
             {t("results.highlights.description")}
           </p>
         </div>
-        <Button onClick={loadResults} disabled={isLoading}>
-          {isLoading ? (
+        <Button onClick={loadResults} disabled={isBusy}>
+          {isBusy ? (
             <Spinner size="sm" className="mr-2" />
           ) : (
             <Film className="w-4 h-4 mr-2" />
@@ -285,6 +294,26 @@ export function ResultsViewer() {
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {loadFailed && (
+        <Alert variant="destructive" data-testid="results-load-error">
+          <AlertCircle className="h-4 w-4" />
+          <div className="flex flex-1 flex-wrap items-center justify-between gap-3">
+            <AlertDescription>
+              {t("results.highlights.loadError")}
+            </AlertDescription>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void loadResults()}
+              disabled={isLoadingResults}
+            >
+              {t("common.retry")}
+            </Button>
+          </div>
         </Alert>
       )}
 
@@ -335,13 +364,13 @@ export function ResultsViewer() {
       )}
 
       {/* Loading State */}
-      {isLoading && results.length === 0 && (
+      {isBusy && results.length === 0 && !loadFailed && (
         <SpinnerCenter size="lg" label={t("results.loading")} />
       )}
 
       {/* Empty State — nothing recorded yet, so point back at the one thing the
           user actually has to do: play a game. */}
-      {!isLoading && results.length === 0 && (
+      {!isBusy && !loadFailed && results.length === 0 && (
         <div className="gaming-panel p-6" data-testid="results-empty">
           <div>
             <EmptyState
@@ -362,7 +391,7 @@ export function ResultsViewer() {
         </div>
       )}
 
-      {!isLoading && results.length > 0 && filteredResults.length === 0 && (
+      {!isBusy && results.length > 0 && filteredResults.length === 0 && (
         <div className="gaming-panel p-6">
           <EmptyState
             icon={Search}

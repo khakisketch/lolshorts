@@ -810,6 +810,9 @@
       "clearAll": "Clear all",
       "createMontage": "Create montage",
       "overTargetWarning": "Every selected scene will be included, so the finished video will be longer than the target."
+    },
+    "highlights": {
+      "loadError": "完成動画を読み込めませんでした。診断を確認して、もう一度お試しください。"
     }
   },
   "mediaJobs": {

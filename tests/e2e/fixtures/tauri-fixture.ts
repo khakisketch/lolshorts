@@ -851,6 +851,16 @@ export async function logout(page: Page): Promise<void> {
 }
 
 /**
+ * Wait for the application itself, rather than Vite's background network
+ * activity. The dev server keeps an HMR connection open, so network-idle
+ * does not describe a usable LoLShorts screen.
+ */
+export async function waitForAppReady(page: Page): Promise<void> {
+  await page.waitForLoadState("domcontentloaded");
+  await expect(page.getByTestId("app-shell")).toBeVisible({ timeout: 10000 });
+}
+
+/**
  * Navigate to a route using nav links (preferred over direct goto).
  * Falls back to page.goto if no nav link found.
  */
@@ -859,7 +869,7 @@ export async function navigateTo(page: Page, testId: string): Promise<void> {
   if (await navLink.isVisible({ timeout: 2000 }).catch(() => false)) {
     await navLink.click();
   }
-  await page.waitForLoadState("networkidle");
+  await waitForAppReady(page);
 }
 
 /** Base URL for tests */
