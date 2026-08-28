@@ -1,6 +1,8 @@
 
+project_id = "lolshorts"
+
 [functions.billing]
-enabled = true
+enabled = false
 verify_jwt = false
 import_map = "./functions/billing/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
@@ -9,3 +11,8 @@ entrypoint = "./functions/billing/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/billing/*.html" ]
+
+[functions.quota]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/quota/index.ts"

@@ -20,6 +20,21 @@ field-qa/<version>-<commit>/
 
 Do not place OAuth tokens, payment keys, signing keys, Supabase keys, or private user data in this folder.
 
+## Pre-game Windows Capture Harness
+
+The two intentionally ignored Windows capture benchmark/stress tests are an
+explicit local harness, not part of the default automated suite. Run them once
+on the candidate PC before starting League:
+
+```powershell
+npm run test:windows-capture-harness
+```
+
+This checks recorder status/stat concurrency only. It does not capture League,
+measure GPU performance, or replace any gameplay row below. The three former
+empty FFmpeg pipeline placeholders were removed; real encode/decode coverage is
+provided by the normal Rust suite and `npm run test:media-regression`.
+
 ## First Gameplay Smoke Run
 
 Use this short run immediately after the automated non-game gate is green. It

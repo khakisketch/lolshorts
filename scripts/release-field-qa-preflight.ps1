@@ -113,12 +113,23 @@ function Invoke-LoggedCommand {
 
 function Test-SupabaseSqlGuardrails {
     $migrationDir = Join-Path $ProjectRoot "supabase\migrations"
-    $files = @(
-        @(Get-ChildItem -LiteralPath $migrationDir -Filter "*.sql" -File -ErrorAction Stop |
-            Sort-Object Name |
-            Select-Object -ExpandProperty FullName)
-        (Join-Path $ProjectRoot "supabase\schema.sql")
-    )
+    $legacySchemaPath = Join-Path $ProjectRoot "supabase\schema.sql"
+    if (Test-Path -LiteralPath $legacySchemaPath) {
+        Add-Result "Supabase" "Migration-only schema source" "FAIL" "Legacy schema snapshot still exists: $legacySchemaPath" "Remove the snapshot and make changes only through supabase/migrations."
+    } else {
+        Add-Result "Supabase" "Migration-only schema source" "PASS" "No legacy supabase/schema.sql snapshot is present."
+    }
+
+    $files = @(Get-ChildItem -LiteralPath $migrationDir -Filter "*.sql" -File -ErrorAction Stop |
+        Sort-Object Name |
+        Select-Object -ExpandProperty FullName)
+
+    if ($files.Count -eq 0) {
+        Add-Result "Supabase" "Ordered migrations present" "FAIL" "No SQL migrations found in $migrationDir" "Restore the authoritative migration chain."
+        return
+    }
+
+    Add-Result "Supabase" "Ordered migrations present" "PASS" "Found $($files.Count) ordered SQL migrations."
 
     foreach ($file in $files) {
         if (-not (Test-Path $file)) {

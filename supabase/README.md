@@ -120,9 +120,21 @@ supabase db push
 ```
 
 Do not apply only `001_initial_schema.sql`: later migrations contain billing
-authority, idempotent quota enforcement, and RLS hardening. `supabase/schema.sql`
-is a legacy dashboard reference snapshot and must not be used in place of the
-ordered migrations.
+authority, idempotent quota enforcement, and RLS hardening. The former
+`supabase/schema.sql` dashboard snapshot was removed because it could drift and
+be applied accidentally. Only the ordered migration directory is authoritative.
+
+Validate the local database contract after `supabase start`:
+
+```bash
+supabase db reset
+supabase test db
+```
+
+The pgTAP suite checks exposed-table RLS, least-privilege grants, cross-user
+isolation, and service-role-only quota consumption. `npm run
+verify:supabase-contract` provides a Docker-independent static guard, but it
+does not replace the database tests.
 
 ## Billing Edge Function
 

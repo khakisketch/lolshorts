@@ -1825,18 +1825,6 @@ mod tests {
         assert!(filter.contains("crop=1080:1920"));
     }
 
-    #[tokio::test]
-    #[ignore]
-    async fn test_extract_clip_integration() {}
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_compose_shorts_integration() {}
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_generate_thumbnail_integration() {}
-
     /// `zoompan` 은 x,y 기본값이 0 이라, 생략하면 화면 중앙이 아니라 **좌상단
     /// 모서리를 기준으로** 확대된다. 이 기능은 그 상태로 코드에 들어와 있었고
     /// 기본값이 꺼져 있어서 아무도 눈치채지 못했다 — 켜는 순간 영상이 망가진다.
