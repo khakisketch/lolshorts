@@ -64,29 +64,27 @@ pub fn command_output_with_timeout(
             // while retaining the direct-child fallback below. The helper is
             // deliberately detached so the caller's latency budget is not
             // extended by a best-effort cleanup command.
-            #[cfg(windows)]
-            {
-                let mut tree_kill = Command::new("taskkill");
-                tree_kill
-                    .args(["/F", "/T", "/PID", &pid.to_string()])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null());
-                use std::os::windows::process::CommandExt;
-                tree_kill.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-                if let Ok(mut tree_kill) = tree_kill.spawn() {
-                    thread::spawn(move || {
-                        let _ = tree_kill.wait();
-                    });
-                }
-            }
-            // Kill and reap the direct child on a detached thread as well.
-            // `Child::kill` may block while Windows tears down a process that
-            // has inherited pipe handles; performing it here would make the
-            // nominal timeout depend on the child tree and on system load.
-            // The caller's latency budget ends as soon as this reaper is
-            // scheduled, while pipe drainers finish when inherited handles
-            // close.
+            // Process creation itself can stall under Windows runner load, so
+            // both spawning `taskkill` and reaping the direct child must live
+            // outside the caller's latency budget. Keeping the tree kill and
+            // direct-child fallback in one cleanup thread also preserves their
+            // ordering: taskkill sees the parent PID before Child::kill can
+            // remove it from the process table.
             thread::spawn(move || {
+                #[cfg(windows)]
+                {
+                    let mut tree_kill = Command::new("taskkill");
+                    tree_kill
+                        .args(["/F", "/T", "/PID", &pid.to_string()])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null());
+                    use std::os::windows::process::CommandExt;
+                    tree_kill.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                    if let Ok(mut tree_kill) = tree_kill.spawn() {
+                        let _ = tree_kill.wait();
+                    }
+                }
+
                 let _ = child.kill();
                 let _ = child.wait();
             });
