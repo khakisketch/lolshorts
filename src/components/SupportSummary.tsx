@@ -65,9 +65,10 @@ RAM Available: ${formatMetric(system?.available_ram_gb)} GB
 Disk Available: ${formatMetric(system?.available_disk_gb)} GB
 
 [Disk Space Info]
-Total: ${formatMetric(disk?.total_gb)} GB
-Used: ${formatMetric(disk?.used_gb)} GB
-Available: ${formatMetric(disk?.available_gb)} GB
+Measured: ${disk?.known === true}
+Total: ${formatMetric(disk?.known ? disk.total_gb : undefined)} GB
+Used: ${formatMetric(disk?.known ? disk.used_gb : undefined)} GB
+Available: ${formatMetric(disk?.known ? disk.available_gb : undefined)} GB
 
 [Diagnostics]
 Overall Status: ${diagnostics.overall_status}

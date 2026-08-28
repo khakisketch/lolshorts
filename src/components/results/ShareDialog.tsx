@@ -1,17 +1,18 @@
-import { useTranslation } from 'react-i18next';
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { YouTubeUpload } from '@/components/youtube/YouTubeUpload';
-import { YouTubeAuth } from '@/components/youtube/YouTubeAuth';
-import { YouTubeHistory } from '@/components/youtube/YouTubeHistory';
-import { QuotaDisplay } from '@/components/youtube/QuotaDisplay';
-import { FormErrorBoundary } from '@/components/ErrorBoundary';
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { YouTubeUpload } from "@/components/youtube/YouTubeUpload";
+import { YouTubeAuth } from "@/components/youtube/YouTubeAuth";
+import { YouTubeHistory } from "@/components/youtube/YouTubeHistory";
+import { QuotaDisplay } from "@/components/youtube/QuotaDisplay";
+import { FormErrorBoundary } from "@/components/ErrorBoundary";
+import { ProtectedFeature } from "@/components/auth/ProtectedFeature";
 
 interface ShareDialogProps {
   open: boolean;
@@ -45,40 +46,42 @@ export function ShareDialog({
         data-testid="share-dialog"
       >
         <DialogHeader>
-          <DialogTitle>{t('results.shareDialog.title')}</DialogTitle>
-          <DialogDescription style={{ wordBreak: 'keep-all' }}>
-            {t('results.shareDialog.description')}
+          <DialogTitle>{t("results.shareDialog.title")}</DialogTitle>
+          <DialogDescription style={{ wordBreak: "keep-all" }}>
+            {t("results.shareDialog.description")}
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="upload" className="mt-2">
-          <TabsList className="grid w-full grid-cols-3 h-auto">
-            <TabsTrigger value="upload" className="min-h-[44px]">
-              {t('results.shareDialog.tabs.upload')}
-            </TabsTrigger>
-            <TabsTrigger value="account" className="min-h-[44px]">
-              {t('results.shareDialog.tabs.account')}
-            </TabsTrigger>
-            <TabsTrigger value="history" className="min-h-[44px]">
-              {t('results.shareDialog.tabs.history')}
-            </TabsTrigger>
-          </TabsList>
+        <ProtectedFeature requiresPro={false} featureName="YouTube upload">
+          <Tabs defaultValue="upload" className="mt-2">
+            <TabsList className="grid w-full grid-cols-3 h-auto">
+              <TabsTrigger value="upload" className="min-h-[44px]">
+                {t("results.shareDialog.tabs.upload")}
+              </TabsTrigger>
+              <TabsTrigger value="account" className="min-h-[44px]">
+                {t("results.shareDialog.tabs.account")}
+              </TabsTrigger>
+              <TabsTrigger value="history" className="min-h-[44px]">
+                {t("results.shareDialog.tabs.history")}
+              </TabsTrigger>
+            </TabsList>
 
-          <TabsContent value="upload" className="mt-4 space-y-4">
-            <FormErrorBoundary>
-              <YouTubeUpload initialPath={videoPath} resultId={resultId} />
-            </FormErrorBoundary>
-            <QuotaDisplay />
-          </TabsContent>
+            <TabsContent value="upload" className="mt-4 space-y-4">
+              <FormErrorBoundary>
+                <YouTubeUpload initialPath={videoPath} resultId={resultId} />
+              </FormErrorBoundary>
+              <QuotaDisplay />
+            </TabsContent>
 
-          <TabsContent value="account" className="mt-4 space-y-4">
-            <YouTubeAuth />
-          </TabsContent>
+            <TabsContent value="account" className="mt-4 space-y-4">
+              <YouTubeAuth />
+            </TabsContent>
 
-          <TabsContent value="history" className="mt-4">
-            <YouTubeHistory />
-          </TabsContent>
-        </Tabs>
+            <TabsContent value="history" className="mt-4">
+              <YouTubeHistory />
+            </TabsContent>
+          </Tabs>
+        </ProtectedFeature>
       </DialogContent>
     </Dialog>
   );

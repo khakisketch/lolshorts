@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::utils::env_validation;
+use crate::public_service_config::{PublicServiceStatus, ServiceConfigStatus};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemHealth {
@@ -31,25 +31,6 @@ pub struct DiagnosticCheck {
 pub struct DiagnosticsStatus {
     pub overall_status: DiagnosticState,
     pub checks: Vec<DiagnosticCheck>,
-}
-
-pub fn configured_updater_pubkey() -> Option<String> {
-    option_env!("TAURI_UPDATER_PUBKEY")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            std::env::var("TAURI_UPDATER_PUBKEY")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
-}
-
-fn env_present(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
 }
 
 fn diagnostic_check(
@@ -84,85 +65,94 @@ pub(crate) fn overall_status(checks: &[DiagnosticCheck]) -> DiagnosticState {
     }
 }
 
-pub fn get_diagnostics_status() -> DiagnosticsStatus {
-    let env_check = env_validation::validate_env();
-    let mut checks = Vec::new();
-
-    if env_check.required_missing.is_empty() {
-        checks.push(diagnostic_check(
-            "required_env",
-            "Required environment",
+fn public_config_check(
+    key: &'static str,
+    label: &'static str,
+    status: &ServiceConfigStatus,
+) -> DiagnosticCheck {
+    if status.configured {
+        diagnostic_check(
+            key,
+            label,
             DiagnosticState::Ok,
-            "Required runtime configuration is present.",
+            format!("{label} is configured for this build."),
             "No action required.",
-        ));
+        )
     } else {
-        checks.push(diagnostic_check(
-            "required_env",
-            "Required environment",
-            DiagnosticState::Blocked,
+        diagnostic_check(
+            key,
+            label,
+            DiagnosticState::Warning,
             format!(
-                "Missing required configuration: {}.",
-                env_check.required_missing.join(", ")
+                "{label} is unavailable ({}).",
+                status
+                    .error_code
+                    .as_deref()
+                    .unwrap_or("PUBLIC_CONFIG_MISSING")
             ),
-            "Set the missing variables before building or running authenticated desktop features.",
-        ));
+            "Install a production build with the required public client configuration embedded.",
+        )
     }
+}
 
-    if env_present("SENTRY_DSN") {
-        checks.push(diagnostic_check(
-            "sentry",
-            "Crash reporting",
+fn optional_public_config_check(
+    key: &'static str,
+    label: &'static str,
+    status: &ServiceConfigStatus,
+) -> DiagnosticCheck {
+    if status.configured {
+        diagnostic_check(
+            key,
+            label,
             DiagnosticState::Ok,
-            "Backend crash reporting DSN is configured.",
+            format!("{label} is configured for this build."),
             "No action required.",
-        ));
+        )
     } else {
-        checks.push(diagnostic_check(
-            "sentry",
-            "Crash reporting",
+        diagnostic_check(
+            key,
+            label,
             DiagnosticState::Warning,
-            "SENTRY_DSN is not configured; crash reports will stay local.",
-            "Set SENTRY_DSN for release builds if remote crash diagnostics are desired.",
-        ));
+            format!(
+                "{label} is not configured; this optional service is disabled ({}).",
+                status
+                    .error_code
+                    .as_deref()
+                    .unwrap_or("OPTIONAL_PUBLIC_CONFIG_MISSING")
+            ),
+            "Optional: set SENTRY_DSN/VITE_SENTRY_DSN in the release environment to enable anonymous crash reports.",
+        )
     }
+}
 
-    if configured_updater_pubkey().is_some() {
-        checks.push(diagnostic_check(
+pub fn get_diagnostics_status(public_status: &PublicServiceStatus) -> DiagnosticsStatus {
+    let checks = vec![
+        public_config_check(
+            "release_config",
+            "Public release configuration",
+            &public_status.release_config,
+        ),
+        public_config_check(
+            "supabase_config",
+            "Supabase public client",
+            &public_status.supabase,
+        ),
+        public_config_check(
+            "youtube_config",
+            "YouTube desktop OAuth",
+            &public_status.youtube,
+        ),
+        public_config_check(
             "updater_pubkey",
             "Updater public key",
-            DiagnosticState::Ok,
-            "Tauri updater public key is configured for this build/runtime.",
-            "No action required.",
-        ));
-    } else {
-        checks.push(diagnostic_check(
-            "updater_pubkey",
-            "Updater public key",
-            DiagnosticState::Warning,
-            "TAURI_UPDATER_PUBKEY is not configured; auto-updates are disabled for this build.",
-            "Provide TAURI_UPDATER_PUBKEY in CI/release build configuration.",
-        ));
-    }
-
-    if env_present("TAURI_SIGNING_PRIVATE_KEY") && env_present("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
-    {
-        checks.push(diagnostic_check(
-            "release_signing",
-            "Release signing",
-            DiagnosticState::Ok,
-            "Updater signing environment is present in this runtime.",
-            "No action required.",
-        ));
-    } else {
-        checks.push(diagnostic_check(
-            "release_signing",
-            "Release signing",
-            DiagnosticState::Warning,
-            "Release signing keys are not available to this local runtime; distribution signatures cannot be proven here.",
-            "Verify TAURI_PRIVATE_KEY, TAURI_KEY_PASSWORD, and TAURI_UPDATER_PUBKEY secrets in the release workflow.",
-        ));
-    }
+            &public_status.updater,
+        ),
+        optional_public_config_check(
+            "telemetry_config",
+            "Anonymous error telemetry (optional)",
+            &public_status.telemetry,
+        ),
+    ];
 
     DiagnosticsStatus {
         overall_status: overall_status(&checks),
@@ -215,13 +205,17 @@ mod tests {
 
     #[test]
     fn diagnostics_status_surfaces_configuration_checks() {
-        let status = get_diagnostics_status();
+        let public_status = crate::public_service_config::PublicServiceConfig::load().status();
+        let status = get_diagnostics_status(&public_status);
 
         assert!(status
             .checks
             .iter()
-            .any(|check| check.key == "required_env"));
-        assert!(status.checks.iter().any(|check| check.key == "sentry"));
+            .any(|check| check.key == "release_config"));
+        assert!(status
+            .checks
+            .iter()
+            .any(|check| check.key == "telemetry_config"));
         assert!(status
             .checks
             .iter()
@@ -229,12 +223,13 @@ mod tests {
         assert!(status
             .checks
             .iter()
-            .any(|check| check.key == "release_signing"));
+            .any(|check| check.key == "youtube_config"));
     }
 
     #[test]
     fn diagnostics_status_serializes_actionable_fields() {
-        let status = get_diagnostics_status();
+        let public_status = crate::public_service_config::PublicServiceConfig::load().status();
+        let status = get_diagnostics_status(&public_status);
         let json = serde_json::to_string(&status).unwrap();
 
         assert!(json.contains("overall_status"));

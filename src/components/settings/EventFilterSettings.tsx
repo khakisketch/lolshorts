@@ -179,7 +179,10 @@ function ToggleRow({ flag, label, checked, onCheckedChange }: ToggleRowProps) {
       htmlFor={flag}
       className="flex min-h-[44px] cursor-pointer items-center justify-between gap-4"
     >
-      <span className="min-w-0 flex-1 text-sm" style={{ wordBreak: "keep-all" }}>
+      <span
+        className="min-w-0 flex-1 text-sm"
+        style={{ wordBreak: "keep-all" }}
+      >
         {label}
       </span>
       <Switch id={flag} checked={checked} onCheckedChange={onCheckedChange} />
@@ -193,7 +196,10 @@ export function EventFilterSettings({
 }: EventFilterSettingsProps) {
   const { t } = useTranslation();
 
-  const updateSetting = (key: keyof EventFilterSettings, value: boolean | number) => {
+  const updateSetting = (
+    key: keyof EventFilterSettings,
+    value: boolean | number,
+  ) => {
     onChange({ ...settings, [key]: value });
   };
 
@@ -206,13 +212,20 @@ export function EventFilterSettings({
 
   const getPriorityLabel = (priority: number): string => {
     const labels = {
-      1: t('settings.recordingConfig.eventFilter.priorityLabels.allEvents'),
-      2: t('settings.recordingConfig.eventFilter.priorityLabels.importantEvents'),
-      3: t('settings.recordingConfig.eventFilter.priorityLabels.highPriority'),
-      4: t('settings.recordingConfig.eventFilter.priorityLabels.criticalMoments'),
-      5: t('settings.recordingConfig.eventFilter.priorityLabels.epicPlaysOnly'),
+      1: t("settings.recordingConfig.eventFilter.priorityLabels.allEvents"),
+      2: t(
+        "settings.recordingConfig.eventFilter.priorityLabels.importantEvents",
+      ),
+      3: t("settings.recordingConfig.eventFilter.priorityLabels.highPriority"),
+      4: t(
+        "settings.recordingConfig.eventFilter.priorityLabels.criticalMoments",
+      ),
+      5: t("settings.recordingConfig.eventFilter.priorityLabels.epicPlaysOnly"),
     };
-    return labels[priority as keyof typeof labels] || t('settings.recordingConfig.eventFilter.priorityLabels.custom');
+    return (
+      labels[priority as keyof typeof labels] ||
+      t("settings.recordingConfig.eventFilter.priorityLabels.custom")
+    );
   };
 
   /** 장면 이름은 기본 화면과 같은 표를 쓴다 — 같은 것을 두 이름으로 부르지 않는다. */
@@ -223,7 +236,9 @@ export function EventFilterSettings({
     <div className="space-y-6">
       {/* Presets */}
       <div>
-        <h3 className="text-sm font-semibold mb-3">{t('settings.recordingConfig.eventFilter.quickPresets')}</h3>
+        <h3 className="text-sm font-semibold mb-3">
+          {t("settings.recordingConfig.eventFilter.quickPresets")}
+        </h3>
         <div className="flex gap-2 flex-wrap">
           {SELECTABLE_HIGHLIGHT_PRESETS.map((preset) => (
             <Button
@@ -242,16 +257,27 @@ export function EventFilterSettings({
       {/* Priority Filter */}
       <div className="gaming-panel p-6">
         <div className="mb-4">
-          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.eventFilter.priorityFilter')}</h3>
-          <p className="text-sm text-muted-foreground" style={{ wordBreak: "keep-all" }}>
-            {t('settings.recordingConfig.eventFilter.priorityFilterDescription')}
+          <h3 className="text-lg font-semibold">
+            {t("settings.recordingConfig.eventFilter.priorityFilter")}
+          </h3>
+          <p
+            className="text-sm text-muted-foreground"
+            style={{ wordBreak: "keep-all" }}
+          >
+            {t(
+              "settings.recordingConfig.eventFilter.priorityFilterDescription",
+            )}
           </p>
         </div>
         <div className="space-y-4">
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <Label>{t('settings.recordingConfig.eventFilter.minimumPriority')}</Label>
-              <Badge variant="secondary">{getPriorityLabel(settings.min_priority)}</Badge>
+              <Label>
+                {t("settings.recordingConfig.eventFilter.minimumPriority")}
+              </Label>
+              <Badge variant="secondary">
+                {getPriorityLabel(settings.min_priority)}
+              </Badge>
             </div>
             <Slider
               value={[settings.min_priority]}
@@ -263,17 +289,34 @@ export function EventFilterSettings({
               data-testid="priority-filter-slider"
             />
             <div className="flex justify-between text-xs text-muted-foreground">
-              <span>{t('settings.recordingConfig.eventFilter.priorityScale.all')}</span>
-              <span>{t('settings.recordingConfig.eventFilter.priorityScale.important')}</span>
-              <span>{t('settings.recordingConfig.eventFilter.priorityScale.high')}</span>
-              <span>{t('settings.recordingConfig.eventFilter.priorityScale.critical')}</span>
-              <span>{t('settings.recordingConfig.eventFilter.priorityScale.epic')}</span>
+              <span>
+                {t("settings.recordingConfig.eventFilter.priorityScale.all")}
+              </span>
+              <span>
+                {t(
+                  "settings.recordingConfig.eventFilter.priorityScale.important",
+                )}
+              </span>
+              <span>
+                {t("settings.recordingConfig.eventFilter.priorityScale.high")}
+              </span>
+              <span>
+                {t(
+                  "settings.recordingConfig.eventFilter.priorityScale.critical",
+                )}
+              </span>
+              <span>
+                {t("settings.recordingConfig.eventFilter.priorityScale.epic")}
+              </span>
             </div>
           </div>
           {/* 문턱은 토글보다 먼저 걸리고, 강등으로 우회되지도 않는다. 켜 둔 것이
               조용히 버려지는 상태를 만들 수 있는 유일한 노브라 그 사실을 밝힌다. */}
-          <p className="text-xs text-muted-foreground" style={{ wordBreak: "keep-all" }}>
-            {t('settings.recordingConfig.eventFilter.priorityOverridesHint')}
+          <p
+            className="text-xs text-muted-foreground"
+            style={{ wordBreak: "keep-all" }}
+          >
+            {t("settings.recordingConfig.eventFilter.priorityOverridesHint")}
           </p>
         </div>
       </div>
@@ -290,102 +333,103 @@ export function EventFilterSettings({
 
         // 토글이 하나뿐인 그룹은 제목이 곧 그 토글의 이름이다. 줄을 따로 두면
         // "킬 / 킬" 처럼 같은 말이 연달아 나와, 둘이 다른 것인가 하고 멈추게 된다.
-        const singleToggle = group.primary.length === 1 ? group.primary[0] : null;
+        const singleToggle =
+          group.primary.length === 1 ? group.primary[0] : null;
 
         return (
-            <div
-              key={group.key}
-              className="gaming-panel p-6"
-              data-testid={`event-group-${group.key}`}
-            >
-              <div className="mb-4 flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h3 className="text-lg font-semibold">
-                    {t(
-                      `settings.recordingConfig.eventFilter.groups.${group.key}.title`,
-                    )}
-                  </h3>
-                  <p
-                    className="text-sm text-muted-foreground"
-                    style={{ wordBreak: "keep-all" }}
-                  >
-                    {t(
-                      `settings.recordingConfig.eventFilter.groups.${group.key}.description`,
-                    )}
-                  </p>
-                </div>
-                {singleToggle && (
-                  // `Switch` 자체는 20x36px 이라 터치타깃에 한참 못 미친다.
-                  // `ToggleRow` 는 라벨이 행 전체를 덮어 실질 타깃이 44px 이지만,
-                  // 제목 줄에서는 옆에 눌릴 라벨이 없어 스위치가 유일한 과녁이다.
-                  // 빈 `label` 로 감싸 과녁만 넓힌다 — 접근성 이름은 `aria-label`
-                  // 이 그대로 제공한다(빈 라벨보다 우선한다).
-                  <label
-                    htmlFor={singleToggle}
-                    className="flex min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center justify-end"
-                  >
-                    <Switch
-                      id={singleToggle}
-                      aria-label={sceneLabel(singleToggle)}
-                      checked={settings[singleToggle]}
-                      onCheckedChange={(checked: boolean) =>
-                        updateSetting(singleToggle, checked)
-                      }
-                    />
-                  </label>
-                )}
-              </div>
-
-              {!singleToggle && (
-                <div className="space-y-4">
-                  {group.primary.map((flag) => (
-                    <ToggleRow
-                      key={flag}
-                      flag={flag}
-                      label={sceneLabel(flag)}
-                      checked={settings[flag]}
-                      onCheckedChange={(checked) => updateSetting(flag, checked)}
-                    />
-                  ))}
-                </div>
-              )}
-
-              {includedSubs.length > 0 && (
+          <div
+            key={group.key}
+            className="gaming-panel p-6"
+            data-testid={`event-group-${group.key}`}
+          >
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="text-lg font-semibold">
+                  {t(
+                    `settings.recordingConfig.eventFilter.groups.${group.key}.title`,
+                  )}
+                </h3>
                 <p
-                  data-testid={`event-group-${group.key}-included`}
-                  className="mt-3 text-xs text-muted-foreground"
+                  className="text-sm text-muted-foreground"
                   style={{ wordBreak: "keep-all" }}
                 >
-                  {t('settings.recordingConfig.eventFilter.includedHint', {
-                    scenes: includedSubs.map(sceneLabel).join(" · "),
-                  })}
+                  {t(
+                    `settings.recordingConfig.eventFilter.groups.${group.key}.description`,
+                  )}
                 </p>
-              )}
-
-              {visibleSubs.length > 0 && (
-                <div
-                  data-testid={`event-group-${group.key}-exceptions`}
-                  className="mt-4 space-y-4 border-l-2 border-gaming-cyan/30 pl-4"
+              </div>
+              {singleToggle && (
+                // `Switch` 자체는 20x36px 이라 터치타깃에 한참 못 미친다.
+                // `ToggleRow` 는 라벨이 행 전체를 덮어 실질 타깃이 44px 이지만,
+                // 제목 줄에서는 옆에 눌릴 라벨이 없어 스위치가 유일한 과녁이다.
+                // 빈 `label` 로 감싸 과녁만 넓힌다 — 접근성 이름은 `aria-label`
+                // 이 그대로 제공한다(빈 라벨보다 우선한다).
+                <label
+                  htmlFor={singleToggle}
+                  className="flex min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center justify-end"
                 >
-                  <p
-                    className="text-sm font-medium"
-                    style={{ wordBreak: "keep-all" }}
-                  >
-                    {t('settings.recordingConfig.eventFilter.exceptionsLabel')}
-                  </p>
-                  {visibleSubs.map((flag) => (
-                    <ToggleRow
-                      key={flag}
-                      flag={flag}
-                      label={sceneLabel(flag)}
-                      checked={settings[flag]}
-                      onCheckedChange={(checked) => updateSetting(flag, checked)}
-                    />
-                  ))}
-                </div>
+                  <Switch
+                    id={singleToggle}
+                    aria-label={sceneLabel(singleToggle)}
+                    checked={settings[singleToggle]}
+                    onCheckedChange={(checked: boolean) =>
+                      updateSetting(singleToggle, checked)
+                    }
+                  />
+                </label>
               )}
             </div>
-          );
+
+            {!singleToggle && (
+              <div className="space-y-4">
+                {group.primary.map((flag) => (
+                  <ToggleRow
+                    key={flag}
+                    flag={flag}
+                    label={sceneLabel(flag)}
+                    checked={settings[flag]}
+                    onCheckedChange={(checked) => updateSetting(flag, checked)}
+                  />
+                ))}
+              </div>
+            )}
+
+            {includedSubs.length > 0 && (
+              <p
+                data-testid={`event-group-${group.key}-included`}
+                className="mt-3 text-xs text-muted-foreground"
+                style={{ wordBreak: "keep-all" }}
+              >
+                {t("settings.recordingConfig.eventFilter.includedHint", {
+                  scenes: includedSubs.map(sceneLabel).join(" · "),
+                })}
+              </p>
+            )}
+
+            {visibleSubs.length > 0 && (
+              <div
+                data-testid={`event-group-${group.key}-exceptions`}
+                className="mt-4 space-y-4 border-l-2 border-gaming-cyan/30 pl-4"
+              >
+                <p
+                  className="text-sm font-medium"
+                  style={{ wordBreak: "keep-all" }}
+                >
+                  {t("settings.recordingConfig.eventFilter.exceptionsLabel")}
+                </p>
+                {visibleSubs.map((flag) => (
+                  <ToggleRow
+                    key={flag}
+                    flag={flag}
+                    label={sceneLabel(flag)}
+                    checked={settings[flag]}
+                    onCheckedChange={(checked) => updateSetting(flag, checked)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        );
       })}
     </div>
   );

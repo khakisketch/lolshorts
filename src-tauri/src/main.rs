@@ -7,39 +7,20 @@ use tokio::sync::RwLock;
 // Import everything from the library crate
 use lolshorts::*;
 
-#[tauri::command]
-async fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    use tauri_plugin_autostart::ManagerExt;
-    let manager = app.autolaunch();
-    if enabled {
-        manager.enable().map_err(|e| e.to_string())?;
-    } else {
-        manager.disable().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() {
     let startup_start = std::time::Instant::now();
 
-    // .env 파일에서 환경 변수 로드 (개발용)
+    // Installed builds use compile-time public client configuration. Only local
+    // debug builds may read a developer-owned `.env`.
+    #[cfg(debug_assertions)]
     dotenvy::dotenv().ok();
 
-    // Sentry 크래시 리포팅 초기화 (opt-in, SENTRY_DSN 환경변수 필요)
-    let _sentry_guard = std::env::var("SENTRY_DSN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .and_then(|value| value.parse().ok())
-        .map(|dsn| {
-            sentry::init(sentry::ClientOptions {
-                dsn: Some(dsn),
-                release: sentry::release_name!(),
-                auto_session_tracking: true,
-                ..Default::default()
-            })
-        });
+    // Sentry configuration is loaded before startup so diagnostics can expose
+    // only configured/not-configured state. The client itself is initialized
+    // after persisted settings are loaded, because crash reporting is a user
+    // opt-in preference rather than a build-level requirement.
+    let public_service_config = public_service_config::PublicServiceConfig::load();
 
     // 애플리케이션 데이터 디렉토리 가져오기 (로깅 초기화 전에 수행)
     let app_data_dir = match dirs::data_dir() {
@@ -78,19 +59,16 @@ async fn main() {
         "Application started"
     );
 
-    // 환경변수 유효성 검사
-    let env_check = utils::env_validation::validate_env();
-    if !env_check.required_missing.is_empty() {
-        tracing::warn!("필수 환경변수 누락: {:?}", env_check.required_missing);
-    }
-    if !env_check.optional_missing.is_empty() {
-        tracing::info!(
-            "선택적 환경변수 미설정 (기능이 제한될 수 있음): {:?}",
-            env_check.optional_missing
+    let public_service_status = public_service_config.status();
+    if !public_service_status.release_config.configured {
+        tracing::warn!(
+            error_code = ?public_service_status.release_config.error_code,
+            "Public release configuration is incomplete; affected online features will fail closed"
         );
     }
     let startup_issues = Arc::new(RwLock::new(Vec::<String>::new()));
     let recording_disk_monitor = Arc::new(RwLock::new(None::<tokio::sync::watch::Sender<bool>>));
+    let autostart_status = Arc::new(RwLock::new(autostart::AutostartStatus::default()));
 
     // 저장소(Storage) 초기화
     let storage = match storage::Storage::new(&app_data_dir) {
@@ -130,7 +108,12 @@ async fn main() {
     let runtime_data_dir = storage.base_path().to_path_buf();
 
     // 인증 관리자(Auth Manager) 초기화
-    let auth = Arc::new(auth::AuthManager::new());
+    let auth = Arc::new(
+        public_service_config
+            .supabase_config()
+            .map(auth::AuthManager::new_with_config)
+            .unwrap_or_else(auth::AuthManager::disabled),
+    );
 
     // 녹화 디렉토리 초기화
     let mut recordings_dir = runtime_data_dir.join("recordings");
@@ -191,6 +174,45 @@ async fn main() {
         };
     let recording_settings = Arc::new(RwLock::new(recording_settings));
 
+    // Honour the persisted privacy preference. A configured DSN alone must
+    // never turn telemetry on for an existing or new user who left this off.
+    let crash_reporting_enabled = recording_settings.read().await.crash_reporting_enabled;
+    let sentry_dsn = public_service_config.sentry_dsn();
+    let telemetry_enabled = crash_reporting_enabled && sentry_dsn.is_some();
+    utils::telemetry::set_enabled(telemetry_enabled);
+    let _sentry_guard = if telemetry_enabled {
+        sentry_dsn
+            .clone()
+            .and_then(|value| value.parse().ok())
+            .map(|dsn| {
+                sentry::init(sentry::ClientOptions {
+                    dsn: Some(dsn),
+                    release: sentry::release_name!(),
+                    auto_session_tracking: true,
+                    send_default_pii: false,
+                    // Keep the client installed so the preference can be
+                    // changed without rebuilding the process, but gate every
+                    // event (including panic integration events) at the final
+                    // Sentry boundary. Operational callers use the same gate.
+                    before_send: Some(std::sync::Arc::new(|event| {
+                        if utils::telemetry::is_enabled() {
+                            Some(event)
+                        } else {
+                            None
+                        }
+                    })),
+                    ..Default::default()
+                })
+            })
+    } else {
+        None
+    };
+    tracing::info!(
+        configured = sentry_dsn.is_some(),
+        enabled = telemetry_enabled,
+        "Anonymous crash reporting preference applied"
+    );
+
     tracing::info!("녹화 설정이 로드되고 플랫폼에 최적화되었습니다");
 
     // 비디오 및 오디오 구성을 포함한 녹화 관리자(플랫폼별 백엔드) 초기화
@@ -209,6 +231,8 @@ async fn main() {
         bitrate: settings_read.video.get_bitrate(),
         use_h265: settings_read.video.is_h265(),
         encoder_preference: encoder_pref.to_string(),
+        monitor_index: (settings_read.video.monitor_index > 0)
+            .then_some(settings_read.video.monitor_index),
     });
     drop(settings_read);
 
@@ -285,14 +309,20 @@ async fn main() {
         recordings_dir.clone(),
     ));
 
+    spawn_monitored(
+        "system_metrics",
+        Arc::clone(&metrics_collector)
+            .run_background_collection(utils::metrics::DEFAULT_SYSTEM_METRICS_INTERVAL),
+    );
+
     tracing::info!("메트릭 수집기 초기화됨");
 
     // 정리 관리자(Cleanup Manager) 초기화
     let cleanup_config = utils::cleanup::CleanupConfig::default();
-    let cleanup_manager = Arc::new(utils::cleanup::CleanupManager::new(
-        app_data_dir.clone(),
-        cleanup_config,
-    ));
+    let cleanup_manager = Arc::new(
+        utils::cleanup::CleanupManager::new(app_data_dir.clone(), cleanup_config)
+            .with_recordings_dir(recordings_dir.clone()),
+    );
 
     // 시작 시 정리 실행
     if let Err(e) = cleanup_manager.cleanup_on_startup().await {
@@ -317,7 +347,7 @@ async fn main() {
             tracing::error!("시작 시 저장 공간 보존 정책 적용 실패: {}", e);
         }
 
-        tokio::spawn(async move {
+        spawn_monitored("storage_retention", async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
             interval.tick().await; // 첫 tick은 즉시 완료됨 — 위의 기동 1회 실행과 중복 방지
             loop {
@@ -365,7 +395,11 @@ async fn main() {
     tracing::info!("Auto Composer 초기화됨");
 
     // YouTube 관리자 초기화
-    let youtube_manager = init_youtube_manager(Arc::clone(&storage)).await;
+    let youtube_manager = init_youtube_manager(
+        Arc::clone(&storage),
+        public_service_config.youtube_credentials(),
+    )
+    .await;
     tracing::info!("YouTube 관리자 초기화됨");
 
     // 자동 녹화를 위한 게임 상태 모니터(Game State Monitor) 초기화
@@ -391,9 +425,19 @@ async fn main() {
     let recording_disk_monitor_for_start = Arc::clone(&recording_disk_monitor);
     let recording_disk_monitor_for_end = Arc::clone(&recording_disk_monitor);
     let storage_for_game_lifecycle = Arc::clone(&storage);
+    let updater_pubkey = public_service_config.updater_pubkey();
+    let update_manager = Arc::new(updater::AppUpdateManager::new(
+        env!("CARGO_PKG_VERSION"),
+        updater_pubkey.is_some(),
+    ));
+    let update_manager_for_setup = Arc::clone(&update_manager);
+    let media_job_executor = Arc::new(video::media_job_executor::MediaJobExecutor::production(
+        Arc::clone(&storage),
+    ));
 
     let app_state = AppState {
         storage,
+        recordings_dir: recordings_dir.clone(),
         auth,
         recording_manager: Arc::clone(&recording_manager),
         clip_manager: Arc::clone(&auto_clip_manager),
@@ -408,6 +452,10 @@ async fn main() {
         lcu_client,
         startup_issues: Arc::clone(&startup_issues),
         recording_disk_monitor: Arc::clone(&recording_disk_monitor),
+        update_manager,
+        media_job_executor,
+        public_service_status,
+        autostart_status: Arc::clone(&autostart_status),
     };
 
     // 콜백과 함께 핫키 시스템 시작 (설정에서 핫키 읽기)
@@ -426,8 +474,7 @@ async fn main() {
         delete_last_clip: hotkey_settings.delete_last_clip,
     };
 
-    // TODO: Replace with spawn_monitored once the inner closure types support UnwindSafe
-    tokio::spawn(async move {
+    spawn_monitored("hotkey_and_game_monitor", async move {
         let storage_hotkey = Arc::clone(&storage_for_game_lifecycle);
         let hotkey_result = hotkey_manager
             .start_with_config(
@@ -438,7 +485,7 @@ async fn main() {
                     let overlay_handle = Arc::clone(&overlay_handle_for_hotkey);
                     let overlay_cfg = Arc::clone(&recording_settings_for_hotkey);
 
-                    tokio::spawn(async move {
+                    spawn_monitored("hotkey_event", async move {
                         use hotkey::HotkeyEvent;
 
                         match event {
@@ -528,12 +575,23 @@ async fn main() {
                             HotkeyEvent::DeleteLastClip => {
                                 // 가장 최근에 저장된 클립 삭제
                                 tracing::info!("핫키 F10: 마지막 클립 삭제");
-                                match storage.delete_last_clip() {
-                                    Ok(Some(path)) => {
+                                let delete_storage = Arc::clone(&storage);
+                                match tokio::task::spawn_blocking(move || {
+                                    delete_storage.delete_last_clip()
+                                })
+                                .await
+                                {
+                                    Ok(Ok(Some(path))) => {
                                         tracing::info!("마지막 클립 삭제됨: {}", path);
                                     }
-                                    Ok(None) => tracing::info!("삭제할 클립이 없습니다"),
-                                    Err(e) => tracing::error!("마지막 클립 삭제 실패: {}", e),
+                                    Ok(Ok(None)) => tracing::info!("삭제할 클립이 없습니다"),
+                                    Ok(Err(e)) => {
+                                        tracing::error!("마지막 클립 삭제 실패: {}", e)
+                                    }
+                                    Err(e) => tracing::error!(
+                                        "마지막 클립 삭제 작업이 비정상 종료됨: {}",
+                                        e
+                                    ),
                                 }
                             }
                         }
@@ -678,6 +736,8 @@ async fn main() {
     });
 
     let auto_clip_manager_for_setup = Arc::clone(&auto_clip_manager);
+    let autostart_status_for_setup = Arc::clone(&autostart_status);
+    let recording_settings_for_setup = Arc::clone(&app_state.recording_settings);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -696,8 +756,10 @@ async fn main() {
             // point either can be wired in.
             {
                 let handle = app.handle().clone();
+                let exclusion = overlay::verify_capture_exclusion(&handle);
+                tracing::info!(?exclusion, "Overlay capture exclusion startup check completed");
                 let acm = Arc::clone(&auto_clip_manager_for_setup);
-                tauri::async_runtime::spawn(async move {
+                spawn_monitored("overlay_handle_setup", async move {
                     acm.set_app_handle(handle.clone()).await;
                     *overlay_handle_for_setup.lock().await = Some(handle);
                     tracing::info!("Overlay app handle stored for game callbacks");
@@ -711,16 +773,30 @@ async fn main() {
 
             // minimize_to_tray 설정 적용 (비동기 설정 읽기를 위해 blocking spawn)
             let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                // 설정에서 minimize_to_tray 값 확인
-                let settings = settings::models::RecordingSettings::load_with_platform_optimization().await;
-                let minimize_to_tray = settings.map(|s| s.minimize_to_tray).unwrap_or(true);
+            let settings = Arc::clone(&recording_settings_for_setup);
+            spawn_monitored("close_to_tray_setup", async move {
+                let minimize_to_tray = settings.read().await.minimize_to_tray;
                 tray::setup_close_to_tray(&handle, minimize_to_tray);
             });
 
-            // Auto-updater initialization
-            // The plugin's dialog:true config in tauri.conf.json handles the update UI automatically.
-            match utils::health::configured_updater_pubkey() {
+            // Reconcile the persisted preference with Windows and retain the
+            // observed OS state for readiness/diagnostics.
+            let handle = app.handle().clone();
+            let status = Arc::clone(&autostart_status_for_setup);
+            let settings = Arc::clone(&recording_settings_for_setup);
+            spawn_monitored("autostart_reconciliation", async move {
+                let desired = settings.read().await.launch_on_windows_startup;
+                if let Err(error_code) =
+                    autostart::apply_and_store(&handle, &status, desired).await
+                {
+                    tracing::warn!(%error_code, "Windows autostart reconciliation failed");
+                }
+            });
+
+            // Tauri 2 has no automatic updater dialog. Register the signed
+            // updater, then run one background check; the frontend consumes the
+            // explicit snapshot/event API and decides when to show its dialog.
+            match updater_pubkey.clone() {
                 Some(pubkey) => {
                     app.handle().plugin(
                         tauri_plugin_updater::Builder::new()
@@ -728,6 +804,13 @@ async fn main() {
                             .build(),
                     )?;
                     tracing::info!("Auto-updater plugin initialized with configured public key");
+                    let update_handle = app.handle().clone();
+                    let update_manager = Arc::clone(&update_manager_for_setup);
+                    spawn_monitored("updater_initial_check", async move {
+                        if let Err(error) = update_manager.check(&update_handle).await {
+                            tracing::warn!("Automatic update check failed: {error}");
+                        }
+                    });
                 }
                 None => {
                     tracing::warn!(
@@ -746,14 +829,8 @@ async fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             // 인증(Auth) 명령
-            auth::commands::login,
-            auth::commands::signup,
             auth::commands::logout,
-            auth::commands::get_user_status,
-            auth::commands::get_license_info,
-            auth::commands::get_user_license,
             auth::commands::get_current_entitlement,
-            auth::commands::refresh_token,
             auth::commands::set_session,
             // 결제(Payment) 명령
             auth::commands::get_subscription_details,
@@ -784,7 +861,6 @@ async fn main() {
             recording::commands::detect_available_encoders,
             recording::commands::get_disk_usage_info,
             recording::commands::cleanup_temp_files,
-            recording::commands::get_memory_pool_stats,
             recording::commands::get_performance_stats,
             recording::commands::get_recording_backend_info,
             // 비디오(Video) 명령
@@ -798,8 +874,24 @@ async fn main() {
             video::commands::get_video_duration,
             video::commands::delete_clip,
             // 자동 편집(Auto-edit) 명령
+            video::commands::plan_auto_edit,
             video::commands::start_auto_edit,
             video::commands::get_auto_edit_progress,
+            video::commands::cancel_auto_edit,
+            video::commands::export_auto_edit_for_platform,
+            video::commands::get_media_job,
+            video::commands::list_recoverable_media_jobs,
+            video::commands::pause_media_job,
+            video::commands::resume_media_job,
+            video::commands::discard_media_job,
+            video::commands::start_platform_export,
+            video::commands::revalidate_auto_edit_result,
+            // 앱 업데이트(App updater) 명령 — 로그인과 독립적
+            updater::get_app_update_status,
+            updater::check_app_update,
+            updater::install_app_update,
+            // 앱 수명주기(App lifecycle) 명령
+            tray::quit_app,
             // 캔버스 템플릿 명령
             video::commands::save_canvas_template,
             video::commands::load_canvas_template,
@@ -828,10 +920,14 @@ async fn main() {
             storage::commands::get_storage_stats,
             storage::commands::get_dashboard_stats,
             storage::commands::list_clips,
+            storage::commands::list_clip_vault_page,
+            storage::commands::ensure_clip_thumbnail,
             storage::commands::get_auto_edit_quota,
             storage::commands::get_auto_edit_results,
+            storage::commands::get_auto_edit_result_groups,
             storage::commands::get_auto_edit_result,
             storage::commands::delete_auto_edit_result,
+            storage::commands::delete_auto_edit_result_group,
             storage::commands::update_auto_edit_youtube_status,
             // 설정(Settings) 명령
             settings::commands::get_recording_settings,
@@ -863,6 +959,9 @@ async fn main() {
             utils::commands::get_ffmpeg_info,
             utils::commands::get_hardware_encoders,
             utils::commands::get_video_encoders,
+            utils::media_staging::select_and_stage_external_media,
+            autostart::get_autostart_status,
+            autostart::set_launch_on_windows_startup,
             // 통계 명령
             video::commands::get_clip_statistics,
             video::commands::reset_clip_statistics,
@@ -890,8 +989,6 @@ async fn main() {
             video::commands::export_as_gif,
             // 비디오 내보내기(Export) 명령
             video::commands::export_video,
-            // Autostart 명령
-            set_autostart,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
@@ -904,7 +1001,7 @@ async fn main() {
     // AppHandle::exit → ExitRequested를 거친다) 진행 중인 녹화를 먼저 정지하고,
     // 그 다음 세그먼트 정리(cleanup_on_shutdown)를 수행한다. managed state
     // (recording_manager)의 Drop은 이 종료 경로들에서 실행되지 않으므로, 여기서
-    // 직접 정지하지 않으면 창 없는 FFmpeg가 좀비로 남아 15Mbps로 세그먼트를
+    // 직접 정지하지 않으면 창 없는 FFmpeg가 좀비로 남아 20Mbps로 세그먼트를
     // 계속 기록한다.
     //
     // B7 fix: 이 종료 시퀀스는 이제 여기 한 곳에서만 실행된다. 트레이 "종료"
@@ -926,29 +1023,32 @@ async fn main() {
                 // 세그먼트 파일 정리(cleanup_on_shutdown)보다 먼저 녹화를 정지해야
                 // 한다 — 그렇지 않으면 FFmpeg가 아직 쓰고 있는 세그먼트 파일을
                 // 정리 로직이 지우려 드는 경쟁 상태가 생긴다.
+                let state = app_handle.state::<AppState>();
+                state.auto_composer.cancel_active_job().await;
+                // Offline export/effect commands are not all owned by the
+                // auto-composer token. The global pool tracks only LoLShorts-
+                // spawned PIDs, so terminating it here cannot touch a user's
+                // unrelated FFmpeg process.
+                utils::ffmpeg_pool::global_ffmpeg_pool().kill_all().await;
                 tray::stop_recording_before_exit(&app_handle).await;
 
-                let state = app_handle.state::<AppState>();
                 if let Err(e) = state.cleanup_manager.cleanup_on_shutdown().await {
                     tracing::error!("Shutdown cleanup failed: {}", e);
                 }
                 let _ = done_tx.send(());
             });
 
-            // B3 fix: stop_recording_before_exit 내부 상한은 이제
-            // STOP_TIMEOUT(3s) + FFMPEG_PROBE_TIMEOUT(2s) + pid당
-            // FFMPEG_KILL_TIMEOUT(2s)이다(tray.rs 참고) — 예전에는 내부 폴백
-            // (probe 5s + pid당 kill 5s, stop 5s 이후에야 시작)의 합이 이 바깥
-            // 대기(8s)보다 커서, 폴백이 taskkill을 실행하기 전에 바깥 대기가
-            // 먼저 끝나 종료가 진행돼 버릴 수 있었다(예산 역전). 여기 대기를
-            // 15s로 늘려 내부 상한 합 + cleanup_on_shutdown 시간을 항상
-            // 넉넉히 감당하게 한다.
+            // UX contract: the whole application exit gets at most five seconds.
+            // The recorder spends up to two seconds on FFmpeg's `q` finalization and
+            // one second reaping a forced kill. Event extraction is deliberately not
+            // flushed on this path; cleanup is best-effort inside the same outer budget.
             if done_rx
-                .recv_timeout(std::time::Duration::from_secs(15))
+                .recv_timeout(std::time::Duration::from_secs(5))
                 .is_err()
             {
+                utils::telemetry::capture_operational_error("shutdown", "shutdown_timeout");
                 tracing::error!(
-                    "앱 종료 전 녹화 정리가 15초 내에 끝나지 않았습니다 - 종료를 계속 진행합니다"
+                    "앱 종료 전 녹화 정리가 5초 내에 끝나지 않았습니다 - 종료를 계속 진행합니다"
                 );
             }
         }
@@ -1015,46 +1115,24 @@ fn validate_redirect_uri(uri: &str, platform: &str) -> bool {
         tracing::info!("{} OAuth disabled (no redirect URI configured)", platform);
         return false;
     }
-    let Some(rest) = uri.strip_prefix("http://") else {
-        tracing::error!("{} redirect URI must be localhost, got: {}", platform, uri);
-        return false;
-    };
-
-    let authority = rest.split('/').next().unwrap_or_default();
-    let Some((host, port)) = authority.split_once(':') else {
-        if matches!(authority, "localhost" | "127.0.0.1") {
-            return true;
-        }
-        tracing::error!("{} redirect URI must be localhost, got: {}", platform, uri);
-        return false;
-    };
-
-    let valid_host = matches!(host, "localhost" | "127.0.0.1");
-    let valid_port = !port.is_empty() && port.chars().all(|character| character.is_ascii_digit());
-    if !valid_host || !valid_port {
+    if !public_service_config::valid_loopback_redirect(uri) {
         tracing::error!("{} redirect URI must be localhost, got: {}", platform, uri);
         return false;
     }
-
     true
 }
 
-/// YouTube 관리자 초기화 (환경변수 기반 자격증명)
-async fn init_youtube_manager(storage: Arc<storage::Storage>) -> Arc<youtube::YouTubeManager> {
-    let youtube_client_id = std::env::var("YOUTUBE_CLIENT_ID").ok().filter(|v| {
-        !v.is_empty() && !v.contains("your-client-id") && v.ends_with(".apps.googleusercontent.com")
-    });
-    let youtube_client_secret = std::env::var("YOUTUBE_CLIENT_SECRET")
-        .ok()
-        .filter(|v| !v.is_empty() && !v.contains("your-client-secret"));
-    let youtube_redirect_uri = std::env::var("YOUTUBE_REDIRECT_URI")
-        .unwrap_or_else(|_| "http://localhost:9090/oauth/callback".to_string());
-
-    let youtube_redirect_uri_valid = validate_redirect_uri(&youtube_redirect_uri, "YouTube");
+/// YouTube manager initialization from the already validated public build config.
+async fn init_youtube_manager(
+    storage: Arc<storage::Storage>,
+    credentials: Option<(String, String, String)>,
+) -> Arc<youtube::YouTubeManager> {
     let youtube_disabled_uri = "http://localhost:9090/oauth/callback".to_string();
 
-    let manager = match (youtube_client_id, youtube_client_secret) {
-        (Some(client_id), Some(client_secret)) if youtube_redirect_uri_valid => {
+    let manager = match credentials {
+        Some((client_id, client_secret, youtube_redirect_uri))
+            if validate_redirect_uri(&youtube_redirect_uri, "YouTube") =>
+        {
             match youtube::YouTubeManager::new(
                 client_id,
                 client_secret,

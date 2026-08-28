@@ -35,7 +35,10 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
     setRecording(key);
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent, key: keyof HotkeySettings) => {
+  const handleKeyDown = (
+    event: React.KeyboardEvent,
+    key: keyof HotkeySettings,
+  ) => {
     if (!recording || recording !== key) return;
 
     event.preventDefault();
@@ -49,7 +52,11 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
     if (event.shiftKey) hotkey += "Shift+";
 
     // Add main key
-    if (event.key === "Control" || event.key === "Alt" || event.key === "Shift") {
+    if (
+      event.key === "Control" ||
+      event.key === "Alt" ||
+      event.key === "Shift"
+    ) {
       return; // Don't capture modifier keys alone
     }
 
@@ -65,7 +72,7 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
 
   const getHotkeyDisplay = (key: keyof HotkeySettings): string => {
     if (recording === key) {
-      return t('settings.recordingConfig.hotkeys.pressAnyKey');
+      return t("settings.recordingConfig.hotkeys.pressAnyKey");
     }
     return settings[key];
   };
@@ -78,9 +85,13 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
           <div className="flex items-start gap-3">
             <Keyboard className="w-5 h-5 text-muted-foreground mt-0.5" />
             <div className="space-y-1 text-sm">
-              <p className="font-semibold">{t('settings.recordingConfig.hotkeys.globalHotkeys.title')}</p>
+              <p className="font-semibold">
+                {t("settings.recordingConfig.hotkeys.globalHotkeys.title")}
+              </p>
               <p className="text-muted-foreground">
-                {t('settings.recordingConfig.hotkeys.globalHotkeys.description')}
+                {t(
+                  "settings.recordingConfig.hotkeys.globalHotkeys.description",
+                )}
               </p>
             </div>
           </div>
@@ -90,9 +101,11 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
       {/* Manual Save Clip */}
       <div className="gaming-panel p-6">
         <div className="mb-4">
-          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.hotkeys.manualSaveClip.title')}</h3>
+          <h3 className="text-lg font-semibold">
+            {t("settings.recordingConfig.hotkeys.manualSaveClip.title")}
+          </h3>
           <p className="text-sm text-muted-foreground">
-            {t('settings.recordingConfig.hotkeys.manualSaveClip.description')}
+            {t("settings.recordingConfig.hotkeys.manualSaveClip.description")}
           </p>
         </div>
         <div className="space-y-3">
@@ -102,10 +115,14 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
                 value={getHotkeyDisplay("manual_save_clip")}
                 onFocus={() => startRecording("manual_save_clip")}
                 onBlur={() => setRecording(null)}
-                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => handleKeyDown(e, "manual_save_clip")}
+                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) =>
+                  handleKeyDown(e, "manual_save_clip")
+                }
                 readOnly
-                className={recording === "manual_save_clip" ? "border-primary" : ""}
-                placeholder={t('settings.recordingConfig.hotkeys.clickToSet')}
+                className={
+                  recording === "manual_save_clip" ? "border-primary" : ""
+                }
+                placeholder={t("settings.recordingConfig.hotkeys.clickToSet")}
               />
             </div>
             {settings.manual_save_clip !== "F8" && (
@@ -119,7 +136,7 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
             )}
           </div>
           <p className="text-xs text-muted-foreground">
-            {t('settings.recordingConfig.hotkeys.manualSaveClip.defaultF8')}
+            {t("settings.recordingConfig.hotkeys.manualSaveClip.defaultF8")}
           </p>
         </div>
       </div>
@@ -127,9 +144,11 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
       {/* Toggle Recording */}
       <div className="gaming-panel p-6">
         <div className="mb-4">
-          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.hotkeys.toggleRecording.title')}</h3>
+          <h3 className="text-lg font-semibold">
+            {t("settings.recordingConfig.hotkeys.toggleRecording.title")}
+          </h3>
           <p className="text-sm text-muted-foreground">
-            {t('settings.recordingConfig.hotkeys.toggleRecording.description')}
+            {t("settings.recordingConfig.hotkeys.toggleRecording.description")}
           </p>
         </div>
         <div className="space-y-3">
@@ -139,10 +158,14 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
                 value={getHotkeyDisplay("toggle_recording")}
                 onFocus={() => startRecording("toggle_recording")}
                 onBlur={() => setRecording(null)}
-                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => handleKeyDown(e, "toggle_recording")}
+                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) =>
+                  handleKeyDown(e, "toggle_recording")
+                }
                 readOnly
-                className={recording === "toggle_recording" ? "border-primary" : ""}
-                placeholder={t('settings.recordingConfig.hotkeys.clickToSet')}
+                className={
+                  recording === "toggle_recording" ? "border-primary" : ""
+                }
+                placeholder={t("settings.recordingConfig.hotkeys.clickToSet")}
               />
             </div>
             {settings.toggle_recording !== "F9" && (
@@ -156,7 +179,7 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
             )}
           </div>
           <p className="text-xs text-muted-foreground">
-            {t('settings.recordingConfig.hotkeys.toggleRecording.defaultF9')}
+            {t("settings.recordingConfig.hotkeys.toggleRecording.defaultF9")}
           </p>
         </div>
       </div>
@@ -164,9 +187,11 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
       {/* Delete Last Clip */}
       <div className="gaming-panel p-6">
         <div className="mb-4">
-          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.hotkeys.deleteLastClip.title')}</h3>
+          <h3 className="text-lg font-semibold">
+            {t("settings.recordingConfig.hotkeys.deleteLastClip.title")}
+          </h3>
           <p className="text-sm text-muted-foreground">
-            {t('settings.recordingConfig.hotkeys.deleteLastClip.description')}
+            {t("settings.recordingConfig.hotkeys.deleteLastClip.description")}
           </p>
         </div>
         <div className="space-y-3">
@@ -176,10 +201,14 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
                 value={getHotkeyDisplay("delete_last_clip")}
                 onFocus={() => startRecording("delete_last_clip")}
                 onBlur={() => setRecording(null)}
-                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => handleKeyDown(e, "delete_last_clip")}
+                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) =>
+                  handleKeyDown(e, "delete_last_clip")
+                }
                 readOnly
-                className={recording === "delete_last_clip" ? "border-primary" : ""}
-                placeholder={t('settings.recordingConfig.hotkeys.clickToSet')}
+                className={
+                  recording === "delete_last_clip" ? "border-primary" : ""
+                }
+                placeholder={t("settings.recordingConfig.hotkeys.clickToSet")}
               />
             </div>
             {settings.delete_last_clip !== "F10" && (
@@ -193,7 +222,7 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
             )}
           </div>
           <p className="text-xs text-muted-foreground">
-            {t('settings.recordingConfig.hotkeys.deleteLastClip.defaultF10')}
+            {t("settings.recordingConfig.hotkeys.deleteLastClip.defaultF10")}
           </p>
         </div>
       </div>
@@ -202,7 +231,7 @@ export function HotkeySettings({ settings, onChange }: HotkeySettingsProps) {
       <div className="pt-4">
         <Button variant="outline" onClick={resetToDefaults}>
           <RotateCcw className="w-4 h-4 mr-2" />
-          {t('settings.recordingConfig.hotkeys.resetAllHotkeys')}
+          {t("settings.recordingConfig.hotkeys.resetAllHotkeys")}
         </Button>
       </div>
     </div>

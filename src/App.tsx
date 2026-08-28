@@ -19,7 +19,10 @@ import "./i18n"; // Initialize i18n with auto language detection
 import { ReplayTargetModal } from "@/components/overlay/ReplayTargetModal";
 import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
 import { logger } from "@/lib/logger";
-import * as Sentry from "@sentry/react";
+import { settingsApi } from "@/api/settings";
+import { captureError, configureErrorTelemetry } from "@/lib/telemetry";
+import { AppUpdateDialog } from "@/components/updater/AppUpdateDialog";
+import { ProtectedFeature } from "@/components/auth/ProtectedFeature";
 
 // Lazy load secondary pages for better performance. The dashboard is eager-loaded
 // because it is the first route and must not leave the app in a blank Suspense state.
@@ -88,7 +91,7 @@ const gamesRoute = new Route({
   getParentRoute: () => rootRoute,
   path: "/games",
   beforeLoad: () => {
-    throw redirect({ to: "/results", search: { tab: "games" } });
+    throw redirect({ to: "/results", search: { tab: "clips" } });
   },
 });
 
@@ -105,7 +108,9 @@ const editorRoute = new Route({
   path: "/editor",
   component: () => (
     <FeatureRoute>
-      <Editor />
+      <ProtectedFeature requiresPro={false} featureName="Editor & export">
+        <Editor />
+      </ProtectedFeature>
     </FeatureRoute>
   ),
 });
@@ -120,7 +125,7 @@ const autoEditRoute = new Route({
   ),
 });
 
-const RESULTS_TABS = ["highlights", "games", "replays"] as const;
+const RESULTS_TABS = ["clips", "highlights", "games", "replays"] as const;
 type ResultsTab = (typeof RESULTS_TABS)[number];
 
 const resultsRoute = new Route({
@@ -222,7 +227,7 @@ export default function App() {
 }
 
 function MainApp() {
-  const { checkAuth } = useAuthStore();
+  const { checkAuth, syncSession, syncSignedOut } = useAuthStore();
   const { startStatusPolling, stopStatusPolling } = useRecordingStore(); // Use hook
   const [isReplayModalOpen, setIsReplayModalOpen] = useState(false);
 
@@ -240,44 +245,32 @@ function MainApp() {
     // Start polling recording status (sync frontend with backend)
     startStatusPolling();
 
-    // Listen for auth state changes (OAuth callbacks, logout, etc.)
+    // Crash reporting is optional and follows the persisted user preference.
+    // A missing DSN or a disabled preference keeps the renderer fully local.
+    void settingsApi
+      .getRecordingSettings()
+      .then((settings) =>
+        configureErrorTelemetry(settings.crash_reporting_enabled),
+      )
+      .catch(() => configureErrorTelemetry(false));
+
+    // Keep Rust's command-authorization session aligned with Supabase JS. The
+    // callback stays synchronous to avoid blocking Supabase's auth event lock;
+    // network synchronization runs in a detached promise.
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (!isMounted) return;
 
-      if (event === "SIGNED_IN" && session?.user) {
-        // User signed in via OAuth or email/password
-        // Fetch or create user profile
-        const { error } = await supabase
-          .from("user_profiles")
-          .select("id,email,display_name,avatar_url")
-          .eq("id", session.user.id)
-          .single();
-
-        if (error && error.code === "PGRST116") {
-          // Profile doesn't exist, create it (for OAuth signups)
-          const { error: insertError } = await supabase
-            .from("user_profiles")
-            .insert({
-              id: session.user.id,
-              email: session.user.email!,
-            });
-
-          if (insertError) {
-            logger.error("Failed to create profile:", insertError);
-          }
-        }
-
-        // Refresh auth state
-        if (isMounted) {
-          await checkAuth();
-        }
+      if (
+        (event === "TOKEN_REFRESHED" || event === "USER_UPDATED") &&
+        session
+      ) {
+        void syncSession(session).catch((error) => {
+          logger.error("Failed to synchronize refreshed auth session:", error);
+        });
       } else if (event === "SIGNED_OUT") {
-        // User signed out
-        if (isMounted) {
-          await checkAuth();
-        }
+        void syncSignedOut();
       }
     });
 
@@ -294,11 +287,7 @@ function MainApp() {
     <ErrorBoundary
       onError={(error, errorInfo) => {
         logger.error("App-level error caught:", error, errorInfo);
-        if (import.meta.env.PROD) {
-          Sentry.captureException(error, {
-            extra: { componentStack: errorInfo.componentStack },
-          });
-        }
+        captureError(error, errorInfo.componentStack);
       }}
     >
       <RouterProvider router={router} />
@@ -307,6 +296,7 @@ function MainApp() {
         onClose={() => setIsReplayModalOpen(false)}
       />
       <OnboardingModal />
+      <AppUpdateDialog />
       <Toaster />
     </ErrorBoundary>
   );

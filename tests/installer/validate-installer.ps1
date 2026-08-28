@@ -14,6 +14,8 @@ param(
 
     [Parameter(Mandatory=$false)]
     [switch]$RunSilentInstall
+    ,
+    [switch]$ReleaseChannel
 )
 
 $ErrorActionPreference = "Stop"
@@ -79,7 +81,12 @@ function Test-InstallerSignature {
             return $true
         }
         elseif ($signature.Status -eq "NotSigned") {
-            Write-ColorOutput "[WARN] Installer is NOT signed (OK for development)" $Yellow
+            if ($ReleaseChannel) {
+                Write-ColorOutput "[FAIL] Release-channel installer is not Authenticode signed" $Red
+                Mark-ValidationFailure
+                return $false
+            }
+            Write-ColorOutput "[WARN] Installer is unsigned (development channel)" $Yellow
             return $true
         }
         else {
@@ -89,8 +96,13 @@ function Test-InstallerSignature {
         }
     }
     catch {
-        Write-ColorOutput "[WARN] Could not verify signature: $($_.Exception.Message)" $Yellow
-        return $true # Don't fail on signature check errors
+        if ($ReleaseChannel) {
+            Write-ColorOutput "[FAIL] Release-channel signature verification errored: $($_.Exception.Message)" $Red
+            Mark-ValidationFailure
+            return $false
+        }
+        Write-ColorOutput "[WARN] Unsigned development/fixture channel; Authenticode verification was unavailable: $($_.Exception.Message)" $Yellow
+        return $true
     }
 }
 
@@ -128,23 +140,36 @@ function Test-FFmpegBundling {
 
     Write-ColorOutput "`n[CHECK] Checking FFmpeg bundling..." $Cyan
 
-    # For MSI, check if FFmpeg binaries would be extracted
-    # For NSIS, check archive contents
-
-    # This is a simplified check - in reality, you'd need to extract and verify
-    $installerSize = (Get-Item $InstallerPath).Length / 1MB
-
-    # FFmpeg binaries are ~150MB
-    if ($installerSize -gt 100) {
-        Write-ColorOutput "[PASS] Installer size suggests FFmpeg is bundled ($([math]::Round($installerSize, 2)) MB)" $Green
-        return $true
+    if ($RunSilentInstall) {
+        Write-ColorOutput "[PASS] Sidecars will be verified after isolated silent installation" $Green
+    } else {
+        Write-ColorOutput "[WARN] Sidecar verification requires -RunSilentInstall; installer size is not evidence" $Yellow
     }
-    else {
-        Write-ColorOutput "[WARN] Installer size may be too small ($([math]::Round($installerSize, 2)) MB)" $Yellow
-        Write-ColorOutput "   Expected: >100 MB with FFmpeg binaries" $Yellow
+    return $true
+}
+
+function Test-InstalledSidecars {
+    param([string]$InstallRoot)
+    $ffmpeg = Get-ChildItem -LiteralPath $InstallRoot -Recurse -File -Filter "ffmpeg*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    $ffprobe = Get-ChildItem -LiteralPath $InstallRoot -Recurse -File -Filter "ffprobe*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $ffmpeg -or -not $ffprobe) {
+        Write-ColorOutput "[FAIL] Installed ffmpeg/ffprobe sidecars were not found" $Red
         Mark-ValidationFailure
         return $false
     }
+    $ffmpegHash = (Get-FileHash -LiteralPath $ffmpeg.FullName -Algorithm SHA256).Hash
+    $ffprobeHash = (Get-FileHash -LiteralPath $ffprobe.FullName -Algorithm SHA256).Hash
+    & $ffmpeg.FullName -version *> $null
+    $ffmpegOk = $LASTEXITCODE -eq 0
+    & $ffprobe.FullName -version *> $null
+    $ffprobeOk = $LASTEXITCODE -eq 0
+    if (-not $ffmpegOk -or -not $ffprobeOk) {
+        Write-ColorOutput "[FAIL] Installed media sidecar did not execute -version" $Red
+        Mark-ValidationFailure
+        return $false
+    }
+    Write-ColorOutput "[PASS] Installed sidecars found, SHA-256 hashed, and executable (ffmpeg $($ffmpegHash.Substring(0,12))..., ffprobe $($ffprobeHash.Substring(0,12))...)" $Green
+    return $true
 }
 
 function Test-SilentInstall {
@@ -176,6 +201,7 @@ function Test-SilentInstall {
                 if (Test-Path $tempInstallDir) {
                     $fileCount = (Get-ChildItem $tempInstallDir -Recurse -File).Count
                     Write-ColorOutput "   Installed $fileCount files" $Green
+                    Test-InstalledSidecars $tempInstallDir | Out-Null
 
                     # Uninstall
                     Write-ColorOutput "   Cleaning up test installation..." $Cyan
@@ -205,6 +231,8 @@ function Test-SilentInstall {
                 # Check if uninstaller was created
                 $uninstallerPath = "$env:LOCALAPPDATA\Programs\LoLShorts\uninstall.exe"
                 if (Test-Path $uninstallerPath) {
+                    $installRoot = Split-Path -Parent $uninstallerPath
+                    Test-InstalledSidecars $installRoot | Out-Null
                     Write-ColorOutput "   Uninstaller created successfully" $Green
 
                     # Run uninstaller

@@ -1,0 +1,26 @@
+# Keep source and generated schemas byte-stable across Windows and CI.
+* text=auto eol=lf
+
+# Native Windows command scripts retain their conventional line endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Never apply text conversion to bundled or QA media assets.
+*.exe binary
+*.dll binary
+*.zip binary
+*.7z binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.mp4 binary
+*.mkv binary
+*.webm binary
+*.wav binary
+*.mp3 binary
+*.ttf binary
+*.woff binary
+*.woff2 binary

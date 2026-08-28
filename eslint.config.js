@@ -65,6 +65,9 @@ export default tseslint.config(
       'out/**',
       'target/**',
       'src-tauri/target/**',
+      // Local Rust test/build targets are generated artifacts too. Their names
+      // carry a suffix so parallel capture experiments can coexist.
+      '**/target-*/**',
       '.turbo/**',
       '*.generated.*',
       '**/*.config.js',

@@ -1,17 +1,17 @@
-import { cmd } from './client';
+import { cmd } from "./client";
 
 export interface User {
   id: string;
   email: string;
-  tier: 'Free' | 'Pro';
+  tier: "Free" | "Pro";
   expires_at: number;
 }
 
 export interface EntitlementInfo {
-  tier: 'FREE' | 'PRO';
-  status: 'active' | 'inactive' | 'expired' | 'cancelled' | 'past_due' | 'none';
+  tier: "FREE" | "PRO";
+  status: "active" | "inactive" | "expired" | "cancelled" | "past_due" | "none";
   expires_at: string | null;
-  source: 'supabase';
+  source: "supabase";
   checked_at: string;
   payment_available: boolean;
 }
@@ -19,12 +19,6 @@ export interface EntitlementInfo {
 export interface SessionSyncResponse {
   user: User;
   entitlement: EntitlementInfo;
-}
-
-export interface LicenseInfo {
-  tier: string;
-  expires_at: string | null;
-  is_active: boolean;
 }
 
 export interface SubscriptionDetails {
@@ -46,43 +40,41 @@ export interface SubscriptionDetails {
 }
 
 export const authApi = {
-  login: (email: string, password: string) =>
-    cmd<User>('login', { email, password }),
-
-  signup: (email: string, password: string) =>
-    cmd<User>('signup', { email, password }),
-
-  logout: () =>
-    cmd<void>('logout'),
-
-  getUserStatus: () =>
-    cmd<User | null>('get_user_status'),
-
-  getLicenseInfo: () =>
-    cmd<LicenseInfo | null>('get_license_info'),
-
-  getUserLicense: () =>
-    cmd<LicenseInfo>('get_user_license'),
+  logout: () => cmd<void>("logout"),
 
   getCurrentEntitlement: (forceRefresh = false) =>
-    cmd<EntitlementInfo>('get_current_entitlement', { force_refresh: forceRefresh }),
+    cmd<EntitlementInfo>("get_current_entitlement", {
+      force_refresh: forceRefresh,
+    }),
 
-  refreshToken: () =>
-    cmd<User>('refresh_token'),
-
-  setSession: (accessToken: string, refreshToken: string, userId: string, email: string, expiresAt?: number | null) =>
-    cmd<SessionSyncResponse>('set_session', { access_token: accessToken, refresh_token: refreshToken, user_id: userId, email, expires_at: expiresAt ?? null }),
+  setSession: (
+    accessToken: string,
+    refreshToken: string,
+    userId: string,
+    email: string,
+    expiresAt?: number | null,
+  ) =>
+    cmd<SessionSyncResponse>("set_session", {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      user_id: userId,
+      email,
+      expires_at: expiresAt ?? null,
+    }),
 
   // Subscription/Payment APIs
   getSubscriptionDetails: () =>
-    cmd<SubscriptionDetails>('get_subscription_details'),
+    cmd<SubscriptionDetails>("get_subscription_details"),
 
-  openPaymentPage: (period: 'MONTHLY' | 'YEARLY' = 'MONTHLY') =>
-    cmd<string>('open_payment_page', { period }),
+  openPaymentPage: (period: "MONTHLY" | "YEARLY" = "MONTHLY") =>
+    cmd<string>("open_payment_page", { period }),
 
-  cancelSubscription: () =>
-    cmd<SubscriptionDetails>('cancel_subscription'),
+  cancelSubscription: () => cmd<SubscriptionDetails>("cancel_subscription"),
 
   confirmPayment: (paymentKey: string, orderId: string, amount: number) =>
-    cmd<SubscriptionDetails>('confirm_payment', { payment_key: paymentKey, order_id: orderId, amount }),
+    cmd<SubscriptionDetails>("confirm_payment", {
+      payment_key: paymentKey,
+      order_id: orderId,
+      amount,
+    }),
 };

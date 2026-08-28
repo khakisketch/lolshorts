@@ -6,6 +6,7 @@ use std::fs;
 /// Provides automatic cleanup of temporary files, orphaned processes,
 /// and memory leak prevention through RAII patterns and explicit cleanup hooks.
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
@@ -44,23 +45,42 @@ impl Default for CleanupConfig {
 }
 
 /// Resource cleanup manager
+#[derive(Clone)]
 pub struct CleanupManager {
     config: CleanupConfig,
     app_data_dir: PathBuf,
+    recordings_dir: PathBuf,
 }
 
 impl CleanupManager {
     pub fn new(app_data_dir: PathBuf, config: CleanupConfig) -> Self {
+        let recordings_dir = app_data_dir.join("recordings");
         Self {
             config,
             app_data_dir,
+            recordings_dir,
         }
+    }
+
+    /// Override the recording directory when the backend is running in a
+    /// recovery location. The default remains `app_data_dir/recordings` so
+    /// existing callers and tests retain their original layout.
+    pub fn with_recordings_dir(mut self, recordings_dir: PathBuf) -> Self {
+        self.recordings_dir = recordings_dir;
+        self
     }
 
     /// Run startup cleanup
     ///
     /// Cleans up orphaned files from previous session crashes
     pub async fn cleanup_on_startup(&self) -> Result<()> {
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || manager.cleanup_on_startup_blocking())
+            .await
+            .context("Startup cleanup worker failed")?
+    }
+
+    fn cleanup_on_startup_blocking(&self) -> Result<()> {
         if !self.config.cleanup_on_startup {
             return Ok(());
         }
@@ -73,17 +93,16 @@ impl CleanupManager {
         // crash/kill. The actual segment directory is recordings/segments
         // (segment mp4s + WASAPI loopback WAV + concat list) -- NOT
         // recordings/temp_segments, which nothing ever writes to.
-        let segments_dir = self.app_data_dir.join("recordings").join("segments");
+        let segments_dir = self.recordings_dir.join("segments");
         if segments_dir.exists() {
-            total_freed_mb += self
-                .cleanup_old_files(&segments_dir, self.config.temp_file_max_age)
-                .await?;
+            total_freed_mb +=
+                self.cleanup_old_files_blocking(&segments_dir, self.config.temp_file_max_age)?;
         }
 
         // Clean old logs
         let logs_dir = self.app_data_dir.join("logs");
         if logs_dir.exists() {
-            total_freed_mb += self.enforce_log_size_limit(&logs_dir).await?;
+            total_freed_mb += self.enforce_log_size_limit_blocking(&logs_dir)?;
         }
 
         info!("Startup cleanup complete: freed {} MB", total_freed_mb);
@@ -95,6 +114,13 @@ impl CleanupManager {
     ///
     /// Gracefully shuts down resources and removes temporary files
     pub async fn cleanup_on_shutdown(&self) -> Result<()> {
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || manager.cleanup_on_shutdown_blocking())
+            .await
+            .context("Shutdown cleanup worker failed")?
+    }
+
+    fn cleanup_on_shutdown_blocking(&self) -> Result<()> {
         if !self.config.cleanup_on_shutdown {
             return Ok(());
         }
@@ -103,9 +129,9 @@ impl CleanupManager {
 
         // Clean all rolling-buffer segments (fresh start on next launch).
         // See cleanup_on_startup for why this targets recordings/segments.
-        let segments_dir = self.app_data_dir.join("recordings").join("segments");
+        let segments_dir = self.recordings_dir.join("segments");
         if segments_dir.exists() {
-            self.clear_directory(&segments_dir).await?;
+            self.clear_directory_blocking(&segments_dir)?;
         }
 
         info!("Shutdown cleanup complete");
@@ -121,6 +147,21 @@ impl CleanupManager {
     ///
     /// Returns freed space in MB
     pub async fn cleanup_old_clips(
+        &self,
+        storage: &StorageSettings,
+        clips_dir: &Path,
+    ) -> Result<u64> {
+        let manager = self.clone();
+        let storage = storage.clone();
+        let clips_dir = clips_dir.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            manager.cleanup_old_clips_blocking(&storage, &clips_dir)
+        })
+        .await
+        .context("Clip-retention cleanup worker failed")?
+    }
+
+    fn cleanup_old_clips_blocking(
         &self,
         storage: &StorageSettings,
         clips_dir: &Path,
@@ -219,6 +260,26 @@ impl CleanupManager {
     /// cached snapshot.
     pub async fn run_retention_cycle(
         &self,
+        storage: &Arc<Storage>,
+        settings: &StorageSettings,
+    ) -> Result<RetentionCycleReport> {
+        // rusqlite and Windows directory traversal are both blocking. Move the
+        // existing shared storage handle to the blocking pool so this cycle can
+        // never stall capture/status tasks. Do not reopen Storage here: its
+        // constructor performs startup recovery and would incorrectly mark a
+        // genuinely active media job as interrupted during the 6-hour sweep.
+        let manager = self.clone();
+        let storage = Arc::clone(storage);
+        let settings = settings.clone();
+        tokio::task::spawn_blocking(move || {
+            manager.run_retention_cycle_blocking(storage.as_ref(), &settings)
+        })
+        .await
+        .context("Storage-retention worker failed")?
+    }
+
+    fn run_retention_cycle_blocking(
+        &self,
         storage: &Storage,
         settings: &StorageSettings,
     ) -> Result<RetentionCycleReport> {
@@ -226,7 +287,7 @@ impl CleanupManager {
         // cleanup_old_clips as-is: no-op unless auto_delete_enabled, and
         // already covers both the auto_delete_days and max_storage_gb caps.
         let clips_dir = storage.recordings_clips_dir();
-        let freed_mb = self.cleanup_old_clips(settings, &clips_dir).await?;
+        let freed_mb = self.cleanup_old_clips_blocking(settings, &clips_dir)?;
 
         // (2) Orphan sweep: clip metadata (+ thumbnail) rows whose video file
         // is gone -- whether removed by step (1) above, by the user, or by
@@ -264,6 +325,14 @@ impl CleanupManager {
     ///
     /// Returns freed space in MB
     async fn cleanup_old_files(&self, dir: &Path, max_age: Duration) -> Result<u64> {
+        let manager = self.clone();
+        let dir = dir.to_path_buf();
+        tokio::task::spawn_blocking(move || manager.cleanup_old_files_blocking(&dir, max_age))
+            .await
+            .context("Old-file cleanup worker failed")?
+    }
+
+    fn cleanup_old_files_blocking(&self, dir: &Path, max_age: Duration) -> Result<u64> {
         let mut freed_bytes: u64 = 0;
         let now = SystemTime::now();
 
@@ -300,6 +369,14 @@ impl CleanupManager {
     /// Deletes oldest logs first until under limit
     /// Returns freed space in MB
     async fn enforce_log_size_limit(&self, logs_dir: &Path) -> Result<u64> {
+        let manager = self.clone();
+        let logs_dir = logs_dir.to_path_buf();
+        tokio::task::spawn_blocking(move || manager.enforce_log_size_limit_blocking(&logs_dir))
+            .await
+            .context("Log-retention worker failed")?
+    }
+
+    fn enforce_log_size_limit_blocking(&self, logs_dir: &Path) -> Result<u64> {
         // Calculate total size
         let mut log_files: Vec<(PathBuf, SystemTime, u64)> = Vec::new();
         let mut total_size: u64 = 0;
@@ -358,6 +435,14 @@ impl CleanupManager {
 
     /// Clear entire directory
     async fn clear_directory(&self, dir: &Path) -> Result<()> {
+        let manager = self.clone();
+        let dir = dir.to_path_buf();
+        tokio::task::spawn_blocking(move || manager.clear_directory_blocking(&dir))
+            .await
+            .context("Directory cleanup worker failed")?
+    }
+
+    fn clear_directory_blocking(&self, dir: &Path) -> Result<()> {
         if !dir.exists() {
             return Ok(());
         }
@@ -388,151 +473,20 @@ impl CleanupManager {
     ///
     /// Returns available space in GB
     pub fn check_disk_space(&self) -> Result<f64> {
-        #[cfg(target_os = "windows")]
-        {
-            let _metadata = fs::metadata(&self.app_data_dir)?;
-            // On Windows, use GetDiskFreeSpaceExW API for accurate disk space information
-
-            // Get actual disk space using Windows API
-            let volume_path = match self.app_data_dir.to_string_lossy().split(':').next() {
-                Some(drive_letter) => format!("{}:\\", drive_letter),
-                None => "C:\\".to_string(),
-            };
-
-            let (free_bytes_available, _total_bytes) = unsafe {
-                use std::ffi::OsStr;
-                use std::os::windows::ffi::OsStrExt;
-                use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-
-                let wide_path: Vec<u16> = OsStr::new(&volume_path)
-                    .encode_wide()
-                    .chain(std::iter::once(0))
-                    .collect();
-
-                let mut free_bytes = 0u64;
-                let mut total_bytes = 0u64;
-                let mut total_free_bytes = 0u64;
-
-                let result = GetDiskFreeSpaceExW(
-                    windows::core::PCWSTR(wide_path.as_ptr()),
-                    Some(&mut free_bytes as *mut _),
-                    Some(&mut total_bytes as *mut _),
-                    Some(&mut total_free_bytes as *mut _),
-                );
-
-                if result.is_ok() {
-                    (free_bytes, total_bytes)
-                } else {
-                    (10u64.pow(10), 100u64.pow(10)) // 10GB free, 100GB total fallback
-                }
-            };
-
-            let free_gb = free_bytes_available as f64 / (1024.0 * 1024.0 * 1024.0);
-            tracing::debug!(
-                "Disk space check: {:.2} GB available on {}",
-                free_gb,
-                volume_path
-            );
-
-            Ok(free_gb)
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            // For Unix-like systems, use statvfs
-            use nix::sys::statvfs::statvfs;
-            use std::ffi::CString;
-
-            let path = CString::new(self.app_data_dir.to_string_lossy().as_bytes())
-                .context("Failed to create CString from path")?;
-
-            let stats = statvfs(&path).context("Failed to get filesystem statistics")?;
-
-            let block_size = stats.f_bsize as u64;
-            let available_blocks = stats.f_bavail as u64;
-            let available_bytes = block_size * available_blocks;
-
-            let available_gb = available_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-
-            Ok(available_gb)
-        }
+        let snapshot = crate::utils::disk::query_disk_space(&self.recordings_dir)
+            .context("Failed to query application disk space")?;
+        Ok(snapshot.available_bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 
     /// Get total disk space information
     ///
     /// Returns (available_gb, total_gb) for the disk where app data is stored
     pub fn get_disk_space_info(&self) -> Result<(f64, f64)> {
-        #[cfg(target_os = "windows")]
-        {
-            let _metadata = fs::metadata(&self.app_data_dir)?;
-
-            // Get actual disk space using Windows API
-            let volume_path = match self.app_data_dir.to_string_lossy().split(':').next() {
-                Some(drive_letter) => format!("{}:\\", drive_letter),
-                None => "C:\\".to_string(),
-            };
-
-            let (free_bytes_available, total_bytes) = unsafe {
-                use std::ffi::OsStr;
-                use std::os::windows::ffi::OsStrExt;
-                use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-
-                let wide_path: Vec<u16> = OsStr::new(&volume_path)
-                    .encode_wide()
-                    .chain(std::iter::once(0))
-                    .collect();
-
-                let mut free_bytes = 0u64;
-                let mut total_bytes = 0u64;
-                let mut total_free_bytes = 0u64;
-
-                let result = GetDiskFreeSpaceExW(
-                    windows::core::PCWSTR(wide_path.as_ptr()),
-                    Some(&mut free_bytes as *mut _),
-                    Some(&mut total_bytes as *mut _),
-                    Some(&mut total_free_bytes as *mut _),
-                );
-
-                if result.is_ok() {
-                    (free_bytes, total_bytes)
-                } else {
-                    (10u64.pow(10), 100u64.pow(10)) // 10GB free, 100GB total fallback
-                }
-            };
-
-            let free_gb = free_bytes_available as f64 / (1024.0 * 1024.0 * 1024.0);
-            let total_gb = total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-
-            tracing::debug!(
-                "Disk space info: {:.2} GB available, {:.2} GB total on {}",
-                free_gb,
-                total_gb,
-                volume_path
-            );
-
-            Ok((free_gb, total_gb))
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            // For Unix-like systems, use statvfs
-            use nix::sys::statvfs::statvfs;
-            use std::ffi::CString;
-
-            let path = CString::new(self.app_data_dir.to_string_lossy().as_bytes())
-                .context("Failed to create CString from path")?;
-
-            let stats = statvfs(&path).context("Failed to get filesystem statistics")?;
-
-            let block_size = stats.f_bsize as u64;
-            let available_blocks = stats.f_bavail as u64;
-            let total_blocks = stats.f_blocks as u64;
-
-            let available_gb = (block_size * available_blocks) as f64 / (1024.0 * 1024.0 * 1024.0);
-            let total_gb = (block_size * total_blocks) as f64 / (1024.0 * 1024.0 * 1024.0);
-
-            Ok((available_gb, total_gb))
-        }
+        let snapshot = crate::utils::disk::query_disk_space(&self.recordings_dir)
+            .context("Failed to query application disk space")?;
+        let available_gb = snapshot.available_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        let total_gb = snapshot.total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        Ok((available_gb, total_gb))
     }
 }
 
@@ -705,32 +659,6 @@ impl Drop for TempFileGuard {
     }
 }
 
-/// Process cleanup utilities
-pub mod process {
-    use std::process::Child;
-    use tracing::{debug, warn};
-
-    /// Ensure FFmpeg process is terminated
-    pub fn terminate_ffmpeg(mut child: Child) {
-        debug!("Terminating FFmpeg process (PID: {:?})", child.id());
-
-        // Try graceful shutdown first
-        if let Err(e) = child.kill() {
-            warn!("Failed to terminate FFmpeg process: {}", e);
-        }
-
-        // Wait for process to exit (with timeout)
-        match child.wait() {
-            Ok(status) => {
-                debug!("FFmpeg process exited with status: {}", status);
-            }
-            Err(e) => {
-                warn!("Failed to wait for FFmpeg process: {}", e);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -885,6 +813,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cleanup_uses_overridden_recovery_recordings_directory() {
+        let app_data_dir = tempdir().unwrap();
+        let recovery_recordings_dir = tempdir().unwrap();
+        let manager =
+            CleanupManager::new(app_data_dir.path().to_path_buf(), CleanupConfig::default())
+                .with_recordings_dir(recovery_recordings_dir.path().to_path_buf());
+
+        let recovery_segments = recovery_recordings_dir.path().join("segments");
+        fs::create_dir_all(&recovery_segments).unwrap();
+        let recovery_segment = recovery_segments.join("recovery.mp4");
+        File::create(&recovery_segment).unwrap();
+
+        manager.cleanup_on_shutdown().await.unwrap();
+
+        assert!(
+            !recovery_segment.exists(),
+            "cleanup must follow the recording backend's recovery path"
+        );
+    }
+
+    #[tokio::test]
     async fn cleanup_old_clips_deletes_files_past_the_auto_delete_policy() {
         let temp_dir = tempdir().unwrap();
         let manager = CleanupManager::new(temp_dir.path().to_path_buf(), CleanupConfig::default());
@@ -978,7 +927,7 @@ mod tests {
         };
 
         let temp_dir = tempdir().unwrap();
-        let storage = Storage::new(temp_dir.path()).unwrap();
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
         let manager = CleanupManager::new(temp_dir.path().to_path_buf(), CleanupConfig::default());
 
         let game_id = "game-orphan";
@@ -1060,6 +1009,19 @@ mod tests {
                     error: None,
                 }),
                 file_size_bytes: 0,
+                publish_title: String::new(),
+                publish_description: String::new(),
+                publish_tags: Vec::new(),
+                publish_privacy_status: "unlisted".to_string(),
+                output_intent: String::new(),
+                framing_mode: String::new(),
+                platform_preset: String::new(),
+                series_id: String::new(),
+                part_index: 1,
+                part_count: 1,
+                output_kind: String::new(),
+                validation: None,
+                platform_exports: Vec::new(),
             })
             .unwrap();
 
@@ -1084,7 +1046,7 @@ mod tests {
         use crate::storage::models::{ClipMetadata, EventType, GameMetadata};
 
         let temp_dir = tempdir().unwrap();
-        let storage = Storage::new(temp_dir.path()).unwrap();
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
         let manager = CleanupManager::new(temp_dir.path().to_path_buf(), CleanupConfig::default());
 
         let game_id = "game-alive";
@@ -1137,6 +1099,39 @@ mod tests {
         assert_eq!(storage.load_clip_metadata(game_id).unwrap().len(), 1);
     }
 
+    #[tokio::test]
+    async fn recurring_retention_never_reclassifies_an_active_media_job() {
+        use crate::storage::{MediaJobKind, MediaJobStatus};
+
+        let temp_dir = tempdir().unwrap();
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+        let manager = CleanupManager::new(temp_dir.path().to_path_buf(), CleanupConfig::default());
+        storage
+            .create_media_job("active-job", "user", MediaJobKind::AutoEdit, "{}")
+            .unwrap();
+        storage
+            .update_media_job_status(
+                "active-job",
+                MediaJobStatus::Running,
+                "rendering",
+                25.0,
+                None,
+                None,
+            )
+            .unwrap();
+
+        manager
+            .run_retention_cycle(&storage, &StorageSettings::default())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            storage.load_media_job("active-job").unwrap().status,
+            MediaJobStatus::Running,
+            "the recurring sweep must use the live Storage handle rather than startup recovery"
+        );
+    }
+
     // ---- is_confirmed_missing ----
 
     #[test]
@@ -1174,7 +1169,7 @@ mod tests {
         use crate::storage::models::{ClipMetadata, EventType, GameMetadata};
 
         let temp_dir = tempdir().unwrap();
-        let storage = Storage::new(temp_dir.path()).unwrap();
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
         let manager = CleanupManager::new(temp_dir.path().to_path_buf(), CleanupConfig::default());
 
         let game_id = "game-unmounted";

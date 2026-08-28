@@ -1,6 +1,6 @@
-import { invoke } from '@tauri-apps/api/core';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { toIpcArgs, type IpcArgWarning } from './ipcArgs';
+import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { toIpcArgs, type IpcArgWarning } from "./ipcArgs";
 
 type TauriRuntimeWindow = Window & {
   __TAURI__?: unknown;
@@ -14,12 +14,12 @@ const isDev = (): boolean => {
     return import.meta.env?.DEV ?? false;
   } catch {
     // Jest/Node environment
-    return process.env.NODE_ENV !== 'production';
+    return process.env.NODE_ENV !== "production";
   }
 };
 
 const hasTauriRuntime = (): boolean => {
-  if (typeof window === 'undefined') {
+  if (typeof window === "undefined") {
     return false;
   }
 
@@ -38,7 +38,7 @@ export class AppError extends Error {
   constructor(response: AppErrorResponse) {
     super(response.message);
     this.code = response.code;
-    this.name = 'AppError';
+    this.name = "AppError";
   }
 }
 
@@ -48,10 +48,12 @@ export class AppError extends Error {
  */
 export async function listenToEvent<T>(
   eventName: string,
-  callback: (payload: T) => void
+  callback: (payload: T) => void,
 ): Promise<UnlistenFn> {
   if (!hasTauriRuntime()) {
-    console.warn(`Tauri runtime unavailable. Cannot listen to event: ${eventName}`);
+    console.warn(
+      `Tauri runtime unavailable. Cannot listen to event: ${eventName}`,
+    );
     return () => {};
   }
   return await listen<T>(eventName, (event) => {
@@ -64,21 +66,23 @@ export async function listenToEvent<T>(
  * resolve fails with an opaque "missing required key", so the warning names the
  * offending key while the app is still in dev.
  */
-function makeArgWarner(command: string): ((warning: IpcArgWarning) => void) | undefined {
+function makeArgWarner(
+  command: string,
+): ((warning: IpcArgWarning) => void) | undefined {
   if (!isDev()) {
     return undefined;
   }
   return (warning) => {
-    if (warning.kind === 'unsupported-key') {
+    if (warning.kind === "unsupported-key") {
       console.warn(
         `[ipc] Command '${command}' passes argument key '${warning.key}', which is ` +
           `neither lowercase snake_case nor lowerCamelCase. Tauri derives its key ` +
-          `with heck, so this may not match the Rust parameter name.`
+          `with heck, so this may not match the Rust parameter name.`,
       );
     } else {
       console.warn(
         `[ipc] Command '${command}': '${warning.key}' collides with another argument ` +
-          `on '${warning.camel}'; the later value wins and the earlier one is dropped.`
+          `on '${warning.camel}'; the later value wins and the earlier one is dropped.`,
       );
     }
   };
@@ -88,11 +92,15 @@ function makeArgWarner(command: string): ((warning: IpcArgWarning) => void) | un
  * Generic wrapper for Tauri invoke calls.
  * Handles structured error responses from the Rust backend.
  */
-export async function cmd<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+export async function cmd<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
   if (!hasTauriRuntime()) {
     throw new AppError({
-      code: 'TAURI_UNAVAILABLE',
-      message: 'Desktop runtime unavailable. Please run this action inside the LoLShorts desktop app.',
+      code: "TAURI_UNAVAILABLE",
+      message:
+        "Desktop runtime unavailable. Please run this action inside the LoLShorts desktop app.",
     });
   }
 
@@ -105,24 +113,32 @@ export async function cmd<T>(command: string, args?: Record<string, unknown>): P
     }
 
     // Check if error is our structured AppErrorResponse
-    if (typeof error === 'object' && error !== null && 'code' in error && 'message' in error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      "message" in error
+    ) {
       throw new AppError(error as AppErrorResponse);
     }
 
     // Handle string errors (legacy or unhandled Rust errors)
-    if (typeof error === 'string') {
-        // Try to parse if it's a JSON string
-        try {
-            const parsed = JSON.parse(error);
-            if (typeof parsed === 'object' && parsed !== null && 'code' in parsed) {
-                throw new AppError(parsed as AppErrorResponse);
-            }
-        } catch {
-            // Not JSON, treat as plain message
+    if (typeof error === "string") {
+      // Try to parse if it's a JSON string
+      try {
+        const parsed = JSON.parse(error);
+        if (typeof parsed === "object" && parsed !== null && "code" in parsed) {
+          throw new AppError(parsed as AppErrorResponse);
         }
-        throw new AppError({ code: 'UNKNOWN_ERROR', message: error });
+      } catch {
+        // Not JSON, treat as plain message
+      }
+      throw new AppError({ code: "UNKNOWN_ERROR", message: error });
     }
 
-    throw new AppError({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' });
+    throw new AppError({
+      code: "INTERNAL_ERROR",
+      message: "An unexpected error occurred",
+    });
   }
 }

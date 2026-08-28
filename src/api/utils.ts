@@ -2,6 +2,7 @@ import { cmd } from "./client";
 import type { StorageStats } from "@/types/storage";
 
 export interface DiskSpaceInfo {
+  known: boolean;
   available_gb: number;
   total_gb: number;
   used_gb: number;
@@ -11,8 +12,9 @@ export interface SystemMetrics {
   total_cpu_percent: number;
   available_ram_gb: number;
   available_disk_gb: number;
-  gpu_percent?: number;
-  gpu_memory_mb?: number;
+  gpu_percent: number | null;
+  gpu_memory_mb: number | null;
+  gpu_temperature_celsius: number | null;
 }
 
 export type DiagnosticState = "ok" | "warning" | "blocked";
@@ -35,6 +37,13 @@ export interface DiagnosticsBundleExport {
   redacted: boolean;
   generated_at: string;
   included_logs: number;
+}
+
+export interface StagedMedia {
+  path: string;
+  size_bytes: number;
+  reused_app_owned_file: boolean;
+  original_file_name: string;
 }
 
 export const utilsApi = {
@@ -62,4 +71,7 @@ export const utilsApi = {
   getDiagnosticsStatus: () => cmd<DiagnosticsStatus>("get_diagnostics_status"),
   exportDiagnosticsBundle: (redact = true) =>
     cmd<DiagnosticsBundleExport>("export_diagnostics_bundle", { redact }),
+
+  selectAndStageExternalMedia: (kind: "video" | "audio" | "image") =>
+    cmd<StagedMedia | null>("select_and_stage_external_media", { kind }),
 };

@@ -1,13 +1,15 @@
 use anyhow::{Context, Result};
 use oauth2::{
-    basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
-    ClientSecret, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
-    TokenResponse, TokenUrl,
+    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
+    EndpointNotSet, EndpointSet, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken,
+    Scope, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
+
+const OAUTH_TOKEN_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// YouTube OAuth2 scopes required for upload functionality
 const YOUTUBE_UPLOAD_SCOPE: &str = "https://www.googleapis.com/auth/youtube.upload";
@@ -33,9 +35,13 @@ struct OAuth2State {
     pkce_verifier: PkceCodeVerifier,
 }
 
+type ConfiguredBasicClient =
+    BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
+
 /// YouTube OAuth2 Client
 pub struct YouTubeOAuthClient {
-    oauth_client: BasicClient,
+    oauth_client: ConfiguredBasicClient,
+    http_client: reqwest::Client,
     state: Arc<RwLock<Option<OAuth2State>>>,
     credentials: Arc<RwLock<Option<YouTubeCredentials>>>,
 }
@@ -57,12 +63,22 @@ impl YouTubeOAuthClient {
         let redirect_url =
             RedirectUrl::new(redirect_uri).context("Failed to create redirect URL")?;
 
-        let oauth_client =
-            BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
-                .set_redirect_uri(redirect_url);
+        let oauth_client = BasicClient::new(client_id)
+            .set_client_secret(client_secret)
+            .set_auth_uri(auth_url)
+            .set_token_uri(token_url)
+            .set_redirect_uri(redirect_url);
+        let http_client = reqwest::Client::builder()
+            // OAuth endpoints must never redirect token-bearing POST requests
+            // to an attacker-controlled origin.
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .context("Failed to create OAuth HTTP client")?;
 
         Ok(Self {
             oauth_client,
+            http_client,
             state: Arc::new(RwLock::new(None)),
             credentials: Arc::new(RwLock::new(None)),
         })
@@ -92,7 +108,7 @@ impl YouTubeOAuthClient {
         });
 
         info!("Generated OAuth2 authorization URL");
-        debug!("Auth URL: {}", auth_url);
+        debug!("Generated PKCE authorization request without logging callback state");
 
         Ok(auth_url.to_string())
     }
@@ -117,13 +133,16 @@ impl YouTubeOAuthClient {
         let pkce_verifier = stored_state.pkce_verifier;
 
         // Exchange authorization code for token
-        let token_response = self
-            .oauth_client
-            .exchange_code(AuthorizationCode::new(code))
-            .set_pkce_verifier(pkce_verifier)
-            .request_async(async_http_client)
-            .await
-            .context("Failed to exchange authorization code")?;
+        let token_response = tokio::time::timeout(
+            OAUTH_TOKEN_REQUEST_TIMEOUT,
+            self.oauth_client
+                .exchange_code(AuthorizationCode::new(code))
+                .set_pkce_verifier(pkce_verifier)
+                .request_async(&self.http_client),
+        )
+        .await
+        .context("YouTube authorization-code exchange timed out")?
+        .context("Failed to exchange authorization code")?;
 
         // Calculate expiration time
         let expires_at = token_response
@@ -166,12 +185,15 @@ impl YouTubeOAuthClient {
         let refresh_token = RefreshToken::new(refresh_token_str);
         drop(current_creds); // Release lock before async call
 
-        let token_response = self
-            .oauth_client
-            .exchange_refresh_token(&refresh_token)
-            .request_async(async_http_client)
-            .await
-            .context("Failed to refresh access token")?;
+        let token_response = tokio::time::timeout(
+            OAUTH_TOKEN_REQUEST_TIMEOUT,
+            self.oauth_client
+                .exchange_refresh_token(&refresh_token)
+                .request_async(&self.http_client),
+        )
+        .await
+        .context("YouTube token refresh timed out")?
+        .context("Failed to refresh access token")?;
 
         // Calculate new expiration time
         let expires_at = token_response
@@ -243,6 +265,7 @@ impl YouTubeOAuthClient {
     pub async fn clone_with_credentials(&self, credentials: YouTubeCredentials) -> Self {
         Self {
             oauth_client: self.oauth_client.clone(),
+            http_client: self.http_client.clone(),
             state: Arc::new(RwLock::new(None)),
             credentials: Arc::new(RwLock::new(Some(credentials))),
         }

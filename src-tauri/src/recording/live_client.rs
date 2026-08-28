@@ -289,8 +289,11 @@ impl EventTrigger {
     /// Get recommended clip duration before event (seconds)
     pub fn pre_duration(&self) -> u32 {
         match self {
-            EventTrigger::Multikill(_) => 15, // Need setup time
-            EventTrigger::Steal => 20,        // Need fight context
+            EventTrigger::Multikill(_)
+            | EventTrigger::Outplay1vX(_)
+            | EventTrigger::LowHpOutplay => 12,
+            EventTrigger::Steal => 15,
+            EventTrigger::Ace => 10,
             // 게임 종료: 예전에는 30초였다.
             //
             // 쇼츠 관점에서 이건 과했다 — 60초 영상의 2/3 를 한 장면이 먹었다. 게다가
@@ -299,16 +302,19 @@ impl EventTrigger {
             // 12+3 이면 승리 직전 한타와 넥서스 파괴가 들어가고, 남은 자리에 다른
             // 장면이 두 개 더 들어간다.
             EventTrigger::GameEnd => 12,
-            EventTrigger::Death => 8,         // Short context
-            EventTrigger::Assist => 8,
-            EventTrigger::ElderDragonKill => 15,
-            EventTrigger::AtakhanKill => 15,
-            EventTrigger::Shutdown => 10,
-            EventTrigger::VoidgrubsKill => 10,
-            EventTrigger::Outplay1vX(_) => 15, // Need full fight context
-            EventTrigger::TradeKill => 12,     // Show approach
-            EventTrigger::LowHpOutplay => 12,  // Show the close fight
-            _ => 10,
+            EventTrigger::Death
+            | EventTrigger::Assist
+            | EventTrigger::FirstBloodVictim
+            | EventTrigger::TradeKill
+            | EventTrigger::TurretKill
+            | EventTrigger::InhibitorKill => 6,
+            EventTrigger::DragonKill
+            | EventTrigger::BaronKill
+            | EventTrigger::HeraldKill
+            | EventTrigger::ElderDragonKill
+            | EventTrigger::VoidgrubsKill
+            | EventTrigger::AtakhanKill => 10,
+            _ => 8,
         }
     }
 
@@ -319,19 +325,23 @@ impl EventTrigger {
             // 게임 종료의 post-roll 은 **원리적으로 확보되지 않는다** — 녹화가 게임과
             // 함께 멈추기 때문이다. 10초를 적어 두면 매번 부족분 경고만 남는다.
             EventTrigger::GameEnd => 3,
-            EventTrigger::BaronKill => 5,
-            // 스틸: `ClipTimingSettings::default()` 의 `steal.post_duration` 과 같아야
-            // 한다(설정에 키가 있으면 설정이 이기므로, 다르면 이 값은 죽은 값이 된다).
-            EventTrigger::Steal => 5,
-            EventTrigger::Multikill(_) => 5,
-            EventTrigger::ElderDragonKill => 5,
-            EventTrigger::AtakhanKill => 5,
-            EventTrigger::Shutdown => 5,
-            EventTrigger::VoidgrubsKill => 3,
-            EventTrigger::Outplay1vX(_) => 5,
-            EventTrigger::TradeKill => 5,
-            EventTrigger::LowHpOutplay => 5,
-            _ => 3,
+            EventTrigger::Steal => 10,
+            EventTrigger::Multikill(_)
+            | EventTrigger::Outplay1vX(_)
+            | EventTrigger::LowHpOutplay => 8,
+            EventTrigger::DragonKill
+            | EventTrigger::BaronKill
+            | EventTrigger::HeraldKill
+            | EventTrigger::ElderDragonKill
+            | EventTrigger::VoidgrubsKill
+            | EventTrigger::AtakhanKill => 6,
+            EventTrigger::Death
+            | EventTrigger::Assist
+            | EventTrigger::FirstBloodVictim
+            | EventTrigger::TradeKill
+            | EventTrigger::TurretKill
+            | EventTrigger::InhibitorKill => 4,
+            _ => 5,
         }
     }
 }
@@ -581,6 +591,13 @@ pub struct PlayerSummary {
     pub assists: u32,
     /// `"Win"` / `"Lose"` 를 그대로. 해석은 저장 계층에서.
     pub result: Option<String>,
+    /// `"CLASSIC"` / `"ARAM"` 등. 비어 있으면 못 얻은 것.
+    ///
+    /// 세션은 게임이 **로딩 중일 때** 시작되는 일이 흔한데, 그때는 Live Client
+    /// API 가 아직 응답하지 않아 판 모드가 `UNKNOWN` 으로 굳었다(결과 화면에
+    /// "트린다미어 - UNKNOWN" 으로 나갔다). 챔피언은 여기서 늦게 채워 주는 길이
+    /// 이미 있었는데 모드만 없었다.
+    pub game_mode: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1468,6 +1485,7 @@ impl LiveClientMonitor {
                             deaths: me.scores.deaths,
                             assists: me.scores.assists,
                             result: event.result.clone(),
+                            game_mode: data.game_data.game_mode.clone(),
                         })
                 });
                 drop(cache);
@@ -1898,11 +1916,7 @@ mod live_client_fixture_tests {
             .events
             .iter()
             .filter(|e| e.event_name == "ChampionKill")
-            .filter(|e| {
-                e.killer_name
-                    .as_deref()
-                    .is_some_and(|k| same_player(k, me))
-            })
+            .filter(|e| e.killer_name.as_deref().is_some_and(|k| same_player(k, me)))
             .count();
 
         assert!(
@@ -1925,11 +1939,7 @@ mod live_client_fixture_tests {
             .events
             .iter()
             .filter(|e| e.event_name == "ChampionKill")
-            .filter(|e| {
-                e.killer_name
-                    .as_deref()
-                    .is_some_and(|k| same_player(k, me))
-            })
+            .filter(|e| e.killer_name.as_deref().is_some_and(|k| same_player(k, me)))
             .filter(|e| e.assisters.as_ref().is_none_or(|a| a.is_empty()))
             .count();
 
@@ -1975,14 +1985,12 @@ mod tests {
     #[test]
     fn test_event_trigger_duration() {
         let trigger = EventTrigger::Multikill(3);
-        assert_eq!(trigger.pre_duration(), 15);
-        assert_eq!(trigger.post_duration(), 5);
+        assert_eq!(trigger.pre_duration(), 12);
+        assert_eq!(trigger.post_duration(), 8);
 
         let trigger = EventTrigger::Steal;
-        assert_eq!(trigger.pre_duration(), 20);
-        // `ClipTimingSettings::default()` 의 `steal.post_duration` 과 같아야 한다 —
-        // 설정에 키가 있으면 설정이 이기므로, 다르면 이 값이 죽은 값이 된다.
-        assert_eq!(trigger.post_duration(), 5);
+        assert_eq!(trigger.pre_duration(), 15);
+        assert_eq!(trigger.post_duration(), 10);
     }
 
     /// `Result` 필드의 **와이어 계약**을 고정한다.
@@ -2080,30 +2088,87 @@ mod tests {
     }
 
     #[test]
+    fn event_trigger_timing_table_matches_balanced_profile() {
+        for trigger in [
+            EventTrigger::ChampionKill,
+            EventTrigger::FirstBlood,
+            EventTrigger::Shutdown,
+        ] {
+            assert_eq!((trigger.pre_duration(), trigger.post_duration()), (8, 5));
+        }
+        for trigger in [
+            EventTrigger::Death,
+            EventTrigger::Assist,
+            EventTrigger::TurretKill,
+            EventTrigger::InhibitorKill,
+        ] {
+            assert_eq!((trigger.pre_duration(), trigger.post_duration()), (6, 4));
+        }
+        for trigger in [
+            EventTrigger::Multikill(3),
+            EventTrigger::Outplay1vX(2),
+            EventTrigger::LowHpOutplay,
+        ] {
+            assert_eq!((trigger.pre_duration(), trigger.post_duration()), (12, 8));
+        }
+        for trigger in [
+            EventTrigger::DragonKill,
+            EventTrigger::BaronKill,
+            EventTrigger::HeraldKill,
+            EventTrigger::ElderDragonKill,
+            EventTrigger::VoidgrubsKill,
+            EventTrigger::AtakhanKill,
+        ] {
+            assert_eq!((trigger.pre_duration(), trigger.post_duration()), (10, 6));
+        }
+        assert_eq!(
+            (
+                EventTrigger::Steal.pre_duration(),
+                EventTrigger::Steal.post_duration()
+            ),
+            (15, 10)
+        );
+        assert_eq!(
+            (
+                EventTrigger::Ace.pre_duration(),
+                EventTrigger::Ace.post_duration()
+            ),
+            (10, 10)
+        );
+        assert_eq!(
+            (
+                EventTrigger::GameEnd.pre_duration(),
+                EventTrigger::GameEnd.post_duration()
+            ),
+            (12, 3)
+        );
+    }
+
+    #[test]
     fn test_event_trigger_pre_duration_new_variants() {
-        assert_eq!(EventTrigger::ElderDragonKill.pre_duration(), 15);
-        assert_eq!(EventTrigger::AtakhanKill.pre_duration(), 15);
-        assert_eq!(EventTrigger::Shutdown.pre_duration(), 10);
+        assert_eq!(EventTrigger::ElderDragonKill.pre_duration(), 10);
+        assert_eq!(EventTrigger::AtakhanKill.pre_duration(), 10);
+        assert_eq!(EventTrigger::Shutdown.pre_duration(), 8);
         assert_eq!(EventTrigger::VoidgrubsKill.pre_duration(), 10);
         // 30 -> 12: 60초 쇼츠의 2/3 를 한 장면이 먹었다.
         assert_eq!(EventTrigger::GameEnd.pre_duration(), 12);
-        assert_eq!(EventTrigger::Death.pre_duration(), 8);
-        assert_eq!(EventTrigger::Assist.pre_duration(), 8);
-        assert_eq!(EventTrigger::ChampionKill.pre_duration(), 10);
+        assert_eq!(EventTrigger::Death.pre_duration(), 6);
+        assert_eq!(EventTrigger::Assist.pre_duration(), 6);
+        assert_eq!(EventTrigger::ChampionKill.pre_duration(), 8);
     }
 
     #[test]
     fn test_event_trigger_post_duration_new_variants() {
-        assert_eq!(EventTrigger::ElderDragonKill.post_duration(), 5);
-        assert_eq!(EventTrigger::AtakhanKill.post_duration(), 5);
+        assert_eq!(EventTrigger::ElderDragonKill.post_duration(), 6);
+        assert_eq!(EventTrigger::AtakhanKill.post_duration(), 6);
         assert_eq!(EventTrigger::Shutdown.post_duration(), 5);
-        assert_eq!(EventTrigger::VoidgrubsKill.post_duration(), 3);
+        assert_eq!(EventTrigger::VoidgrubsKill.post_duration(), 6);
         assert_eq!(EventTrigger::Ace.post_duration(), 10);
         // 10 -> 3: 녹화가 게임과 함께 멈추므로 post-roll 은 원리적으로 확보되지 않는다
         //          (실측: 40초 설계인데 산출물은 31.4초).
         assert_eq!(EventTrigger::GameEnd.post_duration(), 3);
-        assert_eq!(EventTrigger::BaronKill.post_duration(), 5);
-        assert_eq!(EventTrigger::ChampionKill.post_duration(), 3);
+        assert_eq!(EventTrigger::BaronKill.post_duration(), 6);
+        assert_eq!(EventTrigger::ChampionKill.post_duration(), 5);
     }
 
     #[test]
@@ -2146,22 +2211,22 @@ mod tests {
     #[test]
     fn test_outplay_1vx_durations() {
         let trigger = EventTrigger::Outplay1vX(2);
-        assert_eq!(trigger.pre_duration(), 15);
-        assert_eq!(trigger.post_duration(), 5);
+        assert_eq!(trigger.pre_duration(), 12);
+        assert_eq!(trigger.post_duration(), 8);
     }
 
     #[test]
     fn test_trade_kill_durations() {
         let trigger = EventTrigger::TradeKill;
-        assert_eq!(trigger.pre_duration(), 12);
-        assert_eq!(trigger.post_duration(), 5);
+        assert_eq!(trigger.pre_duration(), 6);
+        assert_eq!(trigger.post_duration(), 4);
     }
 
     #[test]
     fn test_low_hp_outplay_durations() {
         let trigger = EventTrigger::LowHpOutplay;
         assert_eq!(trigger.pre_duration(), 12);
-        assert_eq!(trigger.post_duration(), 5);
+        assert_eq!(trigger.post_duration(), 8);
     }
 
     // ---- Advanced event detection: detect_trigger integration tests ----

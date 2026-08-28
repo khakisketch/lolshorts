@@ -80,6 +80,26 @@ const mockCommand = async (command: string): Promise<unknown> => {
           },
         ],
       };
+    case "get_performance_stats":
+      return {
+        recording: {
+          total_frames: 3600,
+          uptime_seconds: 60,
+          current_fps: 60,
+          audio_active: true,
+          mic_active: false,
+        },
+        system: { status: "Recording" },
+      };
+    case "get_system_metrics":
+      return {
+        total_cpu_percent: 20,
+        available_ram_gb: 12,
+        available_disk_gb: 200,
+        gpu_percent: null,
+        gpu_memory_mb: null,
+        gpu_temperature_celsius: null,
+      };
     case "export_diagnostics_bundle":
       return {
         output_path:
@@ -120,6 +140,67 @@ describe("StatusDashboard", () => {
     expect(
       screen.getAllByText(/statusDashboard\.autoCapture/).length,
     ).toBeGreaterThan(0);
+  });
+
+  it("keeps desktop fallback warnings in the settings dashboard", async () => {
+    mockedCmd.mockImplementation(async (command: string) => {
+      if (command === "get_detailed_recording_status") {
+        return {
+          status: "recording",
+          is_monitoring: true,
+          buffer_duration_secs: 90,
+          capture_mode: "desktop_fallback",
+          capture_backend: "gdi_grab",
+          capture_warning:
+            "Game window could not be found; recording the desktop instead.",
+        };
+      }
+      return mockCommand(command);
+    });
+
+    await renderDashboard();
+
+    expect(screen.getByTestId("capture-warning")).toHaveTextContent(
+      "Game window could not be found; recording the desktop instead.",
+    );
+    expect(
+      screen.getByText("statusDashboard.captureWarning.title"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("capture-backend")).toHaveTextContent(
+      "statusDashboard.captureBackends.gdiGrab",
+    );
+  });
+
+  it("shows a measured 0% GPU and does not treat unknown disk as low space", async () => {
+    mockedCmd.mockImplementation(async (command: string) => {
+      if (command === "get_detailed_recording_status") {
+        return {
+          status: "recording",
+          is_monitoring: true,
+          buffer_duration_secs: 90,
+        };
+      }
+      if (command === "get_system_metrics") {
+        return {
+          total_cpu_percent: 20,
+          available_ram_gb: 12,
+          available_disk_gb: -1,
+          gpu_percent: 0,
+          gpu_memory_mb: 512,
+          gpu_temperature_celsius: 42,
+        };
+      }
+      return mockCommand(command);
+    });
+
+    await renderDashboard();
+
+    expect(await screen.findByText("0.0%")).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.getByText("512 MB · 42°C")).toBeInTheDocument();
+    expect(
+      screen.queryByText("statusDashboard.lowDiskSpace"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders buffer duration", async () => {

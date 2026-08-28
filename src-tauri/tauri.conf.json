@@ -41,18 +41,10 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https: asset: http://asset.localhost; media-src 'self' blob: asset: http://asset.localhost; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://*.supabase.co wss://*.supabase.co",
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https: asset: http://asset.localhost; media-src 'self' blob: asset: http://asset.localhost; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$DATA/lolshorts/**",
-          "$APPDATA/**",
-          "$VIDEO/**",
-          "$DOWNLOAD/**",
-          "$DESKTOP/**",
-          "$DOCUMENT/**",
-          "$TEMP/**"
-        ]
+        "scope": ["$DATA/lolshorts/**"]
       }
     }
   },
@@ -65,7 +57,7 @@
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
-      "timestampUrl": "http://timestamp.digicert.com",
+      "timestampUrl": "https://timestamp.digicert.com",
       "allowDowngrades": false,
       "wix": {
         "language": ["en-US"],
@@ -98,7 +90,7 @@
     "copyright": "Copyright © 2025 LoLShorts",
     "category": "Video",
     "shortDescription": "League of Legends Auto-Recording and Editing",
-    "longDescription": "Automatically record and edit League of Legends gameplay into YouTube Shorts format. Features include automatic event detection, real-time replay buffer, hardware-accelerated encoding, and video editing tools. Public readiness requires completed Windows Field QA evidence; Toss/live billing and paid PRO sales are deferred.",
+    "longDescription": "Automatically record and edit League of Legends gameplay into YouTube Shorts format. The first supported release target is Windows 11 x64 with NVIDIA NVENC; AMD, Intel, and CPU encoding remain experimental fallbacks. Public readiness requires completed Windows Field QA evidence; Toss/live billing and paid PRO sales are disabled.",
     "publisher": "LoLShorts Team",
     "homepage": "https://lolshorts.com",
     "licenseFile": "../LICENSE",
@@ -117,8 +109,7 @@
     "updater": {
       "endpoints": [
         "https://github.com/KhakiSkech/lolshorts/releases/latest/download/latest.json"
-      ],
-      "dialog": true
+      ]
     }
   }
 }

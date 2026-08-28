@@ -22,12 +22,15 @@
  * lowerCamelCase (no underscores -> single piece -> returned unchanged).
  */
 export function snakeKeyToCamel(key: string): string {
-  const parts = key.split('_').filter((part) => part.length > 0);
+  const parts = key.split("_").filter((part) => part.length > 0);
   if (parts.length === 0) {
     return key;
   }
   const [first, ...rest] = parts;
-  return first + rest.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('');
+  return (
+    first +
+    rest.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("")
+  );
 }
 
 /**
@@ -50,7 +53,7 @@ export function isSupportedArgKey(key: string): boolean {
   // No underscores at all: passed through unchanged, so it is whatever the author
   // typed. A wrong one here is an ordinary typo, indistinguishable from a
   // deliberate key, and not something this check can catch.
-  if (!key.includes('_') && /^[a-z]/.test(key)) {
+  if (!key.includes("_") && /^[a-z]/.test(key)) {
     return true;
   }
   // Everything else mixes case with underscores (`video_URL`) or starts uppercase
@@ -61,8 +64,8 @@ export function isSupportedArgKey(key: string): boolean {
 
 /** Diagnostics emitted while converting; the caller decides whether to surface them. */
 export type IpcArgWarning =
-  | { kind: 'unsupported-key'; key: string }
-  | { kind: 'key-collision'; key: string; camel: string };
+  | { kind: "unsupported-key"; key: string }
+  | { kind: "key-collision"; key: string; camel: string };
 
 /**
  * Converts only the TOP-LEVEL keys of an IPC args object to lowerCamelCase.
@@ -73,7 +76,7 @@ export type IpcArgWarning =
  */
 export function toIpcArgs(
   args?: Record<string, unknown> | null,
-  onWarning?: (warning: IpcArgWarning) => void
+  onWarning?: (warning: IpcArgWarning) => void,
 ): Record<string, unknown> | undefined {
   // Normalize null to undefined: `invoke`'s `args = {}` default only applies to
   // undefined, so a null would be forwarded verbatim.
@@ -84,11 +87,11 @@ export function toIpcArgs(
   const transformed: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
     if (onWarning && !isSupportedArgKey(key)) {
-      onWarning({ kind: 'unsupported-key', key });
+      onWarning({ kind: "unsupported-key", key });
     }
     const camel = snakeKeyToCamel(key);
     if (onWarning && Object.prototype.hasOwnProperty.call(transformed, camel)) {
-      onWarning({ kind: 'key-collision', key, camel });
+      onWarning({ kind: "key-collision", key, camel });
     }
     transformed[camel] = value;
   }

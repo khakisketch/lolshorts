@@ -2,6 +2,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::video::auto_composer::{AutoEditOutputIntent, PlatformPreset};
+use crate::video::output_validation::{OutputValidationReport, OutputValidationStatus};
+
 /// Game metadata stored in the local SQLite database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameMetadata {
@@ -122,6 +125,44 @@ pub struct ClipMetadata {
     pub score_reasons: Vec<crate::recording::highlight_score::ScoreReason>,
 }
 
+/// Ordering accepted by the paged clip-vault IPC endpoint.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClipVaultSort {
+    Best,
+    Newest,
+}
+
+/// A non-empty game's clips as displayed in the clip vault.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipVaultGameGroup {
+    pub game_id: String,
+    pub game: Option<GameMetadata>,
+    pub clips: Vec<ClipMetadata>,
+    pub clip_count: usize,
+}
+
+/// One cursor-paginated clip-vault response. `next_cursor` is opaque to callers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipVaultPage {
+    pub groups: Vec<ClipVaultGameGroup>,
+    pub next_cursor: Option<String>,
+    pub skipped_item_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipVaultPageInput {
+    pub sort: ClipVaultSort,
+    pub cursor: Option<String>,
+    pub game_limit: Option<usize>,
+    /// Optional case-insensitive search across a game's champion, mode, and id.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Optional exact game-mode filter.
+    #[serde(default)]
+    pub game_mode: Option<String>,
+}
+
 // ============================================================================
 // Auto-Edit Usage Tracking (Quota System)
 // ============================================================================
@@ -182,6 +223,104 @@ impl AutoEditUsage {
 }
 
 // ============================================================================
+// Durable media jobs
+// ============================================================================
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaJobKind {
+    AutoEdit,
+    PlatformExport,
+    OutputValidation,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaJobStatus {
+    Queued,
+    Running,
+    Validating,
+    Paused,
+    Recoverable,
+    Complete,
+    Failed,
+    Discarded,
+}
+
+impl MediaJobStatus {
+    pub fn can_transition_to(self, next: Self) -> bool {
+        if self == next {
+            return true;
+        }
+        use MediaJobStatus::*;
+        matches!(
+            (self, next),
+            (Queued, Running | Paused | Failed | Discarded)
+                | (Running, Validating | Paused | Recoverable | Failed)
+                | (
+                    Validating,
+                    Running | Complete | Paused | Recoverable | Failed
+                )
+                | (Paused, Queued | Running | Discarded)
+                | (Recoverable, Queued | Running | Discarded | Failed)
+                | (Failed, Discarded)
+                | (Complete, Complete)
+                | (Discarded, Discarded)
+        )
+    }
+
+    pub fn is_recoverable(self) -> bool {
+        matches!(self, Self::Paused | Self::Recoverable)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaJobPart {
+    pub part_index: usize,
+    pub part_count: usize,
+    pub status: MediaJobStatus,
+    pub progress_percentage: f64,
+    pub trim_json: String,
+    pub partial_path: Option<String>,
+    pub output_path: Option<String>,
+    pub validation: Option<OutputValidationReport>,
+    pub file_fingerprint: Option<String>,
+    pub attempt_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaJobSnapshot {
+    pub job_id: String,
+    pub user_id: String,
+    pub kind: MediaJobKind,
+    pub status: MediaJobStatus,
+    pub recoverable: bool,
+    pub current_stage: String,
+    pub progress_percentage: f64,
+    pub config_json: String,
+    pub parts: Vec<MediaJobPart>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub retry_count: u32,
+    pub quota_sync_pending: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformExportMetadata {
+    pub export_id: String,
+    pub job_id: String,
+    pub result_id: String,
+    pub preset: PlatformPreset,
+    pub output_path: String,
+    pub passthrough: bool,
+    pub owns_file: bool,
+    pub created_at: DateTime<Utc>,
+    pub validation: OutputValidationReport,
+}
+
+// ============================================================================
 // Auto-Edit Result Storage
 // ============================================================================
 
@@ -231,6 +370,70 @@ pub struct AutoEditResultMetadata {
 
     /// File size in bytes
     pub file_size_bytes: u64,
+
+    #[serde(default)]
+    pub publish_title: String,
+
+    #[serde(default)]
+    pub publish_description: String,
+
+    #[serde(default)]
+    pub publish_tags: Vec<String>,
+
+    #[serde(default = "default_upload_privacy")]
+    pub publish_privacy_status: String,
+
+    #[serde(default)]
+    pub output_intent: String,
+
+    #[serde(default)]
+    pub framing_mode: String,
+
+    #[serde(default)]
+    pub platform_preset: String,
+
+    /// Stable grouping contract. Legacy rows default to one standalone result;
+    /// filenames are deliberately never parsed to infer a series.
+    #[serde(default)]
+    pub series_id: String,
+
+    #[serde(default = "default_part_index")]
+    pub part_index: usize,
+
+    #[serde(default = "default_part_count")]
+    pub part_count: usize,
+
+    #[serde(default)]
+    pub output_kind: String,
+
+    #[serde(default)]
+    pub validation: Option<OutputValidationReport>,
+
+    #[serde(default)]
+    pub platform_exports: Vec<PlatformExportMetadata>,
+}
+
+fn default_upload_privacy() -> String {
+    "unlisted".to_string()
+}
+
+fn default_part_index() -> usize {
+    1
+}
+
+fn default_part_count() -> usize {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoEditResultGroup {
+    pub series_id: String,
+    pub job_id: String,
+    pub output_intent: AutoEditOutputIntent,
+    pub outputs: Vec<AutoEditResultMetadata>,
+    pub total_duration: f64,
+    pub total_file_size_bytes: u64,
+    pub validation_status: OutputValidationStatus,
 }
 
 /// YouTube upload status for auto-edit result
@@ -326,7 +529,17 @@ pub struct StorageStats {
 
 #[cfg(test)]
 mod tests {
-    use super::UploadStatus;
+    use super::{ClipVaultPageInput, ClipVaultSort, UploadStatus};
+
+    #[test]
+    fn clip_vault_page_input_accepts_legacy_payload_without_filters() {
+        let input: ClipVaultPageInput =
+            serde_json::from_str(r#"{"sort":"newest","cursor":null,"game_limit":6}"#).unwrap();
+
+        assert_eq!(input.sort, ClipVaultSort::Newest);
+        assert!(input.query.is_none());
+        assert!(input.game_mode.is_none());
+    }
 
     #[test]
     fn upload_status_serializes_pascal_case_and_reads_legacy_lowercase() {

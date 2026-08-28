@@ -1,5 +1,5 @@
-import * as React from "react"
-import { useTranslation } from "react-i18next"
+import * as React from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -7,24 +7,24 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "./dialog"
-import { Button } from "./button"
-import { AlertTriangle, Trash2, Info } from "lucide-react"
-import { cn } from "@/lib/utils"
+} from "./dialog";
+import { Button } from "./button";
+import { AlertTriangle, Trash2, Info } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-export type ConfirmDialogVariant = "danger" | "warning" | "info"
+export type ConfirmDialogVariant = "danger" | "warning" | "info";
 
 interface ConfirmDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  title: string
-  description: string
-  confirmText?: string
-  cancelText?: string
-  onConfirm: () => void
-  onCancel?: () => void
-  variant?: ConfirmDialogVariant
-  isLoading?: boolean
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  description: string;
+  confirmText?: string;
+  cancelText?: string;
+  onConfirm: () => void;
+  onCancel?: () => void;
+  variant?: ConfirmDialogVariant;
+  isLoading?: boolean;
 }
 
 const variantConfig = {
@@ -46,7 +46,7 @@ const variantConfig = {
     iconBg: "bg-blue-100 dark:bg-blue-900/20",
     buttonVariant: "default" as const,
   },
-}
+};
 
 export function ConfirmDialog({
   open,
@@ -60,21 +60,21 @@ export function ConfirmDialog({
   variant = "danger",
   isLoading = false,
 }: ConfirmDialogProps) {
-  const { t } = useTranslation()
-  const config = variantConfig[variant]
-  const Icon = config.icon
+  const { t } = useTranslation();
+  const config = variantConfig[variant];
+  const Icon = config.icon;
 
   const handleCancel = () => {
-    onCancel?.()
-    onOpenChange(false)
-  }
+    onCancel?.();
+    onOpenChange(false);
+  };
 
   const handleConfirm = () => {
-    onConfirm()
+    onConfirm();
     if (!isLoading) {
-      onOpenChange(false)
+      onOpenChange(false);
     }
-  }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -89,11 +89,7 @@ export function ConfirmDialog({
           </div>
         </DialogHeader>
         <DialogFooter className="mt-4">
-          <Button
-            variant="outline"
-            onClick={handleCancel}
-            disabled={isLoading}
-          >
+          <Button variant="outline" onClick={handleCancel} disabled={isLoading}>
             {cancelText || t("common.cancel")}
           </Button>
           <Button
@@ -113,48 +109,53 @@ export function ConfirmDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }
 
 // Hook for easier usage
 interface UseConfirmDialogOptions {
-  title: string
-  description: string
-  confirmText?: string
-  cancelText?: string
-  variant?: ConfirmDialogVariant
+  title: string;
+  description: string;
+  confirmText?: string;
+  cancelText?: string;
+  variant?: ConfirmDialogVariant;
 }
 
 export function useConfirmDialog() {
-  const [isOpen, setIsOpen] = React.useState(false)
-  const [options, setOptions] = React.useState<UseConfirmDialogOptions | null>(null)
-  const resolveRef = React.useRef<((value: boolean) => void) | null>(null)
+  const [isOpen, setIsOpen] = React.useState(false);
+  const [options, setOptions] = React.useState<UseConfirmDialogOptions | null>(
+    null,
+  );
+  const resolveRef = React.useRef<((value: boolean) => void) | null>(null);
 
-  const confirm = React.useCallback((opts: UseConfirmDialogOptions): Promise<boolean> => {
-    setOptions(opts)
-    setIsOpen(true)
-    return new Promise((resolve) => {
-      resolveRef.current = resolve
-    })
-  }, [])
+  const confirm = React.useCallback(
+    (opts: UseConfirmDialogOptions): Promise<boolean> => {
+      setOptions(opts);
+      setIsOpen(true);
+      return new Promise((resolve) => {
+        resolveRef.current = resolve;
+      });
+    },
+    [],
+  );
 
   const handleConfirm = React.useCallback(() => {
-    resolveRef.current?.(true)
-    setIsOpen(false)
-  }, [])
+    resolveRef.current?.(true);
+    setIsOpen(false);
+  }, []);
 
   const handleCancel = React.useCallback(() => {
-    resolveRef.current?.(false)
-    setIsOpen(false)
-  }, [])
+    resolveRef.current?.(false);
+    setIsOpen(false);
+  }, []);
 
   const DialogComponent = React.useCallback(() => {
-    if (!options) return null
+    if (!options) return null;
     return (
       <ConfirmDialog
         open={isOpen}
         onOpenChange={(open) => {
-          if (!open) handleCancel()
+          if (!open) handleCancel();
         }}
         title={options.title}
         description={options.description}
@@ -164,8 +165,8 @@ export function useConfirmDialog() {
         onConfirm={handleConfirm}
         onCancel={handleCancel}
       />
-    )
-  }, [isOpen, options, handleConfirm, handleCancel])
+    );
+  }, [isOpen, options, handleConfirm, handleCancel]);
 
-  return { confirm, ConfirmDialog: DialogComponent }
+  return { confirm, ConfirmDialog: DialogComponent };
 }

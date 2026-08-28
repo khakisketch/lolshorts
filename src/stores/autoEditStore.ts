@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 import {
   CanvasTemplate,
   CanvasTemplateInfo,
@@ -12,7 +12,54 @@ import {
   AutoEditStep,
   VideoError,
   AutoEditMetadata,
-} from '@/types/autoEdit';
+  AutoEditPlanClip,
+  AutoEditOutputIntent,
+  AutoEditFramingMode,
+  PlatformPreset,
+} from "@/types/autoEdit";
+
+export interface PinnedClipGroup {
+  gameId: string;
+  paths: string[];
+}
+
+/** 다른 화면에서 넘어온 직접 선택. 파일 경로는 URL 대신 런타임 상태로만 이동한다. */
+export interface PinnedClipSelection {
+  groups: PinnedClipGroup[];
+}
+
+/**
+ * 지금 요청에 그 선택이 실제로 적용되는가.
+ *
+ * 판이 늘거나 바뀌었으면 그 선택은 이 요청의 답이 아니다. 이 규칙이 `buildConfig`
+ * 와 화면 안내 두 곳에 흩어지면 "안내는 나오는데 안 걸리거나" 그 반대가 되므로
+ * 한 함수로 둔다.
+ */
+export function pinnedPathsFor(
+  pinned: PinnedClipSelection | null,
+  selectedGameIds: string[],
+): string[] | null {
+  if (!pinned || pinned.groups.length === 0) return null;
+  const pinnedGameIds = [
+    ...new Set(pinned.groups.map((group) => group.gameId)),
+  ];
+  const selected = new Set(selectedGameIds);
+  if (
+    selected.size !== pinnedGameIds.length ||
+    pinnedGameIds.some((gameId) => !selected.has(gameId))
+  ) {
+    return null;
+  }
+
+  const paths = [
+    ...new Set(
+      pinned.groups.flatMap((group) =>
+        group.paths.filter((path) => path.length > 0),
+      ),
+    ),
+  ];
+  return paths.length > 0 ? paths : null;
+}
 
 interface AutoEditStore {
   // Step flow
@@ -24,7 +71,27 @@ interface AutoEditStore {
   selectedGameIds: string[];
   setAvailableGames: (games: GameSelection[]) => void;
   toggleGameSelection: (gameId: string) => void;
+  /**
+   * 선택을 **그 목록으로 놓는다** — 토글이 아니다.
+   *
+   * 다른 화면에서 `?gameId=` 를 들고 들어올 때 쓴다. 예전에는 마운트 효과가
+   * `toggleGameSelection` 을 불렀는데, 그 효과가 한 번 더 돌면(StrictMode 의
+   * 이중 호출, 또는 `getAllGames` 의 정체성이 바뀔 때) **선택이 도로 풀린다**.
+   * 같은 값을 몇 번 넣어도 결과가 같아야 한다.
+   */
+  setSelectedGameIds: (gameIds: string[]) => void;
   clearGameSelection: () => void;
+
+  /**
+   * 다른 화면(홈)에서 이미 고른 클립 — 자동 선택 대신 이것만 쓴다.
+   *
+   * **어느 판에서 고른 것인지 함께 들고 다닌다.** 경로만 들고 있으면, 홈에서
+   * 고른 뒤 나중에 다른 화면(`Games.tsx`)에서 다른 판으로 자동편집을 열었을 때
+   * 남아 있던 선택이 조용히 그 판을 제한한다 — 사용자는 이유를 알 수 없다.
+   * `buildConfig` 는 지금 고른 판이 정확히 그 판일 때만 이 선택을 보낸다.
+   */
+  pinnedClips: PinnedClipSelection | null;
+  setPinnedClips: (pinned: PinnedClipSelection | null) => void;
 
   // Duration
   targetDuration: DurationOption;
@@ -71,6 +138,25 @@ interface AutoEditStore {
   setError: (error: VideoError | null) => void;
   setMetadata: (metadata: Partial<AutoEditMetadata>) => void;
 
+  storyboard: AutoEditPlanClip[];
+  recommendedStoryboard: AutoEditPlanClip[];
+  storyboardPast: AutoEditPlanClip[][];
+  storyboardFuture: AutoEditPlanClip[][];
+  setStoryboard: (clips: AutoEditPlanClip[]) => void;
+  moveStoryboardClip: (from: number, to: number) => void;
+  updateStoryboardTrim: (path: string, start: number, end: number) => void;
+  removeStoryboardClip: (path: string) => void;
+  clearStoryboard: () => void;
+  resetStoryboardToRecommendation: () => void;
+  undoStoryboard: () => void;
+  redoStoryboard: () => void;
+  outputIntent: AutoEditOutputIntent;
+  framingMode: AutoEditFramingMode;
+  platformPreset: PlatformPreset;
+  setOutputIntent: (intent: AutoEditOutputIntent) => void;
+  setFramingMode: (mode: AutoEditFramingMode) => void;
+  setPlatformPreset: (preset: PlatformPreset) => void;
+
   // Actions
   buildConfig: () => AutoEditConfig;
   resetAll: () => void;
@@ -97,18 +183,19 @@ const DEFAULT_AUDIO_LEVELS: AudioLevels = {
  */
 function currentUiLanguage(): string {
   try {
-    return localStorage.getItem('i18nextLng') ?? 'en';
+    return localStorage.getItem("i18nextLng") ?? "en";
   } catch {
-    return 'en';
+    return "en";
   }
 }
 
 export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
   // Initial state
-  currentStep: 'configure',
+  currentStep: "configure",
 
   availableGames: [],
   selectedGameIds: [],
+  pinnedClips: null,
 
   targetDuration: 60,
 
@@ -123,10 +210,17 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
   audioLevels: DEFAULT_AUDIO_LEVELS,
 
   metadata: {
-    title: '',
-    caption: '',
+    title: "",
+    caption: "",
     tags: [],
   },
+  storyboard: [],
+  recommendedStoryboard: [],
+  storyboardPast: [],
+  storyboardFuture: [],
+  outputIntent: "single_short",
+  framingMode: "lol_focus_stack",
+  platformPreset: "youtube_shorts",
 
   jobId: null,
   progress: null,
@@ -145,12 +239,32 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
 
     set({
       selectedGameIds: isSelected
-        ? selectedGameIds.filter(id => id !== gameId)
+        ? selectedGameIds.filter((id) => id !== gameId)
         : [...selectedGameIds, gameId],
     });
   },
 
+  setSelectedGameIds: (gameIds) => set({ selectedGameIds: [...gameIds] }),
+
   clearGameSelection: () => set({ selectedGameIds: [] }),
+
+  setPinnedClips: (pinned) =>
+    set({
+      pinnedClips:
+        pinned &&
+        pinned.groups.some((group) =>
+          group.paths.some((path) => path.length > 0),
+        )
+          ? {
+              groups: pinned.groups
+                .map((group) => ({
+                  gameId: group.gameId,
+                  paths: [...new Set(group.paths.filter(Boolean))],
+                }))
+                .filter((group) => group.paths.length > 0),
+            }
+          : null,
+    }),
 
   // Duration
   setTargetDuration: (duration) => set({ targetDuration: duration }),
@@ -172,14 +286,16 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
   // Audio
   setBackgroundMusic: (music) => set({ backgroundMusic: music }),
 
-  setAudioLevels: (levels) => set({
-    audioLevels: { ...get().audioLevels, ...levels },
-  }),
+  setAudioLevels: (levels) =>
+    set({
+      audioLevels: { ...get().audioLevels, ...levels },
+    }),
 
-  clearAudio: () => set({
-    backgroundMusic: null,
-    audioLevels: DEFAULT_AUDIO_LEVELS,
-  }),
+  clearAudio: () =>
+    set({
+      backgroundMusic: null,
+      audioLevels: DEFAULT_AUDIO_LEVELS,
+    }),
 
   // Progress & Result
   setJobId: (id) => set({ jobId: id }),
@@ -190,20 +306,140 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
 
   setError: (error) => set({ error }),
 
-  setMetadata: (metadata) => set({
-    metadata: { ...get().metadata, ...metadata },
-  }),
+  setMetadata: (metadata) =>
+    set({
+      metadata: { ...get().metadata, ...metadata },
+    }),
+
+  setStoryboard: (clips) =>
+    set(() => {
+      const normalized = clips.map((clip, index) => ({
+        ...clip,
+        order: index,
+      }));
+      return {
+        storyboard: normalized,
+        recommendedStoryboard: normalized.map((clip) => ({ ...clip })),
+        storyboardPast: [],
+        storyboardFuture: [],
+      };
+    }),
+
+  moveStoryboardClip: (from, to) => {
+    const current = get().storyboard;
+    const clips = [...current];
+    if (from < 0 || to < 0 || from >= clips.length || to >= clips.length)
+      return;
+    const [clip] = clips.splice(from, 1);
+    clips.splice(to, 0, clip);
+    set({
+      storyboard: clips.map((item, index) => ({ ...item, order: index })),
+      storyboardPast: [
+        ...get().storyboardPast,
+        current.map((clip) => ({ ...clip })),
+      ].slice(-50),
+      storyboardFuture: [],
+    });
+  },
+
+  updateStoryboardTrim: (path, start, end) =>
+    set({
+      storyboardPast: [
+        ...get().storyboardPast,
+        get().storyboard.map((clip) => ({ ...clip })),
+      ].slice(-50),
+      storyboardFuture: [],
+      storyboard: get().storyboard.map((clip) =>
+        clip.file_path === path
+          ? {
+              ...clip,
+              trim_start_secs: Math.max(0, Math.min(start, end - 0.1)),
+              trim_end_secs: Math.min(
+                clip.source_duration_secs,
+                Math.max(end, start + 0.1),
+              ),
+            }
+          : clip,
+      ),
+    }),
+
+  removeStoryboardClip: (path) =>
+    set({
+      storyboardPast: [
+        ...get().storyboardPast,
+        get().storyboard.map((clip) => ({ ...clip })),
+      ].slice(-50),
+      storyboardFuture: [],
+      storyboard: get()
+        .storyboard.filter((clip) => clip.file_path !== path)
+        .map((clip, index) => ({ ...clip, order: index })),
+    }),
+
+  clearStoryboard: () =>
+    set({
+      storyboard: [],
+      recommendedStoryboard: [],
+      storyboardPast: [],
+      storyboardFuture: [],
+    }),
+  resetStoryboardToRecommendation: () =>
+    set({
+      storyboardPast: [
+        ...get().storyboardPast,
+        get().storyboard.map((clip) => ({ ...clip })),
+      ].slice(-50),
+      storyboardFuture: [],
+      storyboard: get().recommendedStoryboard.map((clip, index) => ({
+        ...clip,
+        order: index,
+      })),
+    }),
+  undoStoryboard: () => {
+    const past = get().storyboardPast;
+    if (past.length === 0) return;
+    const previous = past[past.length - 1];
+    set({
+      storyboard: previous.map((clip) => ({ ...clip })),
+      storyboardPast: past.slice(0, -1),
+      storyboardFuture: [
+        get().storyboard.map((clip) => ({ ...clip })),
+        ...get().storyboardFuture,
+      ].slice(0, 50),
+    });
+  },
+  redoStoryboard: () => {
+    const future = get().storyboardFuture;
+    if (future.length === 0) return;
+    const next = future[0];
+    set({
+      storyboard: next.map((clip) => ({ ...clip })),
+      storyboardPast: [
+        ...get().storyboardPast,
+        get().storyboard.map((clip) => ({ ...clip })),
+      ].slice(-50),
+      storyboardFuture: future.slice(1),
+    });
+  },
+  setOutputIntent: (outputIntent) => set({ outputIntent }),
+  setFramingMode: (framingMode) => set({ framingMode }),
+  setPlatformPreset: (platformPreset) => set({ platformPreset }),
 
   // Build final config for backend
   buildConfig: (): AutoEditConfig => {
     const {
       selectedGameIds,
+      pinnedClips,
       targetDuration,
       currentTemplate,
       backgroundMusic,
       audioLevels,
       enableEventZoom,
       enableHookCaptions,
+      storyboard,
+      outputIntent,
+      framingMode,
+      platformPreset,
+      metadata,
     } = get();
 
     const config: AutoEditConfig = {
@@ -220,7 +456,34 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
       // (AutoEditConfig.audio_levels is not Option), so omitting it used to fail
       // deserialization with "missing field audio_levels".
       audio_levels: audioLevels,
+      output_intent: outputIntent,
+      framing_mode: framingMode,
+      platform_preset: platformPreset,
+      publish_metadata: {
+        title: metadata.title,
+        description: metadata.caption,
+        tags: metadata.tags,
+        privacy_status: "unlisted",
+      },
     };
+
+    // 다른 화면에서 고른 클립은 **그 판 하나만 고른 상태일 때만** 보낸다.
+    // 조용히 적용하면 사용자는 왜 클립 3개짜리 영상이 나왔는지 알 길이 없다 —
+    // 화면 안내(`AutoEditSettings`)도 같은 함수로 판정한다.
+    if (storyboard.length > 0) {
+      config.storyboard = storyboard.map((clip, index) => ({
+        game_id: clip.game_id,
+        file_path: clip.file_path,
+        order: index,
+        trim_start_secs: clip.trim_start_secs,
+        trim_end_secs: clip.trim_end_secs,
+      }));
+    }
+
+    const pinnedPaths = pinnedPathsFor(pinnedClips, selectedGameIds);
+    if (!config.storyboard && pinnedPaths) {
+      config.selected_clip_paths = pinnedPaths;
+    }
 
     if (currentTemplate) {
       config.canvas_template = currentTemplate;
@@ -234,32 +497,42 @@ export const useAutoEditStore = create<AutoEditStore>((set, get) => ({
   },
 
   // Reset all state
-  resetAll: () => set({
-    currentStep: 'configure',
-    selectedGameIds: [],
-    targetDuration: 60,
-    enableEventZoom: false,
-    currentTemplate: null,
-    isEditingCanvas: false,
-    backgroundMusic: null,
-    audioLevels: DEFAULT_AUDIO_LEVELS,
-    metadata: {
-      title: '',
-      caption: '',
-      tags: [],
-    },
-    jobId: null,
-    progress: null,
-    result: null,
-    error: null,
-  }),
+  resetAll: () =>
+    set({
+      currentStep: "configure",
+      selectedGameIds: [],
+      pinnedClips: null,
+      targetDuration: 60,
+      enableEventZoom: false,
+      currentTemplate: null,
+      isEditingCanvas: false,
+      backgroundMusic: null,
+      audioLevels: DEFAULT_AUDIO_LEVELS,
+      metadata: {
+        title: "",
+        caption: "",
+        tags: [],
+      },
+      storyboard: [],
+      recommendedStoryboard: [],
+      storyboardPast: [],
+      storyboardFuture: [],
+      outputIntent: "single_short",
+      framingMode: "lol_focus_stack",
+      platformPreset: "youtube_shorts",
+      jobId: null,
+      progress: null,
+      result: null,
+      error: null,
+    }),
 
   // Reset only progress/result (for new generation)
-  resetProgress: () => set({
-    jobId: null,
-    progress: null,
-    result: null,
-    error: null,
-    currentStep: 'configure',
-  }),
+  resetProgress: () =>
+    set({
+      jobId: null,
+      progress: null,
+      result: null,
+      error: null,
+      currentStep: "configure",
+    }),
 }));

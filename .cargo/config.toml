@@ -1,5 +1,8 @@
-# LoLShorts Cargo Configuration
-# Build optimization for better runtime performance
-
-[build]
-rustflags = ["-C", "target-cpu=native"]
+# LoLShorts Cargo configuration.
+#
+# Do not set `target-cpu=native` here. This file is also consumed by GitHub
+# release runners, and native CPU features can make the resulting installer
+# crash on otherwise supported Windows 11 x64 machines. The workspace release
+# profile supplies portable LTO/codegen optimization; developers may opt into
+# machine-specific benchmark flags in their own shell without changing the
+# shipping artifact.

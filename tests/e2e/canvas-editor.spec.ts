@@ -18,7 +18,7 @@ import { Page } from '@playwright/test';
 async function navigateToCanvasEditor(page: Page) {
   await loginAsProUser(page);
   await page.goto(`${BASE_URL}/auto-edit`);
-  await page.waitForLoadState('networkidle');
+  await page.locator('[data-testid="advanced-settings-button"]').click();
   // Canvas Overlay tab is selected by default
   await expect(page.locator('[data-testid="canvas-editor"]')).toBeVisible();
 }

@@ -5,6 +5,17 @@ use tauri::{
 };
 use tracing::{error, info, warn};
 
+/// Request a full application exit from the main UI.
+///
+/// Closing the webview can intentionally minimize it to the system tray. This
+/// command mirrors the tray's explicit "quit" action so the `ExitRequested`
+/// handler remains the sole owner of recording and temporary-file cleanup.
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    info!("메인 UI에서 앱 종료 요청");
+    app.exit(0);
+}
+
 /// 시스템 트레이 아이콘 및 메뉴 설정
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show_i = MenuItem::with_id(app, "show", "LoLShorts 열기", true, None::<&str>)?;
@@ -110,7 +121,7 @@ pub fn setup_close_to_tray(app: &AppHandle, minimize_to_tray: bool) {
 /// `Builder::run` 종료 경로(마지막 창을 닫아 `ExitRequested`가 발생하는 경우)와
 /// 트레이의 `handle.exit(0)` 경로 모두 managed state의 `Drop`을 실행하지 않는다.
 /// 따라서 이 함수를 명시적으로 호출해 정지하지 않으면, 창 없는 FFmpeg가 좀비로
-/// 남아 15Mbps로 세그먼트를 계속 기록한다.
+/// 남아 20Mbps로 세그먼트를 계속 기록한다.
 ///
 /// `stop_recording` 내부(`SegmentRecorder::stop`)에 이미 5초 타임아웃 + 강제
 /// kill이 있지만, RwLock 자체가 다른 곳에서 막혀 있는 극단적인 경우까지 대비해

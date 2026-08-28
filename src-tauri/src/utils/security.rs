@@ -146,7 +146,7 @@ pub fn validate_video_output_path(path: &str) -> Result<PathBuf> {
 pub fn validate_audio_path(path: &str) -> Result<PathBuf> {
     validate_path(
         path,
-        Some(&["mp3", "wav", "m4a", "aac", "ogg", "flac"]),
+        Some(&["mp3", "wav", "m4a", "aac", "ogg", "flac", "wma"]),
         true,
     )
 }

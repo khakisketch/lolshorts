@@ -1,0 +1,7 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0",
+  "identifier": "overlay-events",
+  "description": "Minimal event-only permission for the capture-excluded overlay",
+  "windows": ["overlay"],
+  "permissions": ["core:event:allow-listen"]
+}

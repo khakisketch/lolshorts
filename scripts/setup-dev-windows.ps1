@@ -79,7 +79,7 @@ cargo install tauri-cli --locked
 # Install useful Rust development tools
 Write-Host "🔧 Installing Rust development tools..."
 cargo install cargo-watch
-cargo install cargo-audit
+cargo install cargo-audit --version 0.22.2 --locked
 cargo install cargo-deny
 cargo install cargo-expand
 
@@ -207,7 +207,7 @@ Write-Host "🔧 Useful commands:" -ForegroundColor Cyan
 Write-Host "- Build project: npm run tauri build"
 Write-Host "- Run tests: npm run test"
 Write-Host "- Format code: npm run format"
-Write-Host "- Check for security vulnerabilities: cargo audit"
+Write-Host "- Check for security vulnerabilities: cargo audit --file Cargo.lock"
 Write-Host ""
 Write-Host "⚠️  Important Notes:" -ForegroundColor Yellow
 Write-Host "- Make sure FFmpeg is in your system PATH"

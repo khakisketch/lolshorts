@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use tracing::info;
 
 use super::segment_recorder::{now_wall_secs, SegmentRecorder};
-use super::types::{RecordingConfig, RecordingStats, RecordingStatus};
+use super::types::{CaptureMode, RecordingConfig, RecordingStats, RecordingStatus};
 use crate::storage::GameMetadata;
 
 /// Extra slack added to the buffer-coverage wait on top of one segment boundary.
@@ -85,7 +85,7 @@ pub struct WindowsCaptureRecorder {
 
 impl WindowsCaptureRecorder {
     pub async fn new(config: RecordingConfig) -> Result<Self> {
-        std::fs::create_dir_all(&config.output_dir)?;
+        tokio::fs::create_dir_all(&config.output_dir).await?;
 
         let segment_recorder = SegmentRecorder::new(config.clone())?;
 
@@ -110,7 +110,11 @@ impl WindowsCaptureRecorder {
 
         // 디스크 여유 공간 확인 (최소 2GB)
         const MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-        let free_bytes = get_free_disk_space(&self.config.output_dir);
+        let free_bytes = get_free_disk_space(&self.config.output_dir).ok_or_else(|| {
+            anyhow::anyhow!(
+                "녹화 드라이브의 여유 공간을 확인할 수 없습니다. 저장 위치와 드라이브 연결 상태를 확인한 뒤 다시 시도하세요."
+            )
+        })?;
         if free_bytes < MIN_FREE_BYTES {
             let free_gb = free_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
             anyhow::bail!(
@@ -285,7 +289,9 @@ impl WindowsCaptureRecorder {
         let output_path = self.config.output_dir.join("clips").join(&filename);
 
         if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| e.to_string())?;
         }
 
         // Offset/duration are computed against the actual rolling-buffer timeline
@@ -339,7 +345,7 @@ impl WindowsCaptureRecorder {
         let output_path = self.config.output_dir.join("clips").join(&filename);
 
         if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await?;
         }
 
         // Budget for the buffer to reach the end of the window: whatever post-event time
@@ -371,6 +377,17 @@ impl WindowsCaptureRecorder {
 
     pub async fn get_status(&self) -> RecordingStatus {
         *self.status.read().await
+    }
+
+    /// Runtime-only capture diagnostics for the settings status dashboard.
+    pub async fn get_capture_diagnostics(
+        &self,
+    ) -> (
+        Option<CaptureMode>,
+        Option<super::types::CaptureBackend>,
+        Option<String>,
+    ) {
+        self.segment_recorder.read().await.capture_diagnostics()
     }
 
     pub async fn get_stats(&self) -> RecordingStats {
@@ -441,59 +458,8 @@ impl WindowsCaptureRecorder {
     }
 }
 
-fn get_free_disk_space(path: &Path) -> u64 {
-    #[cfg(target_os = "windows")]
-    {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-
-        let root = path
-            .ancestors()
-            .last()
-            .unwrap_or(path)
-            .to_str()
-            .and_then(|s| s.chars().next())
-            .map(|c| format!("{}:\\", c))
-            .unwrap_or_else(|| "C:\\".to_string());
-
-        let wide_path: Vec<u16> = OsStr::new(&root)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-
-        let mut free_bytes_available: u64 = 0;
-        let mut total_bytes: u64 = 0;
-        let mut total_free_bytes: u64 = 0;
-
-        unsafe {
-            #[link(name = "kernel32")]
-            extern "system" {
-                fn GetDiskFreeSpaceExW(
-                    lpDirectoryName: *const u16,
-                    lpFreeBytesAvailableToCaller: *mut u64,
-                    lpTotalNumberOfBytes: *mut u64,
-                    lpTotalNumberOfFreeBytes: *mut u64,
-                ) -> i32;
-            }
-
-            if GetDiskFreeSpaceExW(
-                wide_path.as_ptr(),
-                &mut free_bytes_available,
-                &mut total_bytes,
-                &mut total_free_bytes,
-            ) != 0
-            {
-                return free_bytes_available;
-            }
-        }
-        // fallback: assume enough space if call fails
-        u64::MAX
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        // Non-Windows fallback: assume enough space
-        let _ = path;
-        u64::MAX
-    }
+fn get_free_disk_space(path: &Path) -> Option<u64> {
+    crate::utils::disk::query_disk_space(path)
+        .ok()
+        .map(|snapshot| snapshot.available_bytes)
 }

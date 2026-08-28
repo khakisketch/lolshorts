@@ -3,7 +3,13 @@ import { cn } from "@/lib/utils";
 
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "default" | "destructive" | "outline" | "secondary" | "ghost" | "link";
+  variant?:
+    | "default"
+    | "destructive"
+    | "outline"
+    | "secondary"
+    | "ghost"
+    | "link";
   size?: "default" | "sm" | "lg" | "icon";
 }
 
@@ -18,8 +24,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         "bg-destructive text-destructive-foreground hover:bg-destructive/90",
       outline:
         "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
-      secondary:
-        "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+      secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
       ghost: "hover:bg-accent hover:text-accent-foreground",
       link: "text-primary underline-offset-4 hover:underline",
     };
@@ -33,17 +38,12 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 
     return (
       <button
-        className={cn(
-          baseStyles,
-          variants[variant],
-          sizes[size],
-          className
-        )}
+        className={cn(baseStyles, variants[variant], sizes[size], className)}
         ref={ref}
         {...props}
       />
     );
-  }
+  },
 );
 
 Button.displayName = "Button";

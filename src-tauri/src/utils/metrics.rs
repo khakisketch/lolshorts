@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
+pub const DEFAULT_SYSTEM_METRICS_INTERVAL: Duration = Duration::from_secs(15);
+#[cfg(target_os = "windows")]
+const GPU_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Performance metrics for FFmpeg recording process
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingMetrics {
@@ -70,6 +74,9 @@ pub struct SystemMetrics {
 
     /// GPU memory usage in MB if available
     pub gpu_memory_mb: Option<f64>,
+
+    /// GPU temperature in Celsius if reported by the supported NVIDIA path
+    pub gpu_temperature_celsius: Option<f64>,
 }
 
 impl Default for SystemMetrics {
@@ -77,9 +84,12 @@ impl Default for SystemMetrics {
         Self {
             total_cpu_percent: 0.0,
             available_ram_gb: 0.0,
-            available_disk_gb: 0.0,
+            // Negative means "not measured yet". Treating an unknown disk as
+            // zero produced a false critical warning during startup.
+            available_disk_gb: -1.0,
             gpu_percent: None,
             gpu_memory_mb: None,
+            gpu_temperature_celsius: None,
         }
     }
 }
@@ -137,7 +147,6 @@ pub enum HealthStatus {
 struct GpuInfo {
     utilization: f64,
     memory_usage_mb: f64,
-    #[allow(dead_code)]
     temperature_celsius: f64,
 }
 
@@ -189,49 +198,85 @@ impl MetricsCollector {
 
     /// Update system metrics from sysinfo
     pub async fn update_system_metrics(&self) {
-        let mut sys = self.sysinfo.write().await;
+        let (cpu_usage, available_ram_gb) = {
+            let mut sys = self.sysinfo.write().await;
+            sys.refresh_cpu_all();
+            sys.refresh_memory();
+            let cpu_usage = if sys.cpus().is_empty() {
+                0.0
+            } else {
+                sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32
+            };
+            (
+                cpu_usage as f64,
+                sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0,
+            )
+        };
 
-        // Refresh system info
-        sys.refresh_cpu_all();
-        sys.refresh_memory();
+        // Disk enumeration and nvidia-smi are blocking OS operations. Run them
+        // outside Tokio's async workers and outside the metrics write lock.
+        let recording_dir = self.recording_dir.clone();
+        let disk_task = tokio::task::spawn_blocking(move || Self::disk_space(&recording_dir));
+        #[cfg(target_os = "windows")]
+        let gpu_task = tokio::task::spawn_blocking(Self::get_gpu_info);
+
+        let available_disk_gb = disk_task.await.ok().flatten().unwrap_or(-1.0);
+        #[cfg(target_os = "windows")]
+        let gpu_info = gpu_task.await.ok().and_then(std::result::Result::ok);
 
         let mut metrics = self.system_metrics.write().await;
+        metrics.total_cpu_percent = cpu_usage;
+        metrics.available_ram_gb = available_ram_gb;
+        metrics.available_disk_gb = available_disk_gb;
+        metrics.gpu_percent = None;
+        metrics.gpu_memory_mb = None;
+        metrics.gpu_temperature_celsius = None;
 
-        // Calculate average CPU usage
-        let cpu_usage: f32 =
-            sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32;
-
-        metrics.total_cpu_percent = cpu_usage as f64;
-        metrics.available_ram_gb = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
-
-        // Check disk space for recording directory
-        if let Some(available_gb) = self.get_disk_space(&self.recording_dir) {
-            metrics.available_disk_gb = available_gb;
-        } else {
-            metrics.available_disk_gb = -1.0; // Unknown — UI should display "unknown"
-        }
-
-        // Add basic GPU metrics if available (Windows DirectX)
         #[cfg(target_os = "windows")]
-        {
-            // Try to get GPU information using Windows APIs
-            if let Ok(gpu_info) = self.get_gpu_info() {
-                metrics.gpu_percent = Some(gpu_info.utilization);
-                metrics.gpu_memory_mb = Some(gpu_info.memory_usage_mb);
-            }
+        if let Some(gpu_info) = gpu_info {
+            metrics.gpu_percent = Some(gpu_info.utilization);
+            metrics.gpu_memory_mb = Some(gpu_info.memory_usage_mb);
+            metrics.gpu_temperature_celsius = Some(gpu_info.temperature_celsius);
         }
     }
 
-    /// Get GPU information using Windows APIs
+    /// Read the primary NVIDIA adapter without a shell. Unsupported or
+    /// temporarily unavailable adapters return `None` to the frontend instead
+    /// of a fabricated 0% value.
     #[cfg(target_os = "windows")]
-    fn get_gpu_info(&self) -> anyhow::Result<GpuInfo> {
-        // For now, return default values
-        // In a real implementation, you would use Windows Performance Counters
-        // or DirectX APIs to get actual GPU metrics
+    fn get_gpu_info() -> anyhow::Result<GpuInfo> {
+        let mut command = std::process::Command::new("nvidia-smi");
+        command.args([
+            "--query-gpu=utilization.gpu,memory.used,temperature.gpu",
+            "--format=csv,noheader,nounits",
+        ]);
+        let output = crate::utils::process::command_output_with_timeout(
+            command,
+            GPU_QUERY_TIMEOUT,
+            "NVIDIA performance metrics",
+        )?;
+        if !output.status.success() {
+            anyhow::bail!("nvidia-smi exited with {}", output.status);
+        }
+        let line = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("nvidia-smi returned no GPU metrics"))?
+            .to_string();
+        let values = line
+            .split(',')
+            .map(str::trim)
+            .map(str::parse::<f64>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if values.len() != 3 {
+            anyhow::bail!("nvidia-smi returned an unexpected metric count");
+        }
         Ok(GpuInfo {
-            utilization: 0.0,
-            memory_usage_mb: 0.0,
-            temperature_celsius: 0.0,
+            utilization: values[0].clamp(0.0, 100.0),
+            memory_usage_mb: values[1].max(0.0),
+            temperature_celsius: values[2],
         })
     }
 
@@ -254,7 +299,7 @@ impl MetricsCollector {
             return HealthStatus::Critical;
         }
 
-        if sys_metrics.available_disk_gb < 1.0 {
+        if sys_metrics.available_disk_gb >= 0.0 && sys_metrics.available_disk_gb < 1.0 {
             warn!(
                 "Critical: Disk space very low: {:.2} GB",
                 sys_metrics.available_disk_gb
@@ -294,6 +339,11 @@ impl MetricsCollector {
             return HealthStatus::Warning;
         }
 
+        if sys_metrics.available_disk_gb < 0.0 {
+            warn!("Recording disk availability is unknown");
+            return HealthStatus::Warning;
+        }
+
         if sys_metrics.available_disk_gb < self.thresholds.min_disk_gb.into() {
             warn!(
                 "Warning: Low disk space: {:.2} GB",
@@ -305,73 +355,49 @@ impl MetricsCollector {
         HealthStatus::Healthy
     }
 
-    /// Start background metrics collection
-    ///
-    /// Returns a handle to stop the collection task
-    pub fn start_background_collection(
-        self: Arc<Self>,
-        interval: Duration,
-    ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            let mut interval_timer = tokio::time::interval(interval);
+    /// Run background metrics collection. The caller owns task supervision so
+    /// a panic is reported alongside the other monitored runtime services.
+    pub async fn run_background_collection(self: Arc<Self>, interval: Duration) {
+        let mut interval_timer = tokio::time::interval(interval);
 
-            loop {
-                interval_timer.tick().await;
+        loop {
+            interval_timer.tick().await;
+            self.update_system_metrics().await;
+            let health = self.check_health().await;
 
-                // Update system metrics
-                self.update_system_metrics().await;
-
-                // Check health and log warnings
-                let health = self.check_health().await;
-
-                match health {
-                    HealthStatus::Healthy => {
-                        // Log every 10 intervals (reduce log spam)
-                        let mut count = self.health_check_count.write().await;
-                        *count += 1;
-
-                        if *count % 10 == 0 {
-                            info!("✅ System health check #{}: All systems healthy", *count);
-                        }
-                    }
-                    HealthStatus::Warning => {
-                        let rec = self.get_recording_metrics().await;
-                        let sys = self.get_system_metrics().await;
-                        warn!(
-                            "Performance warning - FPS: {:.1}, CPU: {:.1}%, Mem: {:.1}MB, Disk: {:.2}GB",
-                            rec.fps, rec.cpu_percent, rec.memory_mb, sys.available_disk_gb
-                        );
-                    }
-                    HealthStatus::Critical => {
-                        let rec = self.get_recording_metrics().await;
-                        let sys = self.get_system_metrics().await;
-                        warn!(
-                            "CRITICAL performance issue - FPS: {:.1}, CPU: {:.1}%, Mem: {:.1}MB, Disk: {:.2}GB",
-                            rec.fps, rec.cpu_percent, rec.memory_mb, sys.available_disk_gb
-                        );
+            match health {
+                HealthStatus::Healthy => {
+                    let mut count = self.health_check_count.write().await;
+                    *count += 1;
+                    if *count % 10 == 0 {
+                        info!("System health check #{}: all systems healthy", *count);
                     }
                 }
+                HealthStatus::Warning => {
+                    let rec = self.get_recording_metrics().await;
+                    let sys = self.get_system_metrics().await;
+                    warn!(
+                        "Performance warning - FPS: {:.1}, CPU: {:.1}%, Mem: {:.1}MB, Disk: {:.2}GB",
+                        rec.fps, rec.cpu_percent, rec.memory_mb, sys.available_disk_gb
+                    );
+                }
+                HealthStatus::Critical => {
+                    let rec = self.get_recording_metrics().await;
+                    let sys = self.get_system_metrics().await;
+                    warn!(
+                        "CRITICAL performance issue - FPS: {:.1}, CPU: {:.1}%, Mem: {:.1}MB, Disk: {:.2}GB",
+                        rec.fps, rec.cpu_percent, rec.memory_mb, sys.available_disk_gb
+                    );
+                }
             }
-        })
+        }
     }
 
-    /// Get available disk space in GB for the given path using sysinfo.
-    fn get_disk_space(&self, path: &Path) -> Option<f64> {
-        use sysinfo::Disks;
-
-        let disks = Disks::new_with_refreshed_list();
-        let path_str = path.to_string_lossy().to_lowercase();
-
-        // Find the disk whose mount point is the longest prefix of our path
-        let best = disks
-            .iter()
-            .filter(|d| {
-                let mount = d.mount_point().to_string_lossy().to_lowercase();
-                path_str.starts_with(mount.as_str())
-            })
-            .max_by_key(|d| d.mount_point().to_string_lossy().len());
-
-        best.map(|disk| disk.available_space() as f64 / 1024.0 / 1024.0 / 1024.0)
+    /// Get available disk space in GB for the exact recording volume.
+    fn disk_space(path: &Path) -> Option<f64> {
+        crate::utils::disk::query_disk_space(path)
+            .ok()
+            .map(|snapshot| snapshot.available_bytes as f64 / 1024.0 / 1024.0 / 1024.0)
     }
 
     #[cfg(test)]
@@ -457,5 +483,14 @@ mod tests {
 
         let health = collector.check_health().await;
         assert_eq!(health, HealthStatus::Critical);
+    }
+
+    #[tokio::test]
+    async fn unknown_disk_is_warning_instead_of_false_critical() {
+        let collector =
+            MetricsCollector::new(HealthThresholds::default(), PathBuf::from("C:\\test"));
+
+        assert_eq!(SystemMetrics::default().available_disk_gb, -1.0);
+        assert_eq!(collector.check_health().await, HealthStatus::Warning);
     }
 }

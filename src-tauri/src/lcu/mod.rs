@@ -266,11 +266,17 @@ impl LcuClient {
 
     /// Connect to the League client by reading lockfile
     pub async fn connect(&mut self) -> Result<()> {
-        let lockfile = Self::read_lockfile()?;
+        let lockfile = tokio::task::spawn_blocking(Self::read_lockfile)
+            .await
+            .map_err(|error| {
+                LcuError::Connection(format!("LCU lockfile probe task failed: {error}"))
+            })??;
 
         // Create HTTP client that accepts self-signed certificates
         let http_client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e| LcuError::Connection(e.to_string()))?;
 
@@ -527,31 +533,10 @@ impl LcuClient {
             .as_array()
             .ok_or(LcuError::Api("Invalid match history format".to_string()))?;
 
-        let mut matches = Vec::new();
-        for game in games {
-            matches.push(MatchInfo {
-                game_id: game["gameId"].as_i64().unwrap_or(0),
-                game_mode: game["gameMode"].as_str().unwrap_or("Unknown").to_string(),
-                game_creation: game["gameCreation"].as_i64().unwrap_or(0),
-                game_duration: game["gameDuration"].as_i64().unwrap_or(0),
-                champion_id: game["participants"][0]["championId"].as_i64().unwrap_or(0) as u32, // Simplified: assumes player is 0 (usually relative to query)
-                // Actual logic needs to find participant with matching PUUID
-                win: game["participants"][0]["stats"]["win"]
-                    .as_bool()
-                    .unwrap_or(false),
-                kills: game["participants"][0]["stats"]["kills"]
-                    .as_u64()
-                    .unwrap_or(0) as u32,
-                deaths: game["participants"][0]["stats"]["deaths"]
-                    .as_u64()
-                    .unwrap_or(0) as u32,
-                assists: game["participants"][0]["stats"]["assists"]
-                    .as_u64()
-                    .unwrap_or(0) as u32,
-            });
-        }
-
-        Ok(matches)
+        Ok(games
+            .iter()
+            .filter_map(|game| match_info_for_summoner(game, puuid))
+            .collect())
     }
 
     /// Download replay for a specific game
@@ -691,15 +676,19 @@ impl LcuClient {
             .as_array()
             .ok_or(LcuError::Api("Invalid team data".to_string()))?;
 
-        let mut players = Vec::new();
-
-        for p in team_one.iter().chain(team_two.iter()) {
-            players.push(PlayerInfo {
-                summoner_name: p["summonerName"].as_str().unwrap_or("Unknown").to_string(),
-                champion_id: p["championId"].as_i64().unwrap_or(0) as u32,
-                team_id: if players.len() < 5 { 100 } else { 200 },
-            });
-        }
+        let mut players = Vec::with_capacity(team_one.len() + team_two.len());
+        players.extend(
+            team_one
+                .iter()
+                .enumerate()
+                .map(|(index, player)| replay_player_info(player, 100, index)),
+        );
+        players.extend(
+            team_two
+                .iter()
+                .enumerate()
+                .map(|(index, player)| replay_player_info(player, 200, index)),
+        );
 
         Ok(players)
     }
@@ -718,11 +707,113 @@ pub struct MatchInfo {
     pub assists: u32,
 }
 
+/// Extract the queried summoner from an LCU match-history item. Match history
+/// commonly returns all ten participants; participant 0 is not guaranteed to
+/// be the current account. Prefer a direct PUUID, then the legacy
+/// participantIdentities -> participantId join, and only accept a positional
+/// fallback when the endpoint returned exactly one participant.
+fn match_info_for_summoner(game: &serde_json::Value, puuid: &str) -> Option<MatchInfo> {
+    let game_id = game.get("gameId")?.as_i64()?;
+    if game_id <= 0 {
+        return None;
+    }
+    let participants = game.get("participants")?.as_array()?;
+    let participant = participants
+        .iter()
+        .find(|participant| {
+            participant.get("puuid").and_then(serde_json::Value::as_str) == Some(puuid)
+        })
+        .or_else(|| {
+            let participant_id = game
+                .get("participantIdentities")?
+                .as_array()?
+                .iter()
+                .find(|identity| {
+                    identity
+                        .get("player")
+                        .and_then(|player| player.get("puuid"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some(puuid)
+                })?
+                .get("participantId")?
+                .as_i64()?;
+            participants.iter().find(|participant| {
+                participant
+                    .get("participantId")
+                    .and_then(serde_json::Value::as_i64)
+                    == Some(participant_id)
+            })
+        })
+        .or_else(|| (participants.len() == 1).then(|| &participants[0]))?;
+    let stats = participant.get("stats")?;
+
+    Some(MatchInfo {
+        game_id,
+        game_mode: game
+            .get("gameMode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Unknown")
+            .to_string(),
+        game_creation: game
+            .get("gameCreation")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0),
+        game_duration: game
+            .get("gameDuration")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0),
+        champion_id: participant
+            .get("championId")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(0),
+        win: stats
+            .get("win")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        kills: match_stat_u32(stats, "kills"),
+        deaths: match_stat_u32(stats, "deaths"),
+        assists: match_stat_u32(stats, "assists"),
+    })
+}
+
+fn match_stat_u32(stats: &serde_json::Value, key: &str) -> u32 {
+    stats
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(0)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerInfo {
     pub summoner_name: String,
     pub champion_id: u32,
     pub team_id: u32,
+}
+
+fn replay_player_info(player: &serde_json::Value, team_id: u32, index: usize) -> PlayerInfo {
+    let summoner_name = ["riotIdGameName", "gameName", "summonerName"]
+        .into_iter()
+        .find_map(|key| {
+            player
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("Player {}", index + 1));
+    let champion_id = player
+        .get("championId")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(0);
+    PlayerInfo {
+        summoner_name,
+        champion_id,
+        team_id,
+    }
 }
 
 /// Performance metrics for monitoring LCU client health
@@ -755,5 +846,64 @@ mod tests {
         assert_eq!(lockfile.port, 54321);
         assert_eq!(lockfile.password, "secret123");
         assert_eq!(lockfile.protocol, "https");
+    }
+
+    #[test]
+    fn match_history_joins_the_queried_puuid_instead_of_using_participant_zero() {
+        let game = serde_json::json!({
+            "gameId": 42,
+            "gameMode": "CLASSIC",
+            "gameCreation": 1000,
+            "gameDuration": 1800,
+            "participantIdentities": [
+                { "participantId": 1, "player": { "puuid": "opponent" } },
+                { "participantId": 7, "player": { "puuid": "current-player" } }
+            ],
+            "participants": [
+                {
+                    "participantId": 1,
+                    "championId": 1,
+                    "stats": { "win": false, "kills": 1, "deaths": 9, "assists": 2 }
+                },
+                {
+                    "participantId": 7,
+                    "championId": 99,
+                    "stats": { "win": true, "kills": 12, "deaths": 2, "assists": 8 }
+                }
+            ]
+        });
+
+        let parsed = match_info_for_summoner(&game, "current-player").unwrap();
+        assert_eq!(parsed.game_id, 42);
+        assert_eq!(parsed.champion_id, 99);
+        assert!(parsed.win);
+        assert_eq!((parsed.kills, parsed.deaths, parsed.assists), (12, 2, 8));
+    }
+
+    #[test]
+    fn match_history_does_not_guess_when_a_multi_participant_identity_is_missing() {
+        let game = serde_json::json!({
+            "gameId": 42,
+            "participants": [
+                { "participantId": 1, "stats": {} },
+                { "participantId": 2, "stats": {} }
+            ]
+        });
+
+        assert!(match_info_for_summoner(&game, "missing").is_none());
+    }
+
+    #[test]
+    fn replay_player_uses_riot_id_and_explicit_team() {
+        let player = serde_json::json!({
+            "riotIdGameName": "Current Name",
+            "summonerName": "Legacy Name",
+            "championId": 22
+        });
+
+        let parsed = replay_player_info(&player, 200, 0);
+        assert_eq!(parsed.summoner_name, "Current Name");
+        assert_eq!(parsed.champion_id, 22);
+        assert_eq!(parsed.team_id, 200);
     }
 }

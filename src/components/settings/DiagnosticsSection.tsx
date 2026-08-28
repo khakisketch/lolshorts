@@ -121,11 +121,15 @@ export function DiagnosticsSection() {
   const captureOk =
     readiness?.component_statuses.ffmpeg.status === "ok" &&
     readiness?.component_statuses.audio.status === "ok" &&
-    readiness?.component_statuses.gpu.status === "ok";
+    readiness?.component_statuses.gpu.status === "ok" &&
+    readiness?.component_statuses.nvenc?.status === "ok" &&
+    readiness?.component_statuses.overlay_exclusion?.status === "ok";
   const captureBlocked =
     readiness?.component_statuses.ffmpeg.status === "error" ||
     readiness?.component_statuses.audio.status === "error" ||
-    readiness?.component_statuses.gpu.status === "error";
+    readiness?.component_statuses.gpu.status === "error" ||
+    readiness?.component_statuses.nvenc?.status === "error" ||
+    readiness?.component_statuses.overlay_exclusion?.status === "error";
 
   const healthData = {
     capture: {
@@ -153,18 +157,23 @@ export function DiagnosticsSection() {
     },
     autoEdit: {
       status: (readiness?.component_statuses.ffmpeg.status === "ok" &&
+      readiness?.component_statuses.ffprobe?.status === "ok" &&
       readiness?.component_statuses.disk.status === "ok"
         ? "ok"
         : "warning") as CardStatus,
       label: t("dashboard.services.labels.autoEdit"),
       message:
         readiness?.component_statuses.ffmpeg.status === "ok" &&
+        readiness?.component_statuses.ffprobe?.status === "ok" &&
         readiness?.component_statuses.disk.status === "ok"
           ? t("dashboard.services.messages.autoEditReady")
           : t("dashboard.services.messages.autoEditCheck"),
     },
     publish: {
-      status: (youtubeAuthStatus.authenticated ? "ok" : "warning") as CardStatus,
+      status: (readiness?.component_statuses.youtube?.status === "ok" &&
+      youtubeAuthStatus.authenticated
+        ? "ok"
+        : "warning") as CardStatus,
       label: t("dashboard.services.labels.publish"),
       message: youtubeAuthStatus.authenticated
         ? t("dashboard.services.messages.publishReady")
@@ -265,6 +274,43 @@ export function DiagnosticsSection() {
                 </li>
               ))}
             </ul>
+          )}
+          {diagnosticsStatus && (
+            <div
+              className="space-y-2"
+              data-testid="release-configuration-checks"
+            >
+              <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                Release configuration
+              </h4>
+              {diagnosticsStatus.checks.map((check) => (
+                <div
+                  key={check.key}
+                  className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-sm"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium">{check.label}</span>
+                    <span
+                      className={
+                        check.status === "ok"
+                          ? "text-green-400"
+                          : "text-yellow-400"
+                      }
+                    >
+                      {check.status.toUpperCase()}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {check.message}
+                  </p>
+                  {check.action && check.status !== "ok" && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {check.action}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
           <div>
             <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">

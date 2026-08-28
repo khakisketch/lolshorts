@@ -193,7 +193,53 @@
     "generate": "Wygeneruj wideo",
     "generating": "Generowanie...",
     "preview": "Podgląd",
-    "export": "Eksportuj"
+    "export": "Eksportuj",
+    "pinnedClips": {
+      "title": "Using the {{count}} clips you picked",
+      "summary": "{{clips}} clips from {{games}} games · about {{duration}}",
+      "description": "Your picks replace auto-selection and lock the game list. Every clip you picked goes in.",
+      "rationale": "The {{count}} clips you picked, ordered by highlight score across all selected games.",
+      "useAutomatic": "Switch to auto-selection",
+      "overTargetWarning": "Your picks are about {{estimated}} for a {{target}} target. Every selected scene will be included, so the finished video will be longer.",
+      "overrunTitle": "Include every selected clip?",
+      "overrunDescription": "You selected {{clips}} clips (about {{estimated}}) for a {{target}} target. The finished video will be longer because none of your picks will be removed.",
+      "includeAll": "Include all clips"
+    },
+    "quick": {
+      "title": "Quick Create",
+      "description": "Choose the matches and length, then review every scene before rendering.",
+      "framing": "LoL framing",
+      "preset": "Export preset",
+      "advanced": "Advanced settings",
+      "review": "Review clips"
+    },
+    "storyboard": {
+      "title": "Review your clips",
+      "summary": "{{clips}} clips · {{duration}} · {{parts}} output(s)",
+      "reset": "Reset recommendation",
+      "over180Title": "This selection is longer than one Short",
+      "over180Body": "Every selected scene will be kept. Choose a Shorts series or one general vertical video.",
+      "output": "Output",
+      "timeline": "Storyboard timeline",
+      "moveUp": "Move clip up",
+      "moveDown": "Move clip down",
+      "remove": "Exclude clip",
+      "start": "Start (seconds)",
+      "end": "End (seconds)",
+      "clipDuration": "Selected {{duration}} of {{source}}",
+      "generateSeries": "Generate series"
+    },
+    "output": {
+      "single": "Single Short",
+      "series": "Shorts series",
+      "vertical": "General vertical video"
+    },
+    "framing": {
+      "focus": "HUD + combat focus",
+      "safe": "Full frame",
+      "crop": "Center crop"
+    },
+    "cancelJob": "Cancel generation"
   },
   "youtube": {
     "title": "YouTube",
@@ -443,5 +489,37 @@
     "uploadComplete": "Przesyłanie zakończone: {{title}}",
     "uploadFailed": "Przesyłanie nie powiodło się: {{error}}",
     "updateAvailable": "Dostępna aktualizacja: v{{version}}"
+  },
+  "results": {
+    "tabs": {
+      "clips": "Clip vault"
+    },
+    "clips": {
+      "title": "Recommended clips",
+      "description": "Original game clips, ranked by the moments most worth watching.",
+      "sortLabel": "Sort clips",
+      "sortRecommended": "Best highlights",
+      "sortNewest": "Newest",
+      "game": "Game",
+      "select": "Select clip",
+      "play": "Play clip",
+      "loading": "Loading recorded clips...",
+      "loadingMore": "Loading more...",
+      "loadMore": "Load more games",
+      "loadError": "Could not load recorded clips.",
+      "skippedItems": "{{count}} damaged clip items were skipped.",
+      "emptyTitle": "No recorded clips yet",
+      "emptyDescription": "Play a game and your strongest moments will appear here.",
+      "unknownDate": "Date unavailable",
+      "clipCount": "{{count}} clips",
+      "selectGame": "Select all",
+      "clearGameSelection": "Clear game",
+      "gameRank": "This game #{{rank}}",
+      "selectionActions": "Selected clip actions",
+      "selectionSummary": "{{clips}} clips · {{games}} games · about {{duration}}",
+      "clearAll": "Clear all",
+      "createMontage": "Create montage",
+      "overTargetWarning": "Every selected scene will be included, so the finished video will be longer than the target."
+    }
   }
 }

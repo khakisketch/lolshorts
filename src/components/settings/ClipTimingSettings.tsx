@@ -23,16 +23,22 @@ interface ClipTimingSettingsProps {
   onChange: (settings: ClipTimingSettings) => void;
 }
 
-export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsProps) {
+export function ClipTimingSettings({
+  settings,
+  onChange,
+}: ClipTimingSettingsProps) {
   const { t } = useTranslation();
   const updateSetting = <K extends keyof ClipTimingSettings>(
     key: K,
-    value: ClipTimingSettings[K]
+    value: ClipTimingSettings[K],
   ) => {
     onChange({ ...settings, [key]: value });
   };
 
-  const updateEventTiming = (eventType: string, timing: Partial<EventTiming>) => {
+  const updateEventTiming = (
+    eventType: string,
+    timing: Partial<EventTiming>,
+  ) => {
     const currentTiming = settings.event_timings[eventType] || {
       pre_duration: settings.default_pre_duration,
       post_duration: settings.default_post_duration,
@@ -48,10 +54,12 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
   };
 
   const getEventTiming = (eventType: string): EventTiming => {
-    return settings.event_timings[eventType] || {
-      pre_duration: settings.default_pre_duration,
-      post_duration: settings.default_post_duration,
-    };
+    return (
+      settings.event_timings[eventType] || {
+        pre_duration: settings.default_pre_duration,
+        post_duration: settings.default_post_duration,
+      }
+    );
   };
 
   return (
@@ -76,10 +84,10 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
         <div className="mb-4">
           <h3 className="text-lg font-semibold text-base flex items-center gap-2">
             <Zap className="w-4 h-4" />
-            {t('settings.recordingConfig.clipTiming.eventSpecific.title')}
+            {t("settings.recordingConfig.clipTiming.eventSpecific.title")}
           </h3>
           <p className="text-sm text-muted-foreground">
-            {t('settings.recordingConfig.clipTiming.eventSpecific.description')}
+            {t("settings.recordingConfig.clipTiming.eventSpecific.description")}
           </p>
         </div>
         <div className="space-y-6">
@@ -87,17 +95,29 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <Label className="text-base">{t('settings.recordingConfig.clipTiming.eventSpecific.multikills.title')}</Label>
+                <Label className="text-base">
+                  {t(
+                    "settings.recordingConfig.clipTiming.eventSpecific.multikills.title",
+                  )}
+                </Label>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {t('settings.recordingConfig.clipTiming.eventSpecific.multikills.description')}
+                  {t(
+                    "settings.recordingConfig.clipTiming.eventSpecific.multikills.description",
+                  )}
                 </p>
               </div>
             </div>
             <div className="pl-4 space-y-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label className="text-sm">{t('settings.recordingConfig.clipTiming.eventSpecific.beforeEvent')}</Label>
-                  <Badge variant="outline">{getEventTiming("multikill").pre_duration}s</Badge>
+                  <Label className="text-sm">
+                    {t(
+                      "settings.recordingConfig.clipTiming.eventSpecific.beforeEvent",
+                    )}
+                  </Label>
+                  <Badge variant="outline">
+                    {getEventTiming("multikill").pre_duration}s
+                  </Badge>
                 </div>
                 <Slider
                   value={[getEventTiming("multikill").pre_duration]}
@@ -111,8 +131,14 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label className="text-sm">{t('settings.recordingConfig.clipTiming.eventSpecific.afterEvent')}</Label>
-                  <Badge variant="outline">{getEventTiming("multikill").post_duration}s</Badge>
+                  <Label className="text-sm">
+                    {t(
+                      "settings.recordingConfig.clipTiming.eventSpecific.afterEvent",
+                    )}
+                  </Label>
+                  <Badge variant="outline">
+                    {getEventTiming("multikill").post_duration}s
+                  </Badge>
                 </div>
                 <Slider
                   value={[getEventTiming("multikill").post_duration]}
@@ -131,17 +157,29 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <Label className="text-base">{t('settings.recordingConfig.clipTiming.eventSpecific.objectiveSteals.title')}</Label>
+                <Label className="text-base">
+                  {t(
+                    "settings.recordingConfig.clipTiming.eventSpecific.objectiveSteals.title",
+                  )}
+                </Label>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {t('settings.recordingConfig.clipTiming.eventSpecific.objectiveSteals.description')}
+                  {t(
+                    "settings.recordingConfig.clipTiming.eventSpecific.objectiveSteals.description",
+                  )}
                 </p>
               </div>
             </div>
             <div className="pl-4 space-y-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label className="text-sm">{t('settings.recordingConfig.clipTiming.eventSpecific.beforeEvent')}</Label>
-                  <Badge variant="outline">{getEventTiming("steal").pre_duration}s</Badge>
+                  <Label className="text-sm">
+                    {t(
+                      "settings.recordingConfig.clipTiming.eventSpecific.beforeEvent",
+                    )}
+                  </Label>
+                  <Badge variant="outline">
+                    {getEventTiming("steal").pre_duration}s
+                  </Badge>
                 </div>
                 <Slider
                   value={[getEventTiming("steal").pre_duration]}
@@ -155,8 +193,14 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label className="text-sm">{t('settings.recordingConfig.clipTiming.eventSpecific.afterEvent')}</Label>
-                  <Badge variant="outline">{getEventTiming("steal").post_duration}s</Badge>
+                  <Label className="text-sm">
+                    {t(
+                      "settings.recordingConfig.clipTiming.eventSpecific.afterEvent",
+                    )}
+                  </Label>
+                  <Badge variant="outline">
+                    {getEventTiming("steal").post_duration}s
+                  </Badge>
                 </div>
                 <Slider
                   value={[getEventTiming("steal").post_duration]}
@@ -175,17 +219,29 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <Label className="text-base">{t('settings.recordingConfig.clipTiming.eventSpecific.regularKills.title')}</Label>
+                <Label className="text-base">
+                  {t(
+                    "settings.recordingConfig.clipTiming.eventSpecific.regularKills.title",
+                  )}
+                </Label>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {t('settings.recordingConfig.clipTiming.eventSpecific.regularKills.description')}
+                  {t(
+                    "settings.recordingConfig.clipTiming.eventSpecific.regularKills.description",
+                  )}
                 </p>
               </div>
             </div>
             <div className="pl-4 space-y-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label className="text-sm">{t('settings.recordingConfig.clipTiming.eventSpecific.beforeEvent')}</Label>
-                  <Badge variant="outline">{getEventTiming("kill").pre_duration}s</Badge>
+                  <Label className="text-sm">
+                    {t(
+                      "settings.recordingConfig.clipTiming.eventSpecific.beforeEvent",
+                    )}
+                  </Label>
+                  <Badge variant="outline">
+                    {getEventTiming("kill").pre_duration}s
+                  </Badge>
                 </div>
                 <Slider
                   value={[getEventTiming("kill").pre_duration]}
@@ -199,8 +255,14 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label className="text-sm">{t('settings.recordingConfig.clipTiming.eventSpecific.afterEvent')}</Label>
-                  <Badge variant="outline">{getEventTiming("kill").post_duration}s</Badge>
+                  <Label className="text-sm">
+                    {t(
+                      "settings.recordingConfig.clipTiming.eventSpecific.afterEvent",
+                    )}
+                  </Label>
+                  <Badge variant="outline">
+                    {getEventTiming("kill").post_duration}s
+                  </Badge>
                 </div>
                 <Slider
                   value={[getEventTiming("kill").post_duration]}
@@ -220,37 +282,53 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
       {/* Event Merging */}
       <div className="gaming-panel p-6">
         <div className="mb-4">
-          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.clipTiming.eventMerging.title')}</h3>
+          <h3 className="text-lg font-semibold">
+            {t("settings.recordingConfig.clipTiming.eventMerging.title")}
+          </h3>
           <p className="text-sm text-muted-foreground">
-            {t('settings.recordingConfig.clipTiming.eventMerging.description')}
+            {t("settings.recordingConfig.clipTiming.eventMerging.description")}
           </p>
         </div>
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="merge_consecutive" className="cursor-pointer">
-                {t('settings.recordingConfig.clipTiming.eventMerging.mergeConsecutive')}
+                {t(
+                  "settings.recordingConfig.clipTiming.eventMerging.mergeConsecutive",
+                )}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('settings.recordingConfig.clipTiming.eventMerging.mergeConsecutiveDesc')}
+                {t(
+                  "settings.recordingConfig.clipTiming.eventMerging.mergeConsecutiveDesc",
+                )}
               </p>
             </div>
             <Switch
               id="merge_consecutive"
               checked={settings.merge_consecutive_events}
-              onCheckedChange={(checked: boolean) => updateSetting("merge_consecutive_events", checked)}
+              onCheckedChange={(checked: boolean) =>
+                updateSetting("merge_consecutive_events", checked)
+              }
             />
           </div>
 
           {settings.merge_consecutive_events && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <Label>{t('settings.recordingConfig.clipTiming.eventMerging.mergeTimeWindow')}</Label>
-                <Badge variant="secondary">{settings.merge_time_threshold}s</Badge>
+                <Label>
+                  {t(
+                    "settings.recordingConfig.clipTiming.eventMerging.mergeTimeWindow",
+                  )}
+                </Label>
+                <Badge variant="secondary">
+                  {settings.merge_time_threshold}s
+                </Badge>
               </div>
               <Slider
                 value={[settings.merge_time_threshold]}
-                onValueChange={([value]) => updateSetting("merge_time_threshold", value)}
+                onValueChange={([value]) =>
+                  updateSetting("merge_time_threshold", value)
+                }
                 min={5}
                 max={30}
                 step={1}
@@ -262,7 +340,10 @@ export function ClipTimingSettings({ settings, onChange }: ClipTimingSettingsPro
                 <span>30s</span>
               </div>
               <p className="text-xs text-muted-foreground">
-                {t('settings.recordingConfig.clipTiming.eventMerging.mergeExplanation', { seconds: settings.merge_time_threshold })}
+                {t(
+                  "settings.recordingConfig.clipTiming.eventMerging.mergeExplanation",
+                  { seconds: settings.merge_time_threshold },
+                )}
               </p>
             </div>
           )}

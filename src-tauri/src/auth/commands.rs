@@ -3,7 +3,7 @@ use crate::error::{AppError, AppResult};
 use crate::AppState;
 use serde::de::DeserializeOwned;
 use tauri::State;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 const PAYMENT_DEFERRED_REASON: &str =
     "Payment and PRO subscriptions are deferred until non-payment readiness gates pass.";
@@ -26,6 +26,7 @@ pub struct SessionSyncResponse {
     pub entitlement: EntitlementResponse,
 }
 
+#[cfg(test)]
 fn subscription_tier_from_license(license: &crate::supabase::License) -> SubscriptionTier {
     if license.tier == "PRO" && license_is_active(license) {
         SubscriptionTier::Pro
@@ -118,130 +119,6 @@ fn entitlement_from_license(license: Option<crate::supabase::License>) -> Entitl
 }
 
 #[tauri::command]
-pub async fn login(state: State<'_, AppState>, email: String, password: String) -> AppResult<User> {
-    info!("Login attempt for user: {}", email);
-
-    // Get Supabase client
-    let supabase_client = state
-        .auth
-        .get_supabase_client()
-        .map_err(|e| AppError::Internal(format!("Failed to get Supabase client: {}", e)))?;
-
-    // Authenticate with Supabase
-    let session = supabase_client
-        .sign_in(&email, &password)
-        .await
-        .map_err(|e| {
-            error!("Supabase sign-in failed: {}", e);
-            AppError::Auth(format!("Sign-in failed: {}", e))
-        })?;
-
-    // Fetch user's license tier from database
-    let tier = match supabase_client
-        .get_user_license(&session.user.id, &session.access_token)
-        .await
-    {
-        Ok(Some(license)) => {
-            info!(
-                "Fetched license for user: tier={}, status={:?}",
-                license.tier, license.status
-            );
-            subscription_tier_from_license(&license)
-        }
-        Ok(None) => {
-            info!("No license found for user, defaulting to Free tier");
-            SubscriptionTier::Free
-        }
-        Err(e) => {
-            error!("Failed to fetch license: {}, defaulting to Free tier", e);
-            SubscriptionTier::Free
-        }
-    };
-
-    let user = User {
-        id: session.user.id,
-        email: session.user.email,
-        tier,
-        access_token: session.access_token,
-        refresh_token: session.refresh_token,
-        expires_at: session.expires_at,
-    };
-
-    let _youtube_credential_guard = state.youtube_manager.lock_credential_operations().await;
-    state.youtube_manager.clear_app_auth_oauth_state().await;
-
-    state
-        .auth
-        .login(user.clone())
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    info!("Login successful for user: {}", user.email);
-    Ok(user)
-}
-
-#[tauri::command]
-pub async fn signup(
-    state: State<'_, AppState>,
-    email: String,
-    password: String,
-) -> AppResult<User> {
-    info!("Signup attempt for user: {}", email);
-
-    // Get Supabase client
-    let supabase_client = state
-        .auth
-        .get_supabase_client()
-        .map_err(|e| AppError::Internal(format!("Failed to get Supabase client: {}", e)))?;
-
-    // Create account with Supabase
-    let session = supabase_client
-        .sign_up(&email, &password)
-        .await
-        .map_err(|e| {
-            error!("Supabase sign-up failed: {}", e);
-            AppError::Auth(format!("Sign-up failed: {}", e))
-        })?;
-
-    // Fetch user's license tier from database (should be created by trigger)
-    let tier = match supabase_client
-        .get_user_license(&session.user.id, &session.access_token)
-        .await
-    {
-        Ok(Some(license)) => {
-            info!(
-                "License created for new user: tier={}, status={:?}",
-                license.tier, license.status
-            );
-            subscription_tier_from_license(&license)
-        }
-        Ok(None) | Err(_) => {
-            info!("Using default Free tier for new user");
-            SubscriptionTier::Free
-        }
-    };
-
-    let user = User {
-        id: session.user.id,
-        email: session.user.email,
-        tier,
-        access_token: session.access_token,
-        refresh_token: session.refresh_token,
-        expires_at: session.expires_at,
-    };
-
-    let _youtube_credential_guard = state.youtube_manager.lock_credential_operations().await;
-    state.youtube_manager.clear_app_auth_oauth_state().await;
-
-    state
-        .auth
-        .login(user.clone())
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    info!("Signup successful for user: {}", user.email);
-    Ok(user)
-}
-
-#[tauri::command]
 pub async fn logout(state: State<'_, AppState>) -> AppResult<()> {
     let _youtube_credential_guard = state.youtube_manager.lock_credential_operations().await;
     state.youtube_manager.clear_app_auth_oauth_state().await;
@@ -250,154 +127,6 @@ pub async fn logout(state: State<'_, AppState>) -> AppResult<()> {
         .auth
         .logout()
         .map_err(|e| AppError::Internal(e.to_string()))
-}
-
-#[tauri::command]
-pub async fn get_user_status(state: State<'_, AppState>) -> AppResult<Option<User>> {
-    state
-        .auth
-        .get_current_user()
-        .map_err(|e| AppError::Internal(e.to_string()))
-}
-
-#[tauri::command]
-pub async fn get_license_info(
-    state: State<'_, AppState>,
-) -> AppResult<Option<crate::supabase::License>> {
-    // Get current user
-    let user = state
-        .auth
-        .get_current_user()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    if let Some(user) = user {
-        // Get Supabase client
-        let supabase_client = state
-            .auth
-            .get_supabase_client()
-            .map_err(|e| AppError::Internal(format!("Failed to get Supabase client: {}", e)))?;
-
-        // Fetch license from database
-        supabase_client
-            .get_user_license(&user.id, &user.access_token)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))
-    } else {
-        Ok(None)
-    }
-}
-
-#[tauri::command]
-pub async fn refresh_token(state: State<'_, AppState>) -> AppResult<User> {
-    // Get current user
-    let current_user = state
-        .auth
-        .get_current_user()
-        .map_err(|e| AppError::Internal(e.to_string()))?
-        .ok_or_else(|| AppError::Auth("No user logged in".to_string()))?;
-
-    info!("Refreshing token for user: {}", current_user.email);
-
-    // Get Supabase client
-    let supabase_client = state
-        .auth
-        .get_supabase_client()
-        .map_err(|e| AppError::Internal(format!("Failed to get Supabase client: {}", e)))?;
-
-    // Refresh the session with Supabase
-    let session = supabase_client
-        .refresh_token(&current_user.refresh_token)
-        .await
-        .map_err(|e| {
-            error!("Token refresh failed: {}", e);
-            AppError::Auth(format!("Token refresh failed: {}", e))
-        })?;
-
-    let refreshed_license = supabase_client
-        .get_user_license(&current_user.id, &session.access_token)
-        .await
-        .ok()
-        .flatten();
-    let refreshed_entitlement = entitlement_from_license(refreshed_license);
-    let refreshed_tier = if refreshed_entitlement.tier == "PRO" {
-        SubscriptionTier::Pro
-    } else {
-        SubscriptionTier::Free
-    };
-
-    // Update user with new tokens and authoritative entitlement
-    let updated_user = User {
-        id: current_user.id,
-        email: current_user.email,
-        tier: refreshed_tier,
-        access_token: session.access_token,
-        refresh_token: session.refresh_token,
-        expires_at: session.expires_at,
-    };
-
-    // Update stored user
-    state
-        .auth
-        .login(updated_user.clone())
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    info!("Token refresh successful for user: {}", updated_user.email);
-    Ok(updated_user)
-}
-
-/// License info for frontend (matches TypeScript LicenseInfo interface)
-#[derive(serde::Serialize)]
-pub struct LicenseInfoResponse {
-    pub tier: String,
-    pub expires_at: Option<String>,
-    pub is_active: bool,
-}
-
-#[tauri::command]
-pub async fn get_user_license(state: State<'_, AppState>) -> AppResult<LicenseInfoResponse> {
-    // ... existing code ...
-    let user = state
-        .auth
-        .get_current_user()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    let user = user.ok_or_else(|| AppError::Auth("User not authenticated".to_string()))?;
-
-    // Get Supabase client
-    let supabase_client = state
-        .auth
-        .get_supabase_client()
-        .map_err(|e| AppError::Internal(format!("Failed to get Supabase client: {}", e)))?;
-
-    // Fetch license from database
-    let license = supabase_client
-        .get_user_license(&user.id, &user.access_token)
-        .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-    match license {
-        Some(license) => {
-            let is_active = license_is_active(&license);
-
-            Ok(LicenseInfoResponse {
-                tier: if is_active && license.tier == "PRO" {
-                    "PRO".to_string()
-                } else {
-                    "FREE".to_string()
-                },
-                expires_at: license.expires_at,
-                is_active,
-            })
-        }
-        None => {
-            // Default to FREE tier if no license found
-            Ok(LicenseInfoResponse {
-                tier: "FREE".to_string(),
-                expires_at: None,
-                is_active: true,
-            })
-        }
-    }
 }
 
 /// Return the current authoritative entitlement from Supabase user_licenses.
@@ -460,7 +189,16 @@ pub async fn set_session(
     email: String,
     expires_at: Option<i64>,
 ) -> AppResult<SessionSyncResponse> {
-    info!("Syncing session for user: {}", email);
+    // Keep account identifiers out of the persistent application log. The
+    // session is still fully validated below, but an email/user id is not
+    // needed to diagnose a renderer-to-Rust sync failure.
+    info!("Syncing Supabase session");
+
+    let previous_user_id = state
+        .auth
+        .get_current_user()
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map(|user| user.id);
 
     // Validate input
     if access_token.is_empty() || refresh_token.is_empty() {
@@ -478,26 +216,17 @@ pub async fn set_session(
         .map_err(|e| AppError::Internal(format!("Failed to get Supabase client: {}", e)))?;
 
     let verified_user = supabase_client.get_user(&access_token).await.map_err(|e| {
-        warn!(
-            "Token validation failed for claimed user {}: {}",
-            user_id, e
-        );
-        AppError::Auth(format!("Invalid token: {}", e))
+        warn!("Token validation failed during session sync: {}", e);
+        session_validation_error(e)
     })?;
 
     if verified_user.id != user_id {
-        warn!(
-            "Rejected session sync: token subject {} does not match claimed user {}",
-            verified_user.id, user_id
-        );
+        warn!("Rejected session sync: token subject does not match claimed user");
         return Err(AppError::Auth("Token subject mismatch".to_string()));
     }
 
     if !verified_user.email.eq_ignore_ascii_case(&email) {
-        warn!(
-            "Rejected session sync: token email {} does not match claimed email {}",
-            verified_user.email, email
-        );
+        warn!("Rejected session sync: token email does not match claimed email");
         return Err(AppError::Auth("Token email mismatch".to_string()));
     }
 
@@ -530,8 +259,13 @@ pub async fn set_session(
         expires_at: expires_at.unwrap_or_else(|| chrono::Utc::now().timestamp() + 3600),
     };
 
-    let _youtube_credential_guard = state.youtube_manager.lock_credential_operations().await;
-    state.youtube_manager.clear_app_auth_oauth_state().await;
+    // A token refresh for the same Supabase identity must not interrupt an
+    // active YouTube OAuth/upload session. Clear in-memory YouTube state only
+    // on an actual account boundary (including a fresh process login).
+    if session_identity_changed(previous_user_id.as_deref(), &user.id) {
+        let _youtube_credential_guard = state.youtube_manager.lock_credential_operations().await;
+        state.youtube_manager.clear_app_auth_oauth_state().await;
+    }
 
     state
         .auth
@@ -584,6 +318,7 @@ struct BillingErrorResponse {
     next_required_step: Option<String>,
 }
 
+#[cfg(test)]
 fn parse_payment_enabled(value: Option<&str>) -> bool {
     matches!(
         value.map(|value| value.trim().to_ascii_lowercase()),
@@ -592,7 +327,21 @@ fn parse_payment_enabled(value: Option<&str>) -> bool {
 }
 
 fn payment_live_enabled() -> bool {
-    parse_payment_enabled(std::env::var("LOLSHORTS_PAYMENT_ENABLED").ok().as_deref())
+    // This release line is the free public edition. Keep the server-backed
+    // billing commands fail-closed even if a user machine defines legacy env
+    // variables. Re-enabling sales requires a separately reviewed build.
+    false
+}
+
+fn session_identity_changed(previous_user_id: Option<&str>, next_user_id: &str) -> bool {
+    previous_user_id != Some(next_user_id)
+}
+
+fn session_validation_error(error: crate::supabase::SupabaseError) -> AppError {
+    match error {
+        crate::supabase::SupabaseError::HttpError(error) => AppError::Network(error.to_string()),
+        error => AppError::Auth(format!("Invalid token: {error}")),
+    }
 }
 
 fn billing_function_url(supabase_client: &crate::supabase::SupabaseClient) -> String {
@@ -891,6 +640,13 @@ pub async fn confirm_payment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_refresh_preserves_same_user_youtube_state() {
+        assert!(!session_identity_changed(Some("user-a"), "user-a"));
+        assert!(session_identity_changed(Some("user-a"), "user-b"));
+        assert!(session_identity_changed(None, "user-a"));
+    }
 
     fn test_license(
         tier: &str,

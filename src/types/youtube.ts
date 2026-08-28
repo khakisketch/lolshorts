@@ -17,7 +17,7 @@ export interface YouTubeVideo {
 /**
  * Privacy status enum (matches PrivacyStatus in Rust)
  */
-export type PrivacyStatus = 'public' | 'unlisted' | 'private';
+export type PrivacyStatus = "public" | "unlisted" | "private";
 
 /**
  * Video metadata for upload (matches VideoMetadata in Rust)
@@ -45,11 +45,11 @@ export interface UploadProgress {
 
 // Matches Rust UploadStatus enum (lowercase serialization)
 export type UploadStatus =
-  | 'initializing'
-  | 'uploading'
-  | 'processing'
-  | 'complete'
-  | 'failed';
+  | "initializing"
+  | "uploading"
+  | "processing"
+  | "complete"
+  | "failed";
 
 /**
  * Upload history entry (matches UploadHistoryEntry in Rust)
@@ -92,11 +92,11 @@ export interface UploadSchedule {
 
 // Matches Rust ScheduledUploadStatus enum (lowercase serialization)
 export type ScheduledUploadStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled';
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 /**
  * Pending scheduled upload entry (matches ScheduledUpload in Rust)

@@ -92,20 +92,21 @@ test.describe("Internationalization (i18n)", () => {
     ).toBeVisible();
 
     // 홈으로 — 화면 이름이 "대시보드" 에서 홈으로 바뀌었고, 제목은 그 화면이
-    // 무엇을 하는지 말한다("방금 만들어진 클립").
+    // 무엇을 하는지 말한다. 판 메타데이터를 못 얻으면 이 제목으로 떨어진다
+    // (얻으면 챔피언 이름이 제목이 된다 — `GameSummary`).
     await page.click('[data-testid="nav-dashboard"]');
     await expect(
-      page.getByRole("heading", { name: "방금 만들어진 클립" }),
+      page.getByRole("heading", { name: "이번 판 하이라이트" }),
     ).toBeVisible({ timeout: 10000 });
 
     // 결과로 — `nav-games` 는 사라졌다(가진 것은 모두 결과에 있다).
-    await page.click('[data-testid="nav-results"]');
+    await page.click('[data-testid="nav-library"]');
     await expect(page).toHaveURL(/\/results/);
   });
 
   test("should translate the home page correctly", async ({ page }) => {
     await expect(
-      page.getByRole("heading", { name: /Fresh clips/i }),
+      page.getByRole("heading", { name: /This game's highlights/i }),
     ).toBeVisible();
 
     await openSettings(page);
@@ -113,7 +114,7 @@ test.describe("Internationalization (i18n)", () => {
 
     await page.click('[data-testid="nav-dashboard"]');
 
-    await expect(page.getByText(/방금 만들어진 클립/).first()).toBeVisible();
+    await expect(page.getByText(/이번 판 하이라이트/).first()).toBeVisible();
   });
 
   test("should translate Settings page completely", async ({ page }) => {

@@ -55,11 +55,13 @@ test.describe('Auth Modal UI', () => {
     expect(isInvalid).toBeTruthy();
   });
 
-  test('should show Google login button', async ({ page }) => {
+  test('should expose only the supported desktop email login', async ({ page }) => {
     await page.getByTestId('sidebar-login-button').click();
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
 
-    await expect(page.getByTestId('google-login-button')).toBeVisible();
+    await expect(page.getByTestId('email-input')).toBeVisible();
+    await expect(page.getByTestId('password-input')).toBeVisible();
+    await expect(page.getByTestId('google-login-button')).toHaveCount(0);
   });
 
   test('should close modal when dialog is dismissed', async ({ page }) => {
@@ -111,12 +113,13 @@ test.describe('Signup Form', () => {
     }
   });
 
-  test('should show Google signup button', async ({ page }) => {
+  test('should expose only the supported desktop email signup', async ({ page }) => {
     const dialog = page.getByRole('dialog');
     const signupBtn = dialog.locator('button').filter({ hasText: /sign up|create account|register|회원가입/i }).first();
     if (await signupBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
       await signupBtn.click({ force: true });
-      await expect(page.getByTestId('google-signup-button')).toBeVisible({ timeout: 5000 });
+      await expect(page.getByTestId('signup-email-input')).toBeVisible({ timeout: 5000 });
+      await expect(page.getByTestId('google-signup-button')).toHaveCount(0);
     }
   });
 });

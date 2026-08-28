@@ -28,8 +28,9 @@ LoLShorts is a desktop application that:
 
 - **Local Processing**: All video analysis and editing happens on user's PC (no cloud upload)
 - **Segment-Based Recording**: Circular buffer of 60-second replay window for instant clip extraction
-- **Hardware Acceleration**: Supports NVIDIA (NVENC), AMD (AMF), Intel (QSV) encoding
-- **Cross-Platform**: Windows primary, macOS/Linux support via conditional compilation
+- **Official runtime target**: Windows 11 x64 with NVIDIA NVENC. AMD, Intel, CPU,
+  macOS, and Linux code paths remain experimental fallbacks and are not covered by
+  the public-release support or performance guarantee.
 - **Modular Architecture**: Independent modules for recording, video, auth, YouTube integration
 
 ---
@@ -659,15 +660,16 @@ Benefits:
 - **Screen Capture**: GDI (gdigrab via FFmpeg)
 - **Audio**: WASAPI (Windows Audio Session API)
 - **Process Monitoring**: Windows API (EnumWindows)
-- **GPU Encoding**: NVIDIA NVENC, AMD AMF, Intel QSV
+- **GPU Encoding**: NVIDIA NVENC (official); AMD AMF, Intel QSV, and software
+  encoding are retained as experimental fallbacks
 
-#### macOS
+#### macOS (experimental, not release-supported)
 - **Screen Capture**: AVFoundation (AVCaptureSession)
 - **Audio**: CoreAudio / AVFoundation
 - **Process Monitoring**: macOS API (GetProcesses)
 - **GPU Encoding**: Apple Video Toolbox (H.264/H.265)
 
-#### Linux
+#### Linux (experimental, not release-supported)
 - **Screen Capture**: X11 with xdamage or Wayland
 - **Audio**: ALSA or PulseAudio
 - **Process Monitoring**: /proc filesystem
@@ -676,6 +678,12 @@ Benefits:
 ---
 
 ## Performance Considerations
+
+The values in this section are design targets and historical observations, not a
+current release guarantee. A release must carry fresh Windows 11 + NVIDIA field
+evidence from the E5 packet (two 90-minute runs, capture/drop/FPS/bitrate/VMAF,
+memory growth, clip-save latency, and clean shutdown) before these claims can be
+used as acceptance criteria.
 
 ### Memory Management
 

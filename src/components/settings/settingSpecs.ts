@@ -121,7 +121,10 @@ export function qualitySpecs(video: {
   }
   if (mbps !== undefined) {
     rows.push({ key: "bitrate", value: `${mbps} Mbps` });
-    rows.push({ key: "sizePerMinute", value: `${megabytesPerMinute(mbps)} MB` });
+    rows.push({
+      key: "sizePerMinute",
+      value: `${megabytesPerMinute(mbps)} MB`,
+    });
   }
   return rows;
 }

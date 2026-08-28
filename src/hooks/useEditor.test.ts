@@ -273,7 +273,11 @@ describe("useEditor", () => {
         act(async () => {
           await result.current.composeShorts(
             [],
-            { aspectRatio: "9:16", transitionType: "none", transitionDuration: 0 },
+            {
+              aspectRatio: "9:16",
+              transitionType: "none",
+              transitionDuration: 0,
+            },
             "/output.mp4",
           );
         }),

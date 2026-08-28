@@ -1,17 +1,23 @@
-import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
-import { useToast } from '@/components/ui/use-toast';
-import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
-import { Slider } from '@/components/ui/slider';
-import { Separator } from '@/components/ui/separator';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, Gauge, Palette, Type, Sparkles, Layers } from 'lucide-react';
-import { getErrorMessage } from '@/lib/utils';
-import { logger } from '@/lib/logger';
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
+import { useToast } from "@/components/ui/use-toast";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
+import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Loader2, Gauge, Palette, Type, Sparkles, Layers } from "lucide-react";
+import { getErrorMessage } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 interface EffectsPanelProps {
   inputPath: string | null;
@@ -33,10 +39,10 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
   const [isApplyingColorGrading, setIsApplyingColorGrading] = useState(false);
 
   // Text overlay state
-  const [overlayText, setOverlayText] = useState('');
-  const [textPosition, setTextPosition] = useState('center');
+  const [overlayText, setOverlayText] = useState("");
+  const [textPosition, setTextPosition] = useState("center");
   const [textSize, setTextSize] = useState(48);
-  const [textColor, setTextColor] = useState('WHITE');
+  const [textColor, setTextColor] = useState("WHITE");
   const [isApplyingText, setIsApplyingText] = useState(false);
 
   // Chained effects state
@@ -49,26 +55,26 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
   };
 
   const handleApplySlowMotion = async () => {
-    const output = generateOutputPath('slowmo');
+    const output = generateOutputPath("slowmo");
     if (!inputPath || !output) return;
 
     setIsApplyingSlowMotion(true);
     try {
-      const result = await invoke<string>('apply_slow_motion_cmd', {
+      const result = await invoke<string>("apply_slow_motion_cmd", {
         input: inputPath,
         output,
         speedFactor: slowMotionSpeed,
       });
       toast({
-        title: t('editor.effects.slowMotionApplied', 'Slow motion applied'),
+        title: t("editor.effects.slowMotionApplied", "Slow motion applied"),
         description: result,
       });
     } catch (error) {
-      logger.error('Failed to apply slow motion:', error);
+      logger.error("Failed to apply slow motion:", error);
       toast({
-        title: t('toast.error'),
+        title: t("toast.error"),
         description: getErrorMessage(error),
-        variant: 'destructive',
+        variant: "destructive",
       });
     } finally {
       setIsApplyingSlowMotion(false);
@@ -76,12 +82,12 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
   };
 
   const handleApplyColorGrading = async () => {
-    const output = generateOutputPath('color');
+    const output = generateOutputPath("color");
     if (!inputPath || !output) return;
 
     setIsApplyingColorGrading(true);
     try {
-      const result = await invoke<string>('apply_color_grading_cmd', {
+      const result = await invoke<string>("apply_color_grading_cmd", {
         input: inputPath,
         output,
         brightness,
@@ -89,15 +95,15 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
         saturation,
       });
       toast({
-        title: t('editor.effects.colorGradingApplied', 'Color grading applied'),
+        title: t("editor.effects.colorGradingApplied", "Color grading applied"),
         description: result,
       });
     } catch (error) {
-      logger.error('Failed to apply color grading:', error);
+      logger.error("Failed to apply color grading:", error);
       toast({
-        title: t('toast.error'),
+        title: t("toast.error"),
         description: getErrorMessage(error),
-        variant: 'destructive',
+        variant: "destructive",
       });
     } finally {
       setIsApplyingColorGrading(false);
@@ -105,12 +111,12 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
   };
 
   const handleApplyTextOverlay = async () => {
-    const output = generateOutputPath('text');
+    const output = generateOutputPath("text");
     if (!inputPath || !output || !overlayText.trim()) return;
 
     setIsApplyingText(true);
     try {
-      const result = await invoke<string>('apply_text_overlay_cmd', {
+      const result = await invoke<string>("apply_text_overlay_cmd", {
         input: inputPath,
         output,
         text: overlayText,
@@ -119,15 +125,15 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
         color: textColor,
       });
       toast({
-        title: t('editor.effects.textOverlayApplied', 'Text overlay applied'),
+        title: t("editor.effects.textOverlayApplied", "Text overlay applied"),
         description: result,
       });
     } catch (error) {
-      logger.error('Failed to apply text overlay:', error);
+      logger.error("Failed to apply text overlay:", error);
       toast({
-        title: t('toast.error'),
+        title: t("toast.error"),
         description: getErrorMessage(error),
-        variant: 'destructive',
+        variant: "destructive",
       });
     } finally {
       setIsApplyingText(false);
@@ -136,7 +142,7 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
 
   const handleApplyAllEffects = async () => {
     if (!hasAnyEffect) return;
-    const output = generateOutputPath('chained');
+    const output = generateOutputPath("chained");
     if (!inputPath || !output) return;
 
     setIsApplyingAll(true);
@@ -169,21 +175,21 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
         };
       }
 
-      const result = await invoke<string>('apply_chained_effects_cmd', {
+      const result = await invoke<string>("apply_chained_effects_cmd", {
         input: inputPath,
         output,
         effects,
       });
       toast({
-        title: t('editor.effects.allEffectsApplied', 'All effects applied'),
+        title: t("editor.effects.allEffectsApplied", "All effects applied"),
         description: result,
       });
     } catch (error) {
-      logger.error('Failed to apply chained effects:', error);
+      logger.error("Failed to apply chained effects:", error);
       toast({
-        title: t('toast.error'),
+        title: t("toast.error"),
         description: getErrorMessage(error),
-        variant: 'destructive',
+        variant: "destructive",
       });
     } finally {
       setIsApplyingAll(false);
@@ -205,7 +211,9 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
       <div className="p-4 border-b">
         <div className="flex items-center gap-2">
           <Sparkles className="w-5 h-5" />
-          <h3 className="font-semibold">{t('editor.effects.title', 'Video Effects')}</h3>
+          <h3 className="font-semibold">
+            {t("editor.effects.title", "Video Effects")}
+          </h3>
         </div>
       </div>
 
@@ -213,7 +221,10 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
         {isDisabled && (
           <Alert>
             <AlertDescription>
-              {t('editor.effects.selectClipFirst', 'Select a clip to apply effects.')}
+              {t(
+                "editor.effects.selectClipFirst",
+                "Select a clip to apply effects.",
+              )}
             </AlertDescription>
           </Alert>
         )}
@@ -222,14 +233,18 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
         <div className="bg-black/40 rounded-lg border border-white/5 p-4 space-y-4">
           <div className="flex items-center gap-2">
             <Gauge className="w-4 h-4" />
-            <h4 className="font-medium">{t('editor.effects.slowMotion', 'Slow Motion')}</h4>
+            <h4 className="font-medium">
+              {t("editor.effects.slowMotion", "Slow Motion")}
+            </h4>
           </div>
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label htmlFor="slow-motion-speed">
-                {t('editor.effects.speed', 'Speed')}
+                {t("editor.effects.speed", "Speed")}
               </Label>
-              <span className="text-sm text-muted-foreground">{slowMotionSpeed.toFixed(2)}x</span>
+              <span className="text-sm text-muted-foreground">
+                {slowMotionSpeed.toFixed(2)}x
+              </span>
             </div>
             <Slider
               id="slow-motion-speed"
@@ -241,7 +256,10 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
               disabled={isDisabled}
             />
             <p className="text-xs text-muted-foreground">
-              {t('editor.effects.slowMotionHint', '0.25x = very slow, 0.75x = slightly slow')}
+              {t(
+                "editor.effects.slowMotionHint",
+                "0.25x = very slow, 0.75x = slightly slow",
+              )}
             </p>
           </div>
           <Button
@@ -255,7 +273,7 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
             ) : (
               <Gauge className="w-4 h-4 mr-2" />
             )}
-            {t('editor.effects.applySlowMotion', 'Apply Slow Motion')}
+            {t("editor.effects.applySlowMotion", "Apply Slow Motion")}
           </Button>
         </div>
 
@@ -265,13 +283,19 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
         <div className="bg-black/40 rounded-lg border border-white/5 p-4 space-y-4">
           <div className="flex items-center gap-2">
             <Palette className="w-4 h-4" />
-            <h4 className="font-medium">{t('editor.effects.colorGrading', 'Color Grading')}</h4>
+            <h4 className="font-medium">
+              {t("editor.effects.colorGrading", "Color Grading")}
+            </h4>
           </div>
           <div className="space-y-3">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="brightness">{t('editor.effects.brightness', 'Brightness')}</Label>
-                <span className="text-sm text-muted-foreground">{brightness.toFixed(2)}</span>
+                <Label htmlFor="brightness">
+                  {t("editor.effects.brightness", "Brightness")}
+                </Label>
+                <span className="text-sm text-muted-foreground">
+                  {brightness.toFixed(2)}
+                </span>
               </div>
               <Slider
                 id="brightness"
@@ -285,8 +309,12 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="contrast">{t('editor.effects.contrast', 'Contrast')}</Label>
-                <span className="text-sm text-muted-foreground">{contrast.toFixed(2)}</span>
+                <Label htmlFor="contrast">
+                  {t("editor.effects.contrast", "Contrast")}
+                </Label>
+                <span className="text-sm text-muted-foreground">
+                  {contrast.toFixed(2)}
+                </span>
               </div>
               <Slider
                 id="contrast"
@@ -300,8 +328,12 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="saturation">{t('editor.effects.saturation', 'Saturation')}</Label>
-                <span className="text-sm text-muted-foreground">{saturation.toFixed(2)}</span>
+                <Label htmlFor="saturation">
+                  {t("editor.effects.saturation", "Saturation")}
+                </Label>
+                <span className="text-sm text-muted-foreground">
+                  {saturation.toFixed(2)}
+                </span>
               </div>
               <Slider
                 id="saturation"
@@ -325,7 +357,7 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
             ) : (
               <Palette className="w-4 h-4 mr-2" />
             )}
-            {t('editor.effects.applyColorGrading', 'Apply Color Grading')}
+            {t("editor.effects.applyColorGrading", "Apply Color Grading")}
           </Button>
         </div>
 
@@ -335,38 +367,70 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
         <div className="bg-black/40 rounded-lg border border-white/5 p-4 space-y-4">
           <div className="flex items-center gap-2">
             <Type className="w-4 h-4" />
-            <h4 className="font-medium">{t('editor.effects.textOverlay', 'Text Overlay')}</h4>
+            <h4 className="font-medium">
+              {t("editor.effects.textOverlay", "Text Overlay")}
+            </h4>
           </div>
           <div className="space-y-3">
             <div className="space-y-2">
-              <Label htmlFor="overlay-text">{t('editor.effects.text', 'Text')}</Label>
+              <Label htmlFor="overlay-text">
+                {t("editor.effects.text", "Text")}
+              </Label>
               <Input
                 id="overlay-text"
                 value={overlayText}
                 onChange={(e) => setOverlayText(e.target.value)}
-                placeholder={t('editor.effects.textPlaceholder', 'Enter overlay text...')}
+                placeholder={t(
+                  "editor.effects.textPlaceholder",
+                  "Enter overlay text...",
+                )}
                 disabled={isDisabled}
               />
             </div>
             <div className="flex gap-3">
               <div className="flex-1 space-y-2">
-                <Label htmlFor="text-position">{t('editor.effects.position', 'Position')}</Label>
-                <Select value={textPosition} onValueChange={setTextPosition} disabled={isDisabled}>
+                <Label htmlFor="text-position">
+                  {t("editor.effects.position", "Position")}
+                </Label>
+                <Select
+                  value={textPosition}
+                  onValueChange={setTextPosition}
+                  disabled={isDisabled}
+                >
                   <SelectTrigger id="text-position" className="h-8 text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="topleft">{t('editor.effects.positions.topLeft', 'Top Left')}</SelectItem>
-                    <SelectItem value="topright">{t('editor.effects.positions.topRight', 'Top Right')}</SelectItem>
-                    <SelectItem value="center">{t('editor.effects.positions.center', 'Center')}</SelectItem>
-                    <SelectItem value="bottomleft">{t('editor.effects.positions.bottomLeft', 'Bottom Left')}</SelectItem>
-                    <SelectItem value="bottomright">{t('editor.effects.positions.bottomRight', 'Bottom Right')}</SelectItem>
+                    <SelectItem value="topleft">
+                      {t("editor.effects.positions.topLeft", "Top Left")}
+                    </SelectItem>
+                    <SelectItem value="topright">
+                      {t("editor.effects.positions.topRight", "Top Right")}
+                    </SelectItem>
+                    <SelectItem value="center">
+                      {t("editor.effects.positions.center", "Center")}
+                    </SelectItem>
+                    <SelectItem value="bottomleft">
+                      {t("editor.effects.positions.bottomLeft", "Bottom Left")}
+                    </SelectItem>
+                    <SelectItem value="bottomright">
+                      {t(
+                        "editor.effects.positions.bottomRight",
+                        "Bottom Right",
+                      )}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="flex-1 space-y-2">
-                <Label htmlFor="text-color">{t('editor.effects.color', 'Color')}</Label>
-                <Select value={textColor} onValueChange={setTextColor} disabled={isDisabled}>
+                <Label htmlFor="text-color">
+                  {t("editor.effects.color", "Color")}
+                </Label>
+                <Select
+                  value={textColor}
+                  onValueChange={setTextColor}
+                  disabled={isDisabled}
+                >
                   <SelectTrigger id="text-color" className="h-8 text-xs">
                     <SelectValue />
                   </SelectTrigger>
@@ -383,8 +447,12 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="text-size">{t('editor.effects.fontSize', 'Font Size')}</Label>
-                <span className="text-sm text-muted-foreground">{textSize}px</span>
+                <Label htmlFor="text-size">
+                  {t("editor.effects.fontSize", "Font Size")}
+                </Label>
+                <span className="text-sm text-muted-foreground">
+                  {textSize}px
+                </span>
               </div>
               <Slider
                 id="text-size"
@@ -408,7 +476,7 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
             ) : (
               <Type className="w-4 h-4 mr-2" />
             )}
-            {t('editor.effects.applyTextOverlay', 'Apply Text Overlay')}
+            {t("editor.effects.applyTextOverlay", "Apply Text Overlay")}
           </Button>
         </div>
 
@@ -418,10 +486,15 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
         <div className="bg-black/40 rounded-lg border border-white/5 p-4 space-y-2">
           <div className="flex items-center gap-2">
             <Layers className="w-4 h-4" />
-            <h4 className="font-medium">{t('editor.effects.chainedEffects', 'Chained Effects')}</h4>
+            <h4 className="font-medium">
+              {t("editor.effects.chainedEffects", "Chained Effects")}
+            </h4>
           </div>
           <p className="text-xs text-muted-foreground">
-            {t('editor.effects.chainedHint', 'Apply slow motion, color grading, and text overlay in a single pass for better performance.')}
+            {t(
+              "editor.effects.chainedHint",
+              "Apply slow motion, color grading, and text overlay in a single pass for better performance.",
+            )}
           </p>
           <Button
             size="sm"
@@ -435,7 +508,7 @@ export function EffectsPanel({ inputPath, outputDir }: EffectsPanelProps) {
             ) : (
               <Layers className="w-4 h-4 mr-2" />
             )}
-            {t('editor.effects.applyAllEffects', 'Apply All Effects')}
+            {t("editor.effects.applyAllEffects", "Apply All Effects")}
           </Button>
         </div>
       </div>

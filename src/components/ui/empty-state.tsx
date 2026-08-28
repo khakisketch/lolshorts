@@ -1,7 +1,7 @@
-import { cn } from "@/lib/utils"
-import { Button } from "./button"
-import { LucideIcon } from "lucide-react"
-import { ReactNode } from "react"
+import { cn } from "@/lib/utils";
+import { Button } from "./button";
+import { LucideIcon } from "lucide-react";
+import { ReactNode } from "react";
 
 interface EmptyStateProps {
   icon?: LucideIcon;
@@ -41,7 +41,7 @@ const sizeClasses = {
     title: "text-xl",
     description: "text-base",
   },
-}
+};
 
 export function EmptyState({
   icon: Icon,
@@ -54,24 +54,20 @@ export function EmptyState({
   className,
   size = "md",
 }: EmptyStateProps) {
-  const sizes = sizeClasses[size]
+  const sizes = sizeClasses[size];
 
   return (
     <div
       className={cn(
         "flex flex-col items-center justify-center text-center",
         sizes.container,
-        className
+        className,
       )}
     >
       {Icon && (
         <div className="rounded-full bg-muted p-4 mb-4">
           <Icon
-            className={cn(
-              "text-muted-foreground",
-              sizes.icon,
-              iconClassName
-            )}
+            className={cn("text-muted-foreground", sizes.icon, iconClassName)}
           />
         </div>
       )}
@@ -80,7 +76,7 @@ export function EmptyState({
         <p
           className={cn(
             "text-muted-foreground max-w-sm mb-6",
-            sizes.description
+            sizes.description,
           )}
         >
           {description}
@@ -109,7 +105,7 @@ export function EmptyState({
       )}
       {children}
     </div>
-  )
+  );
 }
 
 // Preset empty states for common scenarios
@@ -118,38 +114,53 @@ interface PresetEmptyStateProps {
   className?: string;
 }
 
-export function EmptyStateNoGames({ onAction, className }: PresetEmptyStateProps) {
+export function EmptyStateNoGames({
+  onAction,
+  className,
+}: PresetEmptyStateProps) {
   return (
     <EmptyState
       icon={undefined}
       title="No games recorded"
       description="Start playing a game with League of Legends running, and your games will be automatically recorded here."
-      action={onAction ? { label: "Go to Dashboard", onClick: onAction } : undefined}
+      action={
+        onAction ? { label: "Go to Dashboard", onClick: onAction } : undefined
+      }
       className={className}
     />
-  )
+  );
 }
 
-export function EmptyStateNoClips({ onAction, className }: PresetEmptyStateProps) {
+export function EmptyStateNoClips({
+  onAction,
+  className,
+}: PresetEmptyStateProps) {
   return (
     <EmptyState
       icon={undefined}
       title="No clips yet"
       description="Play a game to capture highlights, or select a game from your library to start editing."
-      action={onAction ? { label: "Browse Games", onClick: onAction } : undefined}
+      action={
+        onAction ? { label: "Browse Games", onClick: onAction } : undefined
+      }
       className={className}
     />
-  )
+  );
 }
 
-export function EmptyStateNoResults({ onAction, className }: PresetEmptyStateProps) {
+export function EmptyStateNoResults({
+  onAction,
+  className,
+}: PresetEmptyStateProps) {
   return (
     <EmptyState
       icon={undefined}
       title="No results found"
       description="Try adjusting your search or filter criteria."
-      action={onAction ? { label: "Clear Filters", onClick: onAction } : undefined}
+      action={
+        onAction ? { label: "Clear Filters", onClick: onAction } : undefined
+      }
       className={className}
     />
-  )
+  );
 }

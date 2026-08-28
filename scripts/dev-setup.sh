@@ -15,7 +15,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration
-REPO_URL="https://github.com/LoLShorts/lolshorts.git"
+REPO_URL="https://github.com/khakisketch/lolshorts.git"
 DEV_DIR="$HOME/Development"
 PROJECT_NAME="lolshorts"
 
@@ -119,7 +119,8 @@ install_rust() {
 
     # Install useful Rust tools
     log_command "Installing Rust development tools..."
-    cargo install cargo-audit cargo-outdated cargo-deny cargo-watch
+    cargo install cargo-audit --version 0.22.2 --locked
+    cargo install cargo-outdated cargo-deny cargo-watch
 
     # Add platform-specific targets
     case $PLATFORM in

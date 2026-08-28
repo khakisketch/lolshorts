@@ -1,153 +1,217 @@
-# LoLShorts FFmpeg Preparation Script
-# This script downloads and prepares FFmpeg for bundling with the installer
-# Run this before building the production installer
+<#
+Prepare the Windows FFmpeg/ffprobe executables required by Tauri externalBin.
+
+Development prefers already-installed, executable tools. Release automation can
+request the immutable, checksum-pinned BtbN archive with `-Source Download`.
+The output path is resolved from this script, never from the caller's current
+directory.
+#>
+[CmdletBinding()]
+param(
+    [ValidateSet("Auto", "System", "Download")]
+    [string]$Source = "Auto",
+
+    [switch]$Force,
+
+    [string]$FfmpegPath = "",
+
+    [string]$FfprobePath = "",
+
+    [string]$DownloadUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-20-13-45/ffmpeg-N-126229-gf101fce22d-win64-gpl.zip",
+
+    [ValidatePattern("^[0-9a-fA-F]{64}$")]
+    [string]$ExpectedSha256 = "c4e072ab7d22f9bfddfedc0acd3c0613120475345b51a6a245d42faa05a7349b"
+)
 
 $ErrorActionPreference = "Stop"
+$BuildScriptsDir = $PSScriptRoot
+$TauriDir = Split-Path -Parent $BuildScriptsDir
+$BinDir = Join-Path $TauriDir "binaries"
+$FfmpegTarget = Join-Path $BinDir "ffmpeg-x86_64-pc-windows-msvc.exe"
+$FfprobeTarget = Join-Path $BinDir "ffprobe-x86_64-pc-windows-msvc.exe"
 
-# Configuration
-$FFMPEG_VERSION = "7.1"
-$DOWNLOAD_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-$TEMP_DIR = ".\temp_ffmpeg"
-$BIN_DIR = "..\binaries"
-
-Write-Host "🎬 LoLShorts FFmpeg Preparation" -ForegroundColor Cyan
-Write-Host "=================================" -ForegroundColor Cyan
-Write-Host ""
-
-# Create bin directory if it doesn't exist
-if (-not (Test-Path $BIN_DIR)) {
-    Write-Host "📁 Creating bin directory..." -ForegroundColor Yellow
-    New-Item -ItemType Directory -Path $BIN_DIR | Out-Null
-}
-
-# Target filenames for Tauri Sidecar
-$ffmpegTargetName = "ffmpeg-x86_64-pc-windows-msvc.exe"
-$ffprobeTargetName = "ffprobe-x86_64-pc-windows-msvc.exe"
-
-# Check if FFmpeg already exists
-$ffmpegPath = Join-Path $BIN_DIR $ffmpegTargetName
-$ffprobePath = Join-Path $BIN_DIR $ffprobeTargetName
-$forceDownload = ($env:LOLSHORTS_FORCE_FFMPEG_DOWNLOAD -eq "1") -or ($env:FORCE_FFMPEG_DOWNLOAD -eq "1")
-
-function Test-ToolVersion {
+function Test-MediaTool {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$ToolName
+        [Parameter(Mandatory = $true)][ValidateSet("ffmpeg", "ffprobe")][string]$Name,
+        [switch]$Quiet
     )
 
-    if (-not (Test-Path $Path)) {
-        return $false
-    }
-
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     try {
-        $versionOutput = & $Path -version 2>&1
-        $firstLine = $versionOutput | Select-Object -First 1
-        if ($LASTEXITCODE -eq 0 -and "$firstLine".StartsWith("$ToolName version")) {
-            Write-Host "📦 Current $ToolName version: $firstLine" -ForegroundColor Cyan
-            return $true
-        }
-
-        Write-Host "⚠️ Existing $ToolName binary failed version validation: $firstLine" -ForegroundColor Yellow
-        return $false
+        $firstLine = (& $Path -version 2>$null | Select-Object -First 1)
+        # Capturing the first pipeline item can leave LASTEXITCODE unset on
+        # Windows PowerShell even though the executable succeeded. A valid
+        # tool-identifying version line is the portable contract we need here.
+        $valid = "$firstLine".StartsWith("$Name version")
+        if ($valid -and -not $Quiet) { Write-Host "Validated $firstLine" }
+        return $valid
     } catch {
-        Write-Host "⚠️ Existing $ToolName binary could not be executed: $_" -ForegroundColor Yellow
         return $false
     }
 }
 
-if ((Test-Path $ffmpegPath) -or (Test-Path $ffprobePath)) {
-    $ffmpegValid = Test-ToolVersion -Path $ffmpegPath -ToolName "ffmpeg"
-    $ffprobeValid = Test-ToolVersion -Path $ffprobePath -ToolName "ffprobe"
+function Get-MediaToolVersionToken {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][ValidateSet("ffmpeg", "ffprobe")][string]$Name
+    )
 
-    if ($ffmpegValid -and $ffprobeValid -and -not $forceDownload) {
-        Write-Host "✅ Valid FFmpeg binaries already exist in binaries directory" -ForegroundColor Green
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try {
+        $firstLine = (& $Path -version 2>$null | Select-Object -First 1)
+        $match = [regex]::Match("$firstLine", "^$Name version ([^\s]+)")
+        if ($match.Success) { return $match.Groups[1].Value }
+    } catch {
+        return $null
+    }
+    return $null
+}
 
-        if ($env:CI -eq "true") {
-            Write-Host "✅ CI Environment detected, skipping re-download" -ForegroundColor Green
-            exit 0
+function Test-CompatibleMediaPair {
+    param(
+        [Parameter(Mandatory = $true)][string]$FfmpegPath,
+        [Parameter(Mandatory = $true)][string]$FfprobePath
+    )
+
+    $ffmpegVersion = Get-MediaToolVersionToken -Path $FfmpegPath -Name "ffmpeg"
+    $ffprobeVersion = Get-MediaToolVersionToken -Path $FfprobePath -Name "ffprobe"
+    return $ffmpegVersion -and $ffprobeVersion -and
+        [System.StringComparer]::OrdinalIgnoreCase.Equals($ffmpegVersion, $ffprobeVersion)
+}
+
+function Resolve-SystemMediaTool {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("ffmpeg", "ffprobe")][string]$Name,
+        [string]$ExplicitPath = ""
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) { $candidates.Add($ExplicitPath) }
+
+    $environmentName = "LOLSHORTS_$($Name.ToUpperInvariant())_PATH"
+    $environmentPath = [Environment]::GetEnvironmentVariable($environmentName)
+    if (-not [string]::IsNullOrWhiteSpace($environmentPath)) { $candidates.Add($environmentPath) }
+
+    $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) { $candidates.Add($command.Source) }
+
+    # Chocolatey exposes small shim executables on PATH. Prefer the real static
+    # executable inside the package when it is available.
+    $chocolateyRoot = [Environment]::GetEnvironmentVariable("ChocolateyInstall")
+    if ([string]::IsNullOrWhiteSpace($chocolateyRoot)) { $chocolateyRoot = "C:\ProgramData\chocolatey" }
+    $chocolateyLib = Join-Path $chocolateyRoot "lib"
+    if (Test-Path -LiteralPath $chocolateyLib -PathType Container) {
+        Get-ChildItem -LiteralPath $chocolateyLib -Recurse -Filter "$Name.exe" -File -ErrorAction SilentlyContinue |
+            Sort-Object Length -Descending |
+            ForEach-Object { $candidates.Add($_.FullName) }
+    }
+
+    foreach ($candidate in @($candidates | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        # Exclude package-manager shims; a copied shim is not a self-contained
+        # Tauri sidecar even if it works in its original installation directory.
+        if ((Get-Item -LiteralPath $candidate).Length -lt 1MB) { continue }
+        if (Test-MediaTool -Path $candidate -Name $Name -Quiet) {
+            return (Resolve-Path -LiteralPath $candidate).Path
         }
+    }
+    return $null
+}
 
-        $response = Read-Host "Do you want to re-download FFmpeg? (y/N)"
-        if ($response -ne "y") {
-            Write-Host "✅ Using existing FFmpeg binaries" -ForegroundColor Green
-            exit 0
-        }
-    } else {
-        Write-Host "⚠️ Existing FFmpeg sidecars are missing, invalid, or force refresh was requested. Re-downloading." -ForegroundColor Yellow
+function Install-Sidecars {
+    param(
+        [Parameter(Mandatory = $true)][string]$FfmpegSource,
+        [Parameter(Mandatory = $true)][string]$FfprobeSource
+    )
+
+    if (-not (Test-MediaTool -Path $FfmpegSource -Name "ffmpeg" -Quiet)) {
+        throw "FFmpeg source failed executable validation."
+    }
+    if (-not (Test-MediaTool -Path $FfprobeSource -Name "ffprobe" -Quiet)) {
+        throw "ffprobe source failed executable validation."
+    }
+    if (-not (Test-CompatibleMediaPair -FfmpegPath $FfmpegSource -FfprobePath $FfprobeSource)) {
+        throw "FFmpeg and ffprobe must come from the same versioned build."
+    }
+
+    New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+    Copy-Item -LiteralPath $FfmpegSource -Destination $FfmpegTarget -Force
+    Copy-Item -LiteralPath $FfprobeSource -Destination $FfprobeTarget -Force
+
+    if (-not (Test-MediaTool -Path $FfmpegTarget -Name "ffmpeg")) {
+        throw "Prepared FFmpeg sidecar failed validation."
+    }
+    if (-not (Test-MediaTool -Path $FfprobeTarget -Name "ffprobe")) {
+        throw "Prepared ffprobe sidecar failed validation."
     }
 }
 
-# Create temp directory
-Write-Host "📁 Creating temporary directory..." -ForegroundColor Yellow
-if (Test-Path $TEMP_DIR) {
-    Remove-Item -Recurse -Force $TEMP_DIR
+$existingValid = (Test-MediaTool -Path $FfmpegTarget -Name "ffmpeg" -Quiet) -and
+    (Test-MediaTool -Path $FfprobeTarget -Name "ffprobe" -Quiet) -and
+    (Test-CompatibleMediaPair -FfmpegPath $FfmpegTarget -FfprobePath $FfprobeTarget)
+if ($existingValid -and -not $Force) {
+    Write-Host "FFmpeg sidecars are already present and valid."
+    exit 0
 }
-New-Item -ItemType Directory -Path $TEMP_DIR | Out-Null
 
-# Download FFmpeg
-Write-Host "⬇️  Downloading FFmpeg..." -ForegroundColor Yellow
-Write-Host "   URL: $DOWNLOAD_URL" -ForegroundColor Gray
-$zipPath = Join-Path $TEMP_DIR "ffmpeg.zip"
+if ($Source -in @("Auto", "System")) {
+    $systemFfmpeg = Resolve-SystemMediaTool -Name "ffmpeg" -ExplicitPath $FfmpegPath
+    $systemFfprobe = Resolve-SystemMediaTool -Name "ffprobe" -ExplicitPath $FfprobePath
+    if ($systemFfmpeg -and $systemFfprobe -and
+        (Test-CompatibleMediaPair -FfmpegPath $systemFfmpeg -FfprobePath $systemFfprobe)) {
+        Install-Sidecars -FfmpegSource $systemFfmpeg -FfprobeSource $systemFfprobe
+        Write-Host "Prepared FFmpeg sidecars from validated system tools."
+        exit 0
+    }
+    if ($Source -eq "System") {
+        throw "A matching, validated system FFmpeg/ffprobe pair was not found. Set LOLSHORTS_FFMPEG_PATH and LOLSHORTS_FFPROBE_PATH, or use -Source Download."
+    }
+}
 
+if ($DownloadUrl -notmatch '^https://github\.com/BtbN/FFmpeg-Builds/releases/download/') {
+    throw "FFmpeg download must use the approved BtbN GitHub release origin."
+}
+
+$TempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+)
+$TempLeaf = "lolshorts-ffmpeg-" + [guid]::NewGuid().ToString("N")
+$TempRoot = [System.IO.Path]::GetFullPath((Join-Path $TempBase $TempLeaf))
+$tempParentIsExpected = [System.StringComparer]::OrdinalIgnoreCase.Equals(
+    [System.IO.Path]::GetDirectoryName($TempRoot),
+    $TempBase
+)
+if (-not $tempParentIsExpected -or $TempLeaf -notmatch '^lolshorts-ffmpeg-[0-9a-f]{32}$') {
+    throw "Refusing to use an unexpected FFmpeg temporary directory."
+}
+New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
 try {
-    Invoke-WebRequest -Uri $DOWNLOAD_URL -OutFile $zipPath -UseBasicParsing
-    Write-Host "✅ Downloaded successfully" -ForegroundColor Green
-} catch {
-    Write-Host "❌ Failed to download FFmpeg: $_" -ForegroundColor Red
-    exit 1
+    $ArchivePath = Join-Path $TempRoot "ffmpeg.zip"
+    $ExtractDir = Join-Path $TempRoot "extract"
+    Write-Host "Downloading checksum-pinned FFmpeg archive..."
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $ArchivePath -UseBasicParsing
+    $actualSha256 = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualSha256 -ne $ExpectedSha256.ToLowerInvariant()) {
+        throw "FFmpeg archive SHA-256 mismatch. Expected $ExpectedSha256, got $actualSha256."
+    }
+
+    Expand-Archive -LiteralPath $ArchivePath -DestinationPath $ExtractDir -Force
+    $downloadedFfmpeg = Get-ChildItem -LiteralPath $ExtractDir -Recurse -Filter "ffmpeg.exe" -File | Select-Object -First 1
+    $downloadedFfprobe = Get-ChildItem -LiteralPath $ExtractDir -Recurse -Filter "ffprobe.exe" -File | Select-Object -First 1
+    if (-not $downloadedFfmpeg -or -not $downloadedFfprobe) {
+        throw "The verified FFmpeg archive did not contain both ffmpeg.exe and ffprobe.exe."
+    }
+
+    Install-Sidecars -FfmpegSource $downloadedFfmpeg.FullName -FfprobeSource $downloadedFfprobe.FullName
+    Write-Host "Prepared FFmpeg sidecars from the pinned BtbN release."
+    # Keep the download path's process exit code explicit. Windows PowerShell
+    # can otherwise inherit a non-zero native-tool status from validation even
+    # after both sidecars were copied and verified successfully.
+    exit 0
+} finally {
+    if (Test-Path -LiteralPath $TempRoot) {
+        Remove-Item -LiteralPath $TempRoot -Recurse -Force
+    }
 }
-
-# Extract archive
-Write-Host "📦 Extracting archive..." -ForegroundColor Yellow
-try {
-    Expand-Archive -Path $zipPath -DestinationPath $TEMP_DIR -Force
-    Write-Host "✅ Extracted successfully" -ForegroundColor Green
-} catch {
-    Write-Host "❌ Failed to extract archive: $_" -ForegroundColor Red
-    exit 1
-}
-
-# Find ffmpeg.exe and ffprobe.exe
-Write-Host "🔍 Locating FFmpeg binaries..." -ForegroundColor Yellow
-$ffmpegSource = Get-ChildItem -Path $TEMP_DIR -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-$ffprobeSource = Get-ChildItem -Path $TEMP_DIR -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
-
-if (-not $ffmpegSource -or -not $ffprobeSource) {
-    Write-Host "❌ Could not find FFmpeg binaries in downloaded archive" -ForegroundColor Red
-    exit 1
-}
-
-# Copy to bin directory with sidecar naming
-Write-Host "📋 Copying binaries to binaries directory..." -ForegroundColor Yellow
-Copy-Item -Path $ffmpegSource.FullName -Destination $ffmpegPath -Force
-# Also copy standard name for dev convenience? No, stick to sidecar.
-# Actually, copy standard name too if needed for debugging?
-# Copy-Item -Path $ffmpegSource.FullName -Destination (Join-Path $BIN_DIR "ffmpeg.exe") -Force
-
-Copy-Item -Path $ffprobeSource.FullName -Destination $ffprobePath -Force
-
-# Verify binaries
-Write-Host "✅ Verifying binaries..." -ForegroundColor Green
-$newFfmpegVersion = & $ffmpegPath -version 2>&1 | Select-Object -First 1
-Write-Host "   $newFfmpegVersion" -ForegroundColor Cyan
-
-# Cleanup
-Write-Host "🧹 Cleaning up temporary files..." -ForegroundColor Yellow
-Remove-Item -Recurse -Force $TEMP_DIR
-
-# Show size info
-$ffmpegSize = (Get-Item $ffmpegPath).Length / 1MB
-$ffprobeSize = (Get-Item $ffprobePath).Length / 1MB
-Write-Host ""
-Write-Host "📊 Binary Sizes:" -ForegroundColor Cyan
-Write-Host "   ffmpeg.exe:  $($ffmpegSize.ToString('F2')) MB" -ForegroundColor Gray
-Write-Host "   ffprobe.exe: $($ffprobeSize.ToString('F2')) MB" -ForegroundColor Gray
-Write-Host "   Total:       $(($ffmpegSize + $ffprobeSize).ToString('F2')) MB" -ForegroundColor Gray
-
-Write-Host ""
-Write-Host "✅ FFmpeg preparation complete!" -ForegroundColor Green
-Write-Host "   Binaries are ready for bundling in: $BIN_DIR" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "Next steps:" -ForegroundColor Yellow
-Write-Host "  1. Run: cargo tauri build" -ForegroundColor Gray
-Write-Host "  2. Find installers in: src-tauri\target\release\bundle\" -ForegroundColor Gray

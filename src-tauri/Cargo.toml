@@ -4,7 +4,7 @@ version = "1.2.0"
 description = "League of Legends auto-recording and editing desktop app with YouTube integration"
 authors = ["LoLShorts Team"]
 license = "MIT"
-repository = "https://github.com/lolshorts/lolshorts"
+repository = "https://github.com/khakisketch/lolshorts"
 edition = "2021"
 
 [lib]
@@ -34,10 +34,10 @@ tokio = { version = "1.41", features = ["full"] }
 
 # HTTP Client & WebSocket
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
-warp = "0.3"
+warp = { version = "0.4", features = ["server", "test"] }
 
 # OAuth2 for YouTube authentication
-oauth2 = "4.4"
+oauth2 = "5.0"
 
 # Error Handling
 thiserror = "2.0"

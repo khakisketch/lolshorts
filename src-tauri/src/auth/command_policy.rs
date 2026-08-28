@@ -95,12 +95,12 @@ pub const COMMAND_POLICIES: &[CommandPolicy] = &[
     CommandPolicy {
         name: "compose_shorts",
         access: CommandAccess::AuthRequired,
-        reason: "Paid editor export feature.",
+        reason: "Free-account editor export feature.",
     },
     CommandPolicy {
         name: "extract_clip",
         access: CommandAccess::AuthRequired,
-        reason: "Paid editor processing feature.",
+        reason: "Free-account editor processing feature.",
     },
     CommandPolicy {
         name: "generate_thumbnail",
@@ -116,14 +116,79 @@ pub const COMMAND_POLICIES: &[CommandPolicy] = &[
         reason: "Authenticated automated editing (metered for FREE, unlimited for PRO).",
     },
     CommandPolicy {
+        name: "get_app_update_status",
+        access: CommandAccess::Free,
+        reason: "Safe local updater status; updates are independent of login.",
+    },
+    CommandPolicy {
+        name: "check_app_update",
+        access: CommandAccess::Free,
+        reason: "Checks the signed application update channel without login.",
+    },
+    CommandPolicy {
+        name: "install_app_update",
+        access: CommandAccess::Free,
+        reason: "Installs only artifacts verified by the configured updater key.",
+    },
+    CommandPolicy {
+        name: "plan_auto_edit",
+        access: CommandAccess::AuthRequired,
+        reason: "Previews auto-edit selection without consuming quota.",
+    },
+    CommandPolicy {
+        name: "cancel_auto_edit",
+        access: CommandAccess::AuthRequired,
+        reason: "Cancels the authenticated user's active auto-edit.",
+    },
+    CommandPolicy {
+        name: "export_auto_edit_for_platform",
+        access: CommandAccess::AuthRequired,
+        reason: "Creates and validates a platform delivery artifact.",
+    },
+    CommandPolicy {
+        name: "start_platform_export",
+        access: CommandAccess::AuthRequired,
+        reason: "Starts a durable platform conversion job.",
+    },
+    CommandPolicy {
+        name: "get_media_job",
+        access: CommandAccess::AuthRequired,
+        reason: "Reads the authenticated user's durable media job.",
+    },
+    CommandPolicy {
+        name: "list_recoverable_media_jobs",
+        access: CommandAccess::AuthRequired,
+        reason: "Lists the authenticated user's interrupted media jobs.",
+    },
+    CommandPolicy {
+        name: "pause_media_job",
+        access: CommandAccess::AuthRequired,
+        reason: "Pauses the authenticated user's active media job.",
+    },
+    CommandPolicy {
+        name: "resume_media_job",
+        access: CommandAccess::AuthRequired,
+        reason: "Resumes the authenticated user's durable media job.",
+    },
+    CommandPolicy {
+        name: "discard_media_job",
+        access: CommandAccess::AuthRequired,
+        reason: "Discards the authenticated user's internal job artifacts.",
+    },
+    CommandPolicy {
+        name: "revalidate_auto_edit_result",
+        access: CommandAccess::AuthRequired,
+        reason: "Revalidates an owned auto-edit output before sharing.",
+    },
+    CommandPolicy {
         name: "compose_shorts_v2",
         access: CommandAccess::AuthRequired,
-        reason: "Paid editor export feature.",
+        reason: "Free-account editor export feature.",
     },
     CommandPolicy {
         name: "create_longform_video",
         access: CommandAccess::AuthRequired,
-        reason: "Paid multi-clip montage export feature.",
+        reason: "Free-account multi-clip montage export feature.",
     },
     // ---- Authenticated video/editor utilities ----
     CommandPolicy {
@@ -153,23 +218,23 @@ pub const COMMAND_POLICIES: &[CommandPolicy] = &[
     },
     CommandPolicy {
         name: "save_canvas_template",
-        access: CommandAccess::ProRequired,
-        reason: "Mutates the local canvas template library.",
+        access: CommandAccess::AuthRequired,
+        reason: "Free-account editor template feature.",
     },
     CommandPolicy {
         name: "load_canvas_template",
-        access: CommandAccess::ProRequired,
-        reason: "Reads a local canvas template.",
+        access: CommandAccess::AuthRequired,
+        reason: "Free-account editor template feature.",
     },
     CommandPolicy {
         name: "list_canvas_templates",
-        access: CommandAccess::ProRequired,
-        reason: "Lists local canvas templates.",
+        access: CommandAccess::AuthRequired,
+        reason: "Free-account editor template feature.",
     },
     CommandPolicy {
         name: "delete_canvas_template",
-        access: CommandAccess::ProRequired,
-        reason: "Deletes a local canvas template.",
+        access: CommandAccess::AuthRequired,
+        reason: "Free-account editor template feature.",
     },
     CommandPolicy {
         name: "get_clip_statistics",
@@ -211,61 +276,61 @@ pub const COMMAND_POLICIES: &[CommandPolicy] = &[
         access: CommandAccess::AuthRequired,
         reason: "Exports a short local GIF.",
     },
-    // ---- YouTube (all PRO — auto-upload is a paid feature) ----
+    // ---- YouTube (ordinary OAuth/upload is available to a free account) ----
     CommandPolicy {
         name: "youtube_start_auth",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_start_auth_with_server",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_complete_auth",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_get_auth_status",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_upload_video",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_get_upload_progress",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_get_video_details",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_get_upload_history",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_add_to_history",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_get_quota_info",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_logout",
         access: CommandAccess::AuthRequired,
-        reason: "Paid YouTube upload feature.",
+        reason: "Free-account YouTube upload feature.",
     },
     CommandPolicy {
         name: "youtube_schedule_upload",
@@ -354,27 +419,27 @@ mod tests {
     }
 
     #[test]
-    fn pro_commands_reject_free_users() {
+    fn scheduled_upload_commands_remain_outside_the_free_release_scope() {
         assert_eq!(
-            command_access("save_canvas_template"),
+            command_access("youtube_schedule_upload"),
             Some(CommandAccess::ProRequired)
         );
         let auth = Arc::new(AuthManager::new());
         auth.login(make_user(SubscriptionTier::Free)).unwrap();
 
         assert!(matches!(
-            require_command_access(&auth, "save_canvas_template"),
+            require_command_access(&auth, "youtube_schedule_upload"),
             Err(AuthError::Failed(message)) if message.contains("PRO subscription required")
         ));
     }
 
     #[test]
-    fn pro_commands_accept_pro_users() {
+    fn legacy_pro_users_can_use_scheduled_uploads() {
         let auth = Arc::new(AuthManager::new());
         auth.login(make_user(SubscriptionTier::Pro)).unwrap();
 
         assert_eq!(
-            require_command_access(&auth, "save_canvas_template")
+            require_command_access(&auth, "youtube_schedule_upload")
                 .unwrap()
                 .expect("user returned")
                 .tier,
@@ -388,9 +453,9 @@ mod tests {
     /// Every comparable tool gives local export away (Medal exports without even a
     /// watermark; Outplayed is ad-supported; the League client itself records
     /// highlights for free), so gating MP4 export put this app below the free
-    /// baseline that ships inside the game. Revenue comes from the auto-edit quota,
-    /// canvas templates and scheduled uploads instead. If a future change re-gates
-    /// these, it should have to delete this test and argue with the comment.
+    /// baseline that ships inside the game. The free public release does not expose
+    /// a paid upgrade path. If a future change re-gates these, it should have to
+    /// delete this test and argue with the comment.
     #[test]
     fn local_export_stays_free_for_signed_in_users() {
         for command in [
@@ -399,6 +464,10 @@ mod tests {
             "create_longform_video",
             "extract_clip",
             "export_as_gif",
+            "save_canvas_template",
+            "load_canvas_template",
+            "list_canvas_templates",
+            "delete_canvas_template",
         ] {
             assert_eq!(
                 command_access(command),

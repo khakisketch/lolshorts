@@ -47,7 +47,7 @@ test.describe("LoLShorts Basic Functionality", () => {
     await expect(page.locator('[data-testid="settings"]')).toBeVisible();
 
     // Navigate to results
-    await page.click('[data-testid="nav-results"]');
+    await page.click('[data-testid="nav-library"]');
     await expect(page).toHaveURL(/\/results/);
 
     // Navigate back to home

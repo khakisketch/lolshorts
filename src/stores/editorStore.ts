@@ -1,20 +1,20 @@
-import { create } from 'zustand';
-import { ClipMetadata } from '@/types/storage';
+import { create } from "zustand";
+import { ClipMetadata } from "@/types/storage";
 
 export interface TimelineClip extends ClipMetadata {
   order: number;
-  trimStart?: number;  // For future trim feature
-  trimEnd?: number;    // For future trim feature
+  trimStart?: number; // For future trim feature
+  trimEnd?: number; // For future trim feature
 }
 
-export type AspectRatio = '9:16' | '16:9' | '1:1';
-export type TransitionType = 'none' | 'fade' | 'slide';
-export type ExportStatus = 'idle' | 'exporting' | 'complete' | 'error';
+export type AspectRatio = "9:16" | "16:9" | "1:1";
+export type TransitionType = "none" | "fade" | "slide";
+export type ExportStatus = "idle" | "exporting" | "complete" | "error";
 
 export interface CompositionSettings {
   aspectRatio: AspectRatio;
   transitionType: TransitionType;
-  transitionDuration: number;  // In seconds
+  transitionDuration: number; // In seconds
 }
 
 interface EditorStore {
@@ -28,7 +28,7 @@ interface EditorStore {
   totalDuration: number;
   isPlaying: boolean;
   selectedClipId: string | null;
-  zoom: number;  // 1.0 = normal, 2.0 = 2x zoom
+  zoom: number; // 1.0 = normal, 2.0 = 2x zoom
 
   // Composition
   compositionSettings: CompositionSettings;
@@ -94,13 +94,13 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   zoom: 1.0,
 
   compositionSettings: {
-    aspectRatio: '9:16',
-    transitionType: 'fade',
+    aspectRatio: "9:16",
+    transitionType: "fade",
     transitionDuration: 0.5,
   },
 
   exportProgress: 0,
-  exportStatus: 'idle',
+  exportStatus: "idle",
   exportError: null,
   exportOutputPath: null,
 
@@ -109,19 +109,20 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   setAvailableClips: (clips) => set({ availableClips: clips }),
 
-  clearEditor: () => set({
-    selectedGameId: null,
-    availableClips: [],
-    timelineClips: [],
-    currentTime: 0,
-    totalDuration: 0,
-    isPlaying: false,
-    selectedClipId: null,
-    exportProgress: 0,
-    exportStatus: 'idle',
-    exportError: null,
-    exportOutputPath: null,
-  }),
+  clearEditor: () =>
+    set({
+      selectedGameId: null,
+      availableClips: [],
+      timelineClips: [],
+      currentTime: 0,
+      totalDuration: 0,
+      isPlaying: false,
+      selectedClipId: null,
+      exportProgress: 0,
+      exportStatus: "idle",
+      exportError: null,
+      exportOutputPath: null,
+    }),
 
   // Timeline Management
   addToTimeline: (clip) => {
@@ -143,14 +144,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   removeFromTimeline: (clipId) => {
     const { timelineClips } = get();
     const newTimeline = timelineClips
-      .filter(c => c.file_path !== clipId)
+      .filter((c) => c.file_path !== clipId)
       .map((c, index) => ({ ...c, order: index }));
     const totalDuration = newTimeline.reduce((sum, c) => sum + c.duration, 0);
 
     set({
       timelineClips: newTimeline,
       totalDuration,
-      selectedClipId: get().selectedClipId === clipId ? null : get().selectedClipId,
+      selectedClipId:
+        get().selectedClipId === clipId ? null : get().selectedClipId,
     });
   },
 
@@ -161,22 +163,26 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     newTimeline.splice(toIndex, 0, movedClip);
 
     // Update order numbers
-    const reorderedTimeline = newTimeline.map((c, index) => ({ ...c, order: index }));
+    const reorderedTimeline = newTimeline.map((c, index) => ({
+      ...c,
+      order: index,
+    }));
 
     set({ timelineClips: reorderedTimeline });
   },
 
-  clearTimeline: () => set({
-    timelineClips: [],
-    totalDuration: 0,
-    currentTime: 0,
-    isPlaying: false,
-    selectedClipId: null,
-  }),
+  clearTimeline: () =>
+    set({
+      timelineClips: [],
+      totalDuration: 0,
+      currentTime: 0,
+      isPlaying: false,
+      selectedClipId: null,
+    }),
 
   setClipTrimStart: (clipId, trimStart) => {
     const { timelineClips } = get();
-    const newTimeline = timelineClips.map(clip => {
+    const newTimeline = timelineClips.map((clip) => {
       if (clip.file_path === clipId) {
         const maxTrimStart = (clip.trimEnd ?? clip.duration) - 0.5; // Min 0.5s duration
         return {
@@ -198,7 +204,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   setClipTrimEnd: (clipId, trimEnd) => {
     const { timelineClips } = get();
-    const newTimeline = timelineClips.map(clip => {
+    const newTimeline = timelineClips.map((clip) => {
       if (clip.file_path === clipId) {
         const minTrimEnd = (clip.trimStart ?? 0) + 0.5; // Min 0.5s duration
         return {
@@ -225,7 +231,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   // Playback
-  setCurrentTime: (time) => set({ currentTime: Math.max(0, Math.min(time, get().totalDuration)) }),
+  setCurrentTime: (time) =>
+    set({ currentTime: Math.max(0, Math.min(time, get().totalDuration)) }),
 
   setIsPlaying: (playing) => set({ isPlaying: playing }),
 
@@ -235,11 +242,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   pause: () => set({ isPlaying: false }),
 
-  stop: () => set({
-    isPlaying: false,
-    currentTime: 0,
-    selectedClipId: null,
-  }),
+  stop: () =>
+    set({
+      isPlaying: false,
+      currentTime: 0,
+      selectedClipId: null,
+    }),
 
   // View
   setZoom: (zoom) => set({ zoom: Math.max(0.5, Math.min(zoom, 4.0)) }),
@@ -257,24 +265,35 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   resetZoom: () => set({ zoom: 1.0 }),
 
   // Composition
-  updateCompositionSettings: (settings) => set({
-    compositionSettings: { ...get().compositionSettings, ...settings },
-  }),
+  updateCompositionSettings: (settings) =>
+    set({
+      compositionSettings: { ...get().compositionSettings, ...settings },
+    }),
 
-  setAspectRatio: (ratio) => set({
-    compositionSettings: { ...get().compositionSettings, aspectRatio: ratio },
-  }),
+  setAspectRatio: (ratio) =>
+    set({
+      compositionSettings: { ...get().compositionSettings, aspectRatio: ratio },
+    }),
 
-  setTransitionType: (type) => set({
-    compositionSettings: { ...get().compositionSettings, transitionType: type },
-  }),
+  setTransitionType: (type) =>
+    set({
+      compositionSettings: {
+        ...get().compositionSettings,
+        transitionType: type,
+      },
+    }),
 
-  setTransitionDuration: (duration) => set({
-    compositionSettings: { ...get().compositionSettings, transitionDuration: Math.max(0, Math.min(duration, 2.0)) },
-  }),
+  setTransitionDuration: (duration) =>
+    set({
+      compositionSettings: {
+        ...get().compositionSettings,
+        transitionDuration: Math.max(0, Math.min(duration, 2.0)),
+      },
+    }),
 
   // Export
-  setExportProgress: (progress) => set({ exportProgress: Math.max(0, Math.min(progress, 100)) }),
+  setExportProgress: (progress) =>
+    set({ exportProgress: Math.max(0, Math.min(progress, 100)) }),
 
   setExportStatus: (status) => set({ exportStatus: status }),
 
@@ -282,10 +301,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   setExportOutputPath: (path) => set({ exportOutputPath: path }),
 
-  resetExport: () => set({
-    exportProgress: 0,
-    exportStatus: 'idle',
-    exportError: null,
-    exportOutputPath: null,
-  }),
+  resetExport: () =>
+    set({
+      exportProgress: 0,
+      exportStatus: "idle",
+      exportError: null,
+      exportOutputPath: null,
+    }),
 }));

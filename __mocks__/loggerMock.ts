@@ -1,11 +1,5 @@
 export const logger = {
-  error: (...args: unknown[]): void => {
-    console.error(...args);
-  },
-  warn: (...args: unknown[]): void => {
-    console.warn(...args);
-  },
-  info: (...args: unknown[]): void => {
-    console.info(...args);
-  },
+  error: jest.fn<void, unknown[]>(),
+  warn: jest.fn<void, unknown[]>(),
+  info: jest.fn<void, unknown[]>(),
 };

@@ -18,6 +18,7 @@ import { ClipTimingSettings } from "@/components/settings/ClipTimingSettings";
 import { HotkeySettings } from "@/components/settings/HotkeySettings";
 import { LanguageSelector } from "@/components/settings/LanguageSelector";
 import { GeneralSettings } from "@/components/settings/GeneralSettings";
+import { AppUpdateSettings } from "@/components/settings/AppUpdateSettings";
 import { LicensePanel } from "@/components/settings/LicensePanel";
 import { AccountInfoPanel } from "@/components/settings/AccountInfoPanel";
 import { DiagnosticsSection } from "@/components/settings/DiagnosticsSection";
@@ -26,6 +27,7 @@ import { RotateCcw, Save } from "lucide-react";
 import { pageStyles } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
 import { logger } from "@/lib/logger";
+import { configureErrorTelemetry } from "@/lib/telemetry";
 
 /** 왼쪽 카테고리. 그룹 이름과 항목 이름은 로케일이 SSOT. */
 const SETTINGS_GROUPS = [
@@ -34,8 +36,7 @@ const SETTINGS_GROUPS = [
   { key: "account", items: ["license", "diagnostics"] },
 ] as const;
 
-type SettingsSection =
-  (typeof SETTINGS_GROUPS)[number]["items"][number];
+type SettingsSection = (typeof SETTINGS_GROUPS)[number]["items"][number];
 
 /**
  * 설정 — 기본 5가지 + 접힌 고급.
@@ -56,13 +57,15 @@ export function Settings() {
   const { confirm, ConfirmDialog } = useConfirmDialog();
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [showSubscriptionManagement, setShowSubscriptionManagement] = useState(false);
+  const [showSubscriptionManagement, setShowSubscriptionManagement] =
+    useState(false);
   const [license, setLicense] = useState<EntitlementInfo | null>(null);
   const [isLoadingLicense, setIsLoadingLicense] = useState(false);
   // 어느 칸을 보고 있나. 기본은 「영상·화질」 — 새 사용자가 가장 먼저 궁금해하는 것.
   const [section, setSection] = useState<SettingsSection>("video");
 
-  const [recordingSettings, setRecordingSettings] = useState<RecordingSettings | null>(null);
+  const [recordingSettings, setRecordingSettings] =
+    useState<RecordingSettings | null>(null);
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -72,8 +75,11 @@ export function Settings() {
       const licenseData = await authApi.getCurrentEntitlement(true);
       setLicense(licenseData);
     } catch (error) {
-      toast({ title: t('settings.error.licenseFailed'), variant: 'destructive' });
-      logger.error('Failed to load license info:', error);
+      toast({
+        title: t("settings.error.licenseFailed"),
+        variant: "destructive",
+      });
+      logger.error("Failed to load license info:", error);
     } finally {
       setIsLoadingLicense(false);
     }
@@ -83,10 +89,21 @@ export function Settings() {
     setIsLoadingSettings(true);
     try {
       const settings = await settingsApi.getRecordingSettings();
-      setRecordingSettings(settings);
+      try {
+        const autostart = await settingsApi.getAutostartStatus();
+        setRecordingSettings({
+          ...settings,
+          launch_on_windows_startup: autostart.configured
+            ? autostart.enabled
+            : settings.launch_on_windows_startup,
+        });
+      } catch (error) {
+        logger.warn("Failed to synchronize Windows autostart state:", error);
+        setRecordingSettings(settings);
+      }
     } catch (error) {
-      toast({ title: t('settings.error.loadFailed'), variant: 'destructive' });
-      logger.error('Failed to load settings:', error);
+      toast({ title: t("settings.error.loadFailed"), variant: "destructive" });
+      logger.error("Failed to load settings:", error);
     } finally {
       setIsLoadingSettings(false);
     }
@@ -107,10 +124,11 @@ export function Settings() {
     try {
       await settingsApi.saveRecordingSettings(settings);
       setRecordingSettings(settings);
-      toast({ title: t('settings.saved') });
+      configureErrorTelemetry(settings.crash_reporting_enabled);
+      toast({ title: t("settings.saved") });
     } catch (error) {
-      toast({ title: t('settings.error.saveFailed'), variant: 'destructive' });
-      logger.error('Failed to save settings:', error);
+      toast({ title: t("settings.error.saveFailed"), variant: "destructive" });
+      logger.error("Failed to save settings:", error);
     } finally {
       setIsSavingSettings(false);
     }
@@ -118,10 +136,10 @@ export function Settings() {
 
   const resetSettingsToDefault = async () => {
     const confirmed = await confirm({
-      title: t('confirmations.resetSettingsTitle'),
-      description: t('confirmations.resetSettingsDescription'),
-      confirmText: t('settings.recordingConfig.resetToDefaults'),
-      variant: 'warning',
+      title: t("confirmations.resetSettingsTitle"),
+      description: t("confirmations.resetSettingsDescription"),
+      confirmText: t("settings.recordingConfig.resetToDefaults"),
+      variant: "warning",
     });
     if (!confirmed) return;
 
@@ -130,9 +148,10 @@ export function Settings() {
       await settingsApi.resetToDefault();
       const defaultSettings = await settingsApi.getRecordingSettings();
       setRecordingSettings(defaultSettings);
+      configureErrorTelemetry(defaultSettings.crash_reporting_enabled);
     } catch (error) {
-      toast({ title: t('settings.error.resetFailed'), variant: 'destructive' });
-      logger.error('Failed to reset settings:', error);
+      toast({ title: t("settings.error.resetFailed"), variant: "destructive" });
+      logger.error("Failed to reset settings:", error);
     } finally {
       setIsSavingSettings(false);
     }
@@ -167,11 +186,18 @@ export function Settings() {
   return (
     <div data-testid="settings" className={pageStyles.container}>
       <div>
-        <h2 className="text-2xl md:text-3xl font-bold" data-autofocus tabIndex={-1}>
-          {t('settings.title')}
+        <h2
+          className="text-2xl md:text-3xl font-bold"
+          data-autofocus
+          tabIndex={-1}
+        >
+          {t("settings.title")}
         </h2>
-        <p className="text-sm text-muted-foreground mt-1" style={{ wordBreak: 'keep-all' }}>
-          {t('settings.basic.pageDescription')}
+        <p
+          className="text-sm text-muted-foreground mt-1"
+          style={{ wordBreak: "keep-all" }}
+        >
+          {t("settings.basic.pageDescription")}
         </p>
       </div>
 
@@ -179,7 +205,7 @@ export function Settings() {
         {isLoadingSettings ? (
           <div className="gaming-panel p-6 text-center">
             <p className="text-sm text-muted-foreground">
-              {t('settings.recordingConfig.loadingSettings')}
+              {t("settings.recordingConfig.loadingSettings")}
             </p>
           </div>
         ) : recordingSettings ? (
@@ -190,7 +216,7 @@ export function Settings() {
               <nav
                 data-testid="settings-nav"
                 className="flex shrink-0 gap-1 overflow-x-auto lg:w-52 lg:flex-col lg:overflow-visible"
-                aria-label={t('settings.title')}
+                aria-label={t("settings.title")}
               >
                 {SETTINGS_GROUPS.map((group) => (
                   <div key={group.key} className="contents lg:block">
@@ -202,14 +228,14 @@ export function Settings() {
                         key={item}
                         type="button"
                         onClick={() => setSection(item)}
-                        aria-current={section === item ? 'page' : undefined}
+                        aria-current={section === item ? "page" : undefined}
                         data-testid={`settings-nav-${item}`}
                         className={[
-                          'min-h-[44px] whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition-colors lg:block lg:w-full',
+                          "min-h-[44px] whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition-colors lg:block lg:w-full",
                           section === item
-                            ? 'bg-gaming-cyan/10 text-foreground shadow-[inset_2px_0_0_theme(colors.gaming-cyan)]'
-                            : 'text-muted-foreground hover:text-foreground',
-                        ].join(' ')}
+                            ? "border-l-2 border-gaming-cyan bg-gaming-cyan/10 text-foreground"
+                            : "text-muted-foreground hover:text-foreground",
+                        ].join(" ")}
                       >
                         {t(`settings.nav.items.${item}`)}
                       </button>
@@ -219,18 +245,21 @@ export function Settings() {
               </nav>
 
               {/* 오른쪽: 고른 칸만. 스크롤은 여기 안에서만 일어난다. */}
-              <div className="min-w-0 flex-1 space-y-4" data-testid={`settings-section-${section}`}>
-                {section === 'video' && (
+              <div
+                className="min-w-0 flex-1 space-y-4"
+                data-testid={`settings-section-${section}`}
+              >
+                {section === "video" && (
                   <>
                     <BasicSettings
                       settings={recordingSettings}
                       onChange={saveRecordingSettings}
                       disabled={isSavingSettings}
-                      sections={['quality']}
+                      sections={["quality"]}
                     />
                     <AdvancedDisclosure
                       testId="advanced-video"
-                      summary={t('settings.advanced.summary.video')}
+                      summary={t("settings.advanced.summary.video")}
                     >
                       <VideoSettings
                         settings={recordingSettings.video}
@@ -242,51 +271,60 @@ export function Settings() {
                   </>
                 )}
 
-                {section === 'highlights' && (
+                {section === "highlights" && (
                   <>
                     <BasicSettings
                       settings={recordingSettings}
                       onChange={saveRecordingSettings}
                       disabled={isSavingSettings}
-                      sections={['highlights']}
+                      sections={["highlights"]}
                     />
                     <AdvancedDisclosure
                       testId="advanced-highlights"
-                      summary={t('settings.advanced.summary.highlights')}
+                      summary={t("settings.advanced.summary.highlights")}
                     >
                       <EventFilterSettings
                         settings={recordingSettings.event_filter}
                         onChange={(eventFilter) =>
-                          saveRecordingSettings({ ...recordingSettings, event_filter: eventFilter })
+                          saveRecordingSettings({
+                            ...recordingSettings,
+                            event_filter: eventFilter,
+                          })
                         }
                       />
                       <ClipTimingSettings
                         settings={recordingSettings.clip_timing}
                         onChange={(clip_timing) =>
-                          saveRecordingSettings({ ...recordingSettings, clip_timing })
+                          saveRecordingSettings({
+                            ...recordingSettings,
+                            clip_timing,
+                          })
                         }
                       />
                       <GameModeSettings
                         settings={recordingSettings.game_mode}
                         onChange={(gameMode) =>
-                          saveRecordingSettings({ ...recordingSettings, game_mode: gameMode })
+                          saveRecordingSettings({
+                            ...recordingSettings,
+                            game_mode: gameMode,
+                          })
                         }
                       />
                     </AdvancedDisclosure>
                   </>
                 )}
 
-                {section === 'sound' && (
+                {section === "sound" && (
                   <>
                     <BasicSettings
                       settings={recordingSettings}
                       onChange={saveRecordingSettings}
                       disabled={isSavingSettings}
-                      sections={['sound']}
+                      sections={["sound"]}
                     />
                     <AdvancedDisclosure
                       testId="advanced-sound"
-                      summary={t('settings.advanced.summary.sound')}
+                      summary={t("settings.advanced.summary.sound")}
                     >
                       <AudioSettings
                         settings={recordingSettings.audio}
@@ -298,7 +336,7 @@ export function Settings() {
                   </>
                 )}
 
-                {section === 'hotkeys' && (
+                {section === "hotkeys" && (
                   <HotkeySettings
                     settings={recordingSettings.hotkeys}
                     onChange={(hotkeys) =>
@@ -307,42 +345,46 @@ export function Settings() {
                   />
                 )}
 
-                {section === 'storage' && (
+                {section === "storage" && (
                   <BasicSettings
                     settings={recordingSettings}
                     onChange={saveRecordingSettings}
                     disabled={isSavingSettings}
-                    sections={['storage']}
+                    sections={["storage"]}
                   />
                 )}
 
-                {section === 'app' && (
+                {section === "app" && (
                   <>
                     <BasicSettings
                       settings={recordingSettings}
                       onChange={saveRecordingSettings}
                       disabled={isSavingSettings}
-                      sections={['autoStart']}
+                      sections={["autoStart"]}
                     />
                     <GeneralSettings
                       settings={{
-                        auto_start_with_league: recordingSettings.auto_start_with_league,
                         minimize_to_tray: recordingSettings.minimize_to_tray,
-                        show_notifications: recordingSettings.show_notifications,
+                        show_notifications:
+                          recordingSettings.show_notifications,
                         show_replay_popup: recordingSettings.show_replay_popup,
-                        crash_reporting_enabled: recordingSettings.crash_reporting_enabled,
+                        crash_reporting_enabled:
+                          recordingSettings.crash_reporting_enabled,
                         overlay_enabled: recordingSettings.overlay_enabled,
-                        storage: recordingSettings.storage,
                       }}
                       onChange={(updatedGeneral) =>
-                        saveRecordingSettings({ ...recordingSettings, ...updatedGeneral })
+                        saveRecordingSettings({
+                          ...recordingSettings,
+                          ...updatedGeneral,
+                        })
                       }
                     />
                     <LanguageSelector />
+                    <AppUpdateSettings />
                   </>
                 )}
 
-                {section === 'license' && (
+                {section === "license" && (
                   <>
                     <LicensePanel
                       isAuthenticated={isAuthenticated}
@@ -354,24 +396,26 @@ export function Settings() {
                       onManageSubscription={handleManageSubscription}
                       onRetry={loadLicenseInfo}
                     />
-                    {isAuthenticated && user && <AccountInfoPanel user={user} />}
+                    {isAuthenticated && user && (
+                      <AccountInfoPanel user={user} />
+                    )}
                   </>
                 )}
 
-                {section === 'diagnostics' && (
+                {section === "diagnostics" && (
                   <>
                     <DiagnosticsSection />
                     {/* 초기화는 고급 설정이 사라지면서 갈 곳이 없어졌다. 되돌리기
                         어려운 동작이라 평소 눈에 띄지 않는 진단 칸이 맞다. */}
                     <section className="gaming-panel p-6">
                       <h3 className="text-base font-semibold">
-                        {t('settings.recordingConfig.resetTitle')}
+                        {t("settings.recordingConfig.resetTitle")}
                       </h3>
                       <p
                         className="mt-1 text-sm text-muted-foreground"
-                        style={{ wordBreak: 'keep-all' }}
+                        style={{ wordBreak: "keep-all" }}
                       >
-                        {t('settings.recordingConfig.resetDescription')}
+                        {t("settings.recordingConfig.resetDescription")}
                       </p>
                       <Button
                         variant="outline"
@@ -380,8 +424,11 @@ export function Settings() {
                         disabled={isSavingSettings}
                         data-testid="settings-reset"
                       >
-                        <RotateCcw className="mr-2 h-4 w-4" aria-hidden="true" />
-                        {t('settings.recordingConfig.resetAction')}
+                        <RotateCcw
+                          className="mr-2 h-4 w-4"
+                          aria-hidden="true"
+                        />
+                        {t("settings.recordingConfig.resetAction")}
                       </Button>
                     </section>
                   </>
@@ -390,7 +437,7 @@ export function Settings() {
                 {isSavingSettings && (
                   <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
                     <Save className="w-4 h-4 animate-pulse" />
-                    {t('settings.recordingConfig.savingSettings')}
+                    {t("settings.recordingConfig.savingSettings")}
                   </div>
                 )}
               </div>
@@ -398,25 +445,35 @@ export function Settings() {
           </>
         ) : (
           <div className="gaming-panel p-6 text-center">
-            <p className="text-sm text-muted-foreground">{t('settings.recordingConfig.loadError')}</p>
-            <Button onClick={loadRecordingSettings} variant="outline" className="mt-4">
-              {t('editor.retry')}
+            <p className="text-sm text-muted-foreground">
+              {t("settings.recordingConfig.loadError")}
+            </p>
+            <Button
+              onClick={loadRecordingSettings}
+              variant="outline"
+              className="mt-4"
+            >
+              {t("editor.retry")}
             </Button>
           </div>
         )}
-
       </div>
 
       <ConfirmDialog />
 
-      {showAuthModal && <AuthModal open={showAuthModal} onClose={() => setShowAuthModal(false)} />}
+      {showAuthModal && (
+        <AuthModal
+          open={showAuthModal}
+          onClose={() => setShowAuthModal(false)}
+        />
+      )}
 
       <PaymentModal isOpen={showPaymentModal} onClose={handlePaymentClose} />
 
       <SubscriptionManagement
         isOpen={showSubscriptionManagement}
         onClose={handleSubscriptionClose}
-        currentTier={(license?.tier || 'FREE') as 'FREE' | 'PRO'}
+        currentTier={(license?.tier || "FREE") as "FREE" | "PRO"}
         expiresAt={license?.expires_at || null}
       />
     </div>

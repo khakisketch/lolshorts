@@ -1,7 +1,7 @@
-import { cn } from "@/lib/utils"
-import { Spinner, SpinnerCenter } from "./spinner"
-import { Skeleton } from "./skeleton"
-import { ReactNode } from "react"
+import { cn } from "@/lib/utils";
+import { Spinner, SpinnerCenter } from "./spinner";
+import { Skeleton } from "./skeleton";
+import { ReactNode } from "react";
 
 interface LoadingStateProps {
   isLoading: boolean;
@@ -40,24 +40,30 @@ export function LoadingState({
   skeleton,
   loadingLabel,
   className,
-  minHeight = "h-32"
+  minHeight = "h-32",
 }: LoadingStateProps) {
   if (!isLoading) {
-    return <>{children}</>
+    return <>{children}</>;
   }
 
   // Custom loading content
   if (typeof loadingContent !== "string") {
-    return <>{loadingContent}</>
+    return <>{loadingContent}</>;
   }
 
   switch (loadingContent) {
     case "spinner":
       return (
-        <div className={cn("flex items-center justify-center", minHeight, className)}>
+        <div
+          className={cn(
+            "flex items-center justify-center",
+            minHeight,
+            className,
+          )}
+        >
           <SpinnerCenter label={loadingLabel} />
         </div>
-      )
+      );
 
     case "skeleton":
       return (
@@ -70,7 +76,7 @@ export function LoadingState({
             </div>
           )}
         </div>
-      )
+      );
 
     case "overlay":
       return (
@@ -80,22 +86,30 @@ export function LoadingState({
             <Spinner size="lg" label={loadingLabel} />
           </div>
         </div>
-      )
+      );
 
     case "inline":
       return (
         <div className={cn("flex items-center gap-2", className)}>
           <Spinner size="sm" />
-          <span className="text-muted-foreground">{loadingLabel || '로딩 중...'}</span>
+          <span className="text-muted-foreground">
+            {loadingLabel || "로딩 중..."}
+          </span>
         </div>
-      )
+      );
 
     default:
       return (
-        <div className={cn("flex items-center justify-center", minHeight, className)}>
+        <div
+          className={cn(
+            "flex items-center justify-center",
+            minHeight,
+            className,
+          )}
+        >
           <SpinnerCenter label={loadingLabel} />
         </div>
-      )
+      );
   }
 }
 
@@ -111,9 +125,9 @@ export function LoadingOverlay({
   isLoading,
   label,
   blur = true,
-  className
+  className,
 }: LoadingOverlayProps) {
-  if (!isLoading) return null
+  if (!isLoading) return null;
 
   return (
     <div
@@ -121,7 +135,7 @@ export function LoadingOverlay({
         "fixed inset-0 z-50 flex items-center justify-center",
         "bg-background/80",
         blur && "backdrop-blur-sm",
-        className
+        className,
       )}
     >
       <div className="flex flex-col items-center gap-4">
@@ -131,7 +145,7 @@ export function LoadingOverlay({
         )}
       </div>
     </div>
-  )
+  );
 }
 
 // Button loading state helper
@@ -141,14 +155,18 @@ interface ButtonLoadingProps {
   loadingText?: string;
 }
 
-export function ButtonLoading({ isLoading, children, loadingText }: ButtonLoadingProps) {
+export function ButtonLoading({
+  isLoading,
+  children,
+  loadingText,
+}: ButtonLoadingProps) {
   if (isLoading) {
     return (
       <>
         <Spinner size="sm" className="mr-2" />
         {loadingText || children}
       </>
-    )
+    );
   }
-  return <>{children}</>
+  return <>{children}</>;
 }

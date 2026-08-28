@@ -156,6 +156,9 @@ impl VideoProcessor {
             })?,
         ]);
 
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x08000000 | 0x00004000); // no window + below-normal priority
+
         execute_ffmpeg_command(&mut command).await?;
 
         if !output.exists() {

@@ -112,8 +112,11 @@ function Invoke-LoggedCommand {
 }
 
 function Test-SupabaseSqlGuardrails {
+    $migrationDir = Join-Path $ProjectRoot "supabase\migrations"
     $files = @(
-        (Join-Path $ProjectRoot "supabase\migrations\001_initial_schema.sql"),
+        @(Get-ChildItem -LiteralPath $migrationDir -Filter "*.sql" -File -ErrorAction Stop |
+            Sort-Object Name |
+            Select-Object -ExpandProperty FullName)
         (Join-Path $ProjectRoot "supabase\schema.sql")
     )
 
@@ -125,31 +128,39 @@ function Test-SupabaseSqlGuardrails {
 
         $content = Get-Content -Raw -Path $file
         $fileName = Split-Path -Leaf $file
+        # Comments often explain forbidden examples (for example SECURITY
+        # DEFINER) and must not be counted as executable SQL by this static
+        # preflight. This is a conservative lexical pass, not a SQL parser.
+        $sqlForChecks = [regex]::Replace($content, '(?s)/\*.*?\*/', '')
+        $sqlForChecks = [regex]::Replace($sqlForChecks, '(?m)--.*$', '')
 
-        if ($content -match '(?is)CREATE\s+ROLE\s+[^;]*\bPASSWORD\b') {
+        if ($sqlForChecks -match '(?is)CREATE\s+ROLE\s+[^;]*\bPASSWORD\b') {
             Add-Result "Supabase" "No passworded bootstrap roles: $fileName" "FAIL" "Found CREATE ROLE with PASSWORD." "Move local bootstrap secrets out of production-facing SQL."
         } else {
             Add-Result "Supabase" "No passworded bootstrap roles: $fileName" "PASS" "No CREATE ROLE ... PASSWORD statements found."
         }
 
-        if ($content -match '(?is)GRANT\s+ALL(?:\s+PRIVILEGES)?\s+ON\s+[^;]+\s+TO\s+(anon|authenticated|public)\b') {
+        if ($sqlForChecks -match '(?is)GRANT\s+ALL(?:\s+PRIVILEGES)?\s+ON\s+[^;]+\s+TO\s+(anon|authenticated|public)\b') {
             Add-Result "Supabase" "No broad exposed-role grants: $fileName" "FAIL" "Found broad GRANT ALL to anon/authenticated/public." "Replace broad grants with least-privilege grants and matching RLS policies."
         } else {
             Add-Result "Supabase" "No broad exposed-role grants: $fileName" "PASS" "No broad GRANT ALL to anon/authenticated/public found."
         }
 
-        $securityDefinerCount = ([regex]::Matches($content, '(?is)SECURITY\s+DEFINER')).Count
-        $searchPathCount = ([regex]::Matches($content, '(?is)SET\s+search_path')).Count
+        $securityDefinerCount = ([regex]::Matches($sqlForChecks, '(?is)SECURITY\s+DEFINER')).Count
+        $searchPathCount = ([regex]::Matches($sqlForChecks, '(?is)SET\s+search_path')).Count
         if ($securityDefinerCount -gt 0 -and $searchPathCount -lt $securityDefinerCount) {
             Add-Result "Supabase" "SECURITY DEFINER search_path: $fileName" "WARN" "Found $securityDefinerCount SECURITY DEFINER entries and $searchPathCount SET search_path entries." "Review every SECURITY DEFINER function before production migration."
         } else {
             Add-Result "Supabase" "SECURITY DEFINER search_path: $fileName" "PASS" "SECURITY DEFINER entries have matching or surplus SET search_path guardrails."
         }
 
-        if ($content -match '(?is)ENABLE\s+ROW\s+LEVEL\s+SECURITY') {
+        $createsPublicTable = $sqlForChecks -match '(?is)CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?:public\.)?\w+'
+        if ($sqlForChecks -match '(?is)ENABLE\s+ROW\s+LEVEL\s+SECURITY') {
             Add-Result "Supabase" "RLS statements present: $fileName" "PASS" "ENABLE ROW LEVEL SECURITY statements found."
-        } else {
+        } elseif ($createsPublicTable) {
             Add-Result "Supabase" "RLS statements present: $fileName" "WARN" "No ENABLE ROW LEVEL SECURITY statement found." "Confirm this file is not intended to define exposed public tables."
+        } else {
+            Add-Result "Supabase" "RLS statements present: $fileName" "PASS" "Migration does not create a public table; no new RLS enablement is required."
         }
     }
 }
@@ -161,6 +172,8 @@ function Test-YoutubeEnvironment {
     ) | Where-Object { Test-Path $_ }
 
     $expectedVars = @(
+        "VITE_SUPABASE_URL",
+        "VITE_SUPABASE_ANON_KEY",
         "SUPABASE_URL",
         "SUPABASE_ANON_KEY",
         "YOUTUBE_CLIENT_ID",
@@ -257,9 +270,9 @@ function Invoke-InstallerValidation {
 }
 
 function Write-Report {
-    $failCount = ($Results | Where-Object { $_.Status -eq "FAIL" }).Count
-    $warnCount = ($Results | Where-Object { $_.Status -eq "WARN" }).Count
-    $skipCount = ($Results | Where-Object { $_.Status -eq "SKIP" }).Count
+    $failCount = @($Results | Where-Object { $_.Status -eq "FAIL" }).Count
+    $warnCount = @($Results | Where-Object { $_.Status -eq "WARN" }).Count
+    $skipCount = @($Results | Where-Object { $_.Status -eq "SKIP" }).Count
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add("# LoLShorts Release Field QA Preflight") | Out-Null
@@ -268,7 +281,7 @@ function Write-Report {
     $lines.Add("- Project root: $ProjectRoot") | Out-Null
     $lines.Add("- Result summary: $failCount fail, $warnCount warn, $skipCount skipped") | Out-Null
     $lines.Add("") | Out-Null
-    $lines.Add("This report is local automated evidence only. It does not replace E5 field evidence in docs/FIELD_QA_COMMERCIAL_READINESS.md.") | Out-Null
+    $lines.Add("This report is local automated evidence only. It does not replace the E5 run in docs/E5_FIELD_QA_PACKET.md or the readiness rows in docs/FIELD_QA_COMMERCIAL_READINESS.md.") | Out-Null
     $lines.Add("") | Out-Null
     $lines.Add("| Area | Check | Status | Evidence | Next action |") | Out-Null
     $lines.Add("| --- | --- | --- | --- | --- |") | Out-Null
@@ -293,9 +306,12 @@ Invoke-LoggedCommand "Frontend" "TypeScript typecheck" "npm" @("run", "typecheck
 Invoke-LoggedCommand "Frontend" "ESLint" "npm" @("run", "lint")
 Invoke-LoggedCommand "Frontend" "Production build" "npm" @("run", "build")
 Invoke-LoggedCommand "Frontend" "Jest unit tests" "npm" @("run", "test:unit")
+Invoke-LoggedCommand "Frontend" "Node dependency audit" "npm" @("run", "audit:all")
 Invoke-LoggedCommand "Rust" "Formatting" "cargo" @("fmt", "--manifest-path", "src-tauri\Cargo.toml", "--all", "--", "--check")
 Invoke-LoggedCommand "Rust" "Clippy" "cargo" @("clippy", "--manifest-path", "src-tauri\Cargo.toml", "--all-targets", "--", "-D", "warnings")
 Invoke-LoggedCommand "Rust" "Tests" "cargo" @("test", "--manifest-path", "src-tauri\Cargo.toml")
+Invoke-LoggedCommand "Rust" "Dependency audit" "cargo" @("audit", "--file", "Cargo.lock")
+Invoke-LoggedCommand "Field QA" "Evidence tool fail-closed tests" "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/test-field-evidence-tools.ps1")
 Invoke-LoggedCommand "Repository" "Diff whitespace check" "git" @("diff", "--check")
 
 Test-SupabaseSqlGuardrails

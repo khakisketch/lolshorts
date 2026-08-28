@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useYouTube } from '@/hooks/useYouTube';
-import { Button } from '@/components/ui/button';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
-import { Youtube, LogOut, CheckCircle, AlertCircle } from 'lucide-react';
-import { open } from '@tauri-apps/plugin-shell';
-import { logger } from '@/lib/logger';
+import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useYouTube } from "@/hooks/useYouTube";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Youtube, LogOut, CheckCircle, AlertCircle } from "lucide-react";
+import { open } from "@tauri-apps/plugin-shell";
+import { logger } from "@/lib/logger";
 
 // The backend's local OAuth callback server times out after 120s
 // (callback_server.rs); give the UI a matching fallback so it never waits
@@ -80,12 +80,24 @@ export function YouTubeAuth() {
       clearAuthTimeout();
       authTimeoutRef.current = setTimeout(() => {
         setAuthInProgress(false);
-        setActionError(t('youtube.auth.authTimeout', 'Authorization timed out. Please try again.'));
+        setActionError(
+          t(
+            "youtube.auth.authTimeout",
+            "Authorization timed out. Please try again.",
+          ),
+        );
       }, AUTH_WAIT_TIMEOUT_MS);
     } catch (err) {
-      logger.error('Auth error:', err);
+      logger.error("Auth error:", err);
       setAuthInProgress(false);
-      setActionError(err instanceof Error ? err.message : t('youtube.auth.authStartFailed', 'Failed to start YouTube authentication.'));
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : t(
+              "youtube.auth.authStartFailed",
+              "Failed to start YouTube authentication.",
+            ),
+      );
     }
   };
 
@@ -94,14 +106,21 @@ export function YouTubeAuth() {
       setActionError(null);
       await logout();
     } catch (err) {
-      logger.error('Logout error:', err);
-      setActionError(err instanceof Error ? err.message : t('youtube.auth.logoutFailed', 'Failed to disconnect YouTube account.'));
+      logger.error("Logout error:", err);
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : t(
+              "youtube.auth.logoutFailed",
+              "Failed to disconnect YouTube account.",
+            ),
+      );
     }
   };
 
   const formatExpiryDate = (timestamp: number) => {
     const date = new Date(timestamp * 1000);
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+    return date.toLocaleDateString() + " " + date.toLocaleTimeString();
   };
 
   return (
@@ -111,21 +130,23 @@ export function YouTubeAuth() {
           <div className="flex items-center gap-3">
             <Youtube className="h-6 w-6 text-red-500" />
             <div>
-              <h3 className="text-lg font-semibold">{t('youtube.auth.youtubeAccount')}</h3>
+              <h3 className="text-lg font-semibold">
+                {t("youtube.auth.youtubeAccount")}
+              </h3>
               <p className="text-sm text-muted-foreground">
-                {t('youtube.auth.connectDescription')}
+                {t("youtube.auth.connectDescription")}
               </p>
             </div>
           </div>
           {authStatus.authenticated ? (
             <Badge variant="default" className="gap-1">
               <CheckCircle className="h-3 w-3" />
-              {t('youtube.auth.connected')}
+              {t("youtube.auth.connected")}
             </Badge>
           ) : (
             <Badge variant="secondary" className="gap-1">
               <AlertCircle className="h-3 w-3" />
-              {t('youtube.auth.disconnected')}
+              {t("youtube.auth.disconnected")}
             </Badge>
           )}
         </div>
@@ -142,13 +163,16 @@ export function YouTubeAuth() {
           <div className="space-y-4">
             <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
               <div>
-                <p className="text-sm font-medium">{t('youtube.auth.signedInAs')}</p>
+                <p className="text-sm font-medium">
+                  {t("youtube.auth.signedInAs")}
+                </p>
                 <p className="text-sm text-muted-foreground">
-                  {t('youtube.auth.youtubeAccount')}
+                  {t("youtube.auth.youtubeAccount")}
                 </p>
                 {authStatus.expires_at && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    {t('youtube.auth.tokenExpires')} {formatExpiryDate(authStatus.expires_at)}
+                    {t("youtube.auth.tokenExpires")}{" "}
+                    {formatExpiryDate(authStatus.expires_at)}
                   </p>
                 )}
               </div>
@@ -159,13 +183,13 @@ export function YouTubeAuth() {
                 disabled={isLoading}
               >
                 <LogOut className="h-4 w-4 mr-2" />
-                {t('youtube.auth.signOut')}
+                {t("youtube.auth.signOut")}
               </Button>
             </div>
 
             <Alert>
               <AlertDescription>
-                {t('youtube.auth.accountConnected')}
+                {t("youtube.auth.accountConnected")}
               </AlertDescription>
             </Alert>
           </div>
@@ -173,7 +197,7 @@ export function YouTubeAuth() {
           <div className="space-y-4">
             <Alert>
               <AlertDescription>
-                {t('youtube.auth.connectPrompt')}
+                {t("youtube.auth.connectPrompt")}
               </AlertDescription>
             </Alert>
 
@@ -181,7 +205,7 @@ export function YouTubeAuth() {
               <Alert>
                 <CheckCircle className="h-4 w-4" />
                 <AlertDescription>
-                  {t('youtube.auth.waitingForAuthorization')}
+                  {t("youtube.auth.waitingForAuthorization")}
                 </AlertDescription>
               </Alert>
             )}
@@ -192,11 +216,13 @@ export function YouTubeAuth() {
               className="w-full"
             >
               <Youtube className="h-4 w-4 mr-2" />
-              {authInProgress ? t('youtube.auth.connectingAutomatically') : t('youtube.auth.connectYouTubeAccount')}
+              {authInProgress
+                ? t("youtube.auth.connectingAutomatically")
+                : t("youtube.auth.connectYouTubeAccount")}
             </Button>
 
             <p className="text-xs text-muted-foreground">
-              {t('youtube.auth.automaticAuth')}
+              {t("youtube.auth.automaticAuth")}
             </p>
           </div>
         )}

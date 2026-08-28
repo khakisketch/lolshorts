@@ -70,7 +70,7 @@ impl FfmpegPool {
             {
                 let mut command = tokio::process::Command::new("taskkill");
                 command
-                    .args(["/F", "/PID", &pid.to_string()])
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
                     .kill_on_drop(true);
                 let _ = tokio::time::timeout(Duration::from_secs(5), command.output()).await;
             }
@@ -97,7 +97,7 @@ impl Drop for FfmpegPool {
             #[cfg(windows)]
             {
                 let mut command = std::process::Command::new("taskkill");
-                command.args(["/F", "/PID", &pid.to_string()]);
+                command.args(["/F", "/T", "/PID", &pid.to_string()]);
                 let _ = crate::utils::process::command_output_with_timeout(
                     command,
                     Duration::from_secs(5),

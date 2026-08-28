@@ -1,97 +1,97 @@
-import { render, screen } from '@testing-library/react';
-import { ProtectedFeature } from './ProtectedFeature';
-import { useAuthStore } from '@/lib/auth';
+import { render, screen } from "@testing-library/react";
+import { ProtectedFeature } from "./ProtectedFeature";
+import { useAuthStore } from "@/lib/auth";
 
 // Mock the auth store
-jest.mock('@/lib/auth');
+jest.mock("@/lib/auth");
 
-describe('ProtectedFeature', () => {
+describe("ProtectedFeature", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('renders children when user is authenticated', () => {
+  it("renders children when user is authenticated", () => {
     // Mock authenticated user
     (useAuthStore as unknown as jest.Mock).mockReturnValue({
-      user: { id: '123', email: 'test@example.com' },
+      user: { id: "123", email: "test@example.com" },
       isAuthenticated: true,
     });
 
     render(
       <ProtectedFeature>
         <div>Protected Content</div>
-      </ProtectedFeature>
+      </ProtectedFeature>,
     );
 
-    expect(screen.getByText('Protected Content')).toBeInTheDocument();
+    expect(screen.getByText("Protected Content")).toBeInTheDocument();
   });
 
-  it('renders non-PRO features for authenticated FREE users', () => {
+  it("renders non-PRO features for authenticated FREE users", () => {
     (useAuthStore as unknown as jest.Mock).mockReturnValue({
-      user: { id: '123', email: 'test@example.com', tier: 'FREE' },
+      user: { id: "123", email: "test@example.com", tier: "FREE" },
       isAuthenticated: true,
     });
 
     render(
       <ProtectedFeature requiresPro={false} featureName="Auto-Edit">
         <div>Auto-Edit Content</div>
-      </ProtectedFeature>
+      </ProtectedFeature>,
     );
 
-    expect(screen.getByText('Auto-Edit Content')).toBeInTheDocument();
+    expect(screen.getByText("Auto-Edit Content")).toBeInTheDocument();
   });
 
-  it('blocks PRO-only features for authenticated FREE users', () => {
+  it("blocks PRO-only features for authenticated FREE users", () => {
     (useAuthStore as unknown as jest.Mock).mockReturnValue({
-      user: { id: '123', email: 'test@example.com', tier: 'FREE' },
+      user: { id: "123", email: "test@example.com", tier: "FREE" },
       isAuthenticated: true,
-      entitlement: { tier: 'FREE', status: 'active' },
+      entitlement: { tier: "FREE", status: "active" },
     });
 
     render(
       <ProtectedFeature requiresPro={true} featureName="YouTube">
         <div>YouTube Content</div>
-      </ProtectedFeature>
+      </ProtectedFeature>,
     );
 
-    expect(screen.queryByText('YouTube Content')).not.toBeInTheDocument();
-    expect(screen.getByText('PRO')).toBeInTheDocument();
+    expect(screen.queryByText("YouTube Content")).not.toBeInTheDocument();
+    expect(screen.getByText("PRO")).toBeInTheDocument();
   });
 
-  it('does not trust a persisted user tier without active entitlement', () => {
+  it("does not trust a persisted user tier without active entitlement", () => {
     (useAuthStore as unknown as jest.Mock).mockReturnValue({
-      user: { id: '123', email: 'test@example.com', tier: 'PRO' },
+      user: { id: "123", email: "test@example.com", tier: "PRO" },
       isAuthenticated: true,
-      entitlement: { tier: 'FREE', status: 'active' },
+      entitlement: { tier: "FREE", status: "active" },
     });
 
     render(
       <ProtectedFeature requiresPro={true} featureName="YouTube">
         <div>YouTube Content</div>
-      </ProtectedFeature>
+      </ProtectedFeature>,
     );
 
-    expect(screen.queryByText('YouTube Content')).not.toBeInTheDocument();
-    expect(screen.getByText('PRO')).toBeInTheDocument();
+    expect(screen.queryByText("YouTube Content")).not.toBeInTheDocument();
+    expect(screen.getByText("PRO")).toBeInTheDocument();
   });
 
-  it('renders PRO-only features only with active Supabase entitlement', () => {
+  it("renders PRO-only features only with active Supabase entitlement", () => {
     (useAuthStore as unknown as jest.Mock).mockReturnValue({
-      user: { id: '123', email: 'test@example.com', tier: 'FREE' },
+      user: { id: "123", email: "test@example.com", tier: "FREE" },
       isAuthenticated: true,
-      entitlement: { tier: 'PRO', status: 'active' },
+      entitlement: { tier: "PRO", status: "active" },
     });
 
     render(
       <ProtectedFeature requiresPro={true} featureName="YouTube">
         <div>YouTube Content</div>
-      </ProtectedFeature>
+      </ProtectedFeature>,
     );
 
-    expect(screen.getByText('YouTube Content')).toBeInTheDocument();
+    expect(screen.getByText("YouTube Content")).toBeInTheDocument();
   });
 
-  it('renders fallback when user is not authenticated', () => {
+  it("renders fallback when user is not authenticated", () => {
     // Mock unauthenticated state
     (useAuthStore as unknown as jest.Mock).mockReturnValue({
       user: null,
@@ -101,14 +101,14 @@ describe('ProtectedFeature', () => {
     render(
       <ProtectedFeature fallback={<div>Please login</div>}>
         <div>Protected Content</div>
-      </ProtectedFeature>
+      </ProtectedFeature>,
     );
 
-    expect(screen.getByText('Please login')).toBeInTheDocument();
-    expect(screen.queryByText('Protected Content')).not.toBeInTheDocument();
+    expect(screen.getByText("Please login")).toBeInTheDocument();
+    expect(screen.queryByText("Protected Content")).not.toBeInTheDocument();
   });
 
-  it('renders default fallback when no fallback is provided', () => {
+  it("renders default fallback when no fallback is provided", () => {
     (useAuthStore as unknown as jest.Mock).mockReturnValue({
       user: null,
       isAuthenticated: false,
@@ -117,10 +117,10 @@ describe('ProtectedFeature', () => {
     render(
       <ProtectedFeature>
         <div>Protected Content</div>
-      </ProtectedFeature>
+      </ProtectedFeature>,
     );
 
     // Should render nothing or default message
-    expect(screen.queryByText('Protected Content')).not.toBeInTheDocument();
+    expect(screen.queryByText("Protected Content")).not.toBeInTheDocument();
   });
 });

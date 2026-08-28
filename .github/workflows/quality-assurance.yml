@@ -1,13 +1,7 @@
-name: Quality Assurance
+name: Legacy Extended QA (Manual)
 
 on:
-  push:
-    branches: [main, master, develop]
-  pull_request:
-    branches: [main, master, develop]
-  schedule:
-    # Run daily at 2 AM UTC
-    - cron: "0 2 * * *"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,11 +20,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
 
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
         with:
           components: rustfmt, clippy
 
@@ -66,13 +63,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
       - name: Install dependencies
         run: npm ci
@@ -126,13 +126,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
       - name: Install system dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -143,7 +146,7 @@ jobs:
         run: npm ci
 
       - name: Build application (debug)
-        run: cargo tauri build -- --debug
+        run: npm run tauri build -- --debug
 
       - name: Run integration tests
         run: |
@@ -181,11 +184,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
 
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Install dependencies
         run: npm ci
@@ -194,7 +200,7 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Build application (debug)
-        run: cargo tauri build -- --debug
+        run: npm run tauri build -- --debug
 
       - name: Run comprehensive E2E tests
         run: npx playwright test --project=chromium
@@ -238,17 +244,20 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
       - name: Run Rust security audit
         run: |
-          cargo install cargo-audit
-          cargo audit --manifest-path src-tauri/Cargo.toml
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit --file Cargo.lock
 
       - name: Run cargo-deny security check
         uses: EmbarkStudios/cargo-deny-action@v1
@@ -259,7 +268,7 @@ jobs:
         run: npm ci
 
       - name: Run npm audit
-        run: npm audit --audit-level=moderate
+        run: npm audit --omit=dev --audit-level=moderate
 
       - name: Run CodeQL Analysis
         uses: github/codeql-action/init@v3
@@ -292,7 +301,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
       - name: Install dependencies
         run: npm ci

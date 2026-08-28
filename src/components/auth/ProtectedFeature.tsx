@@ -23,7 +23,8 @@ export function ProtectedFeature({
   const { t } = useTranslation();
   const { entitlement, isAuthenticated, user } = useAuthStore();
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const hasProEntitlement = entitlement?.tier === "PRO" && entitlement.status === "active";
+  const hasProEntitlement =
+    entitlement?.tier === "PRO" && entitlement.status === "active";
 
   // Not authenticated
   if (!isAuthenticated || !user) {
@@ -36,22 +37,22 @@ export function ProtectedFeature({
         <div className="gaming-panel p-6">
           <div className="mb-4">
             <h3 className="text-lg font-semibold flex items-center gap-2">
-              {t('auth.authenticationRequired')}
+              {t("auth.authenticationRequired")}
             </h3>
             <p className="text-sm text-muted-foreground">
-              {t('auth.pleaseLoginToAccess', { feature: featureName })}
+              {t("auth.pleaseLoginToAccess", { feature: featureName })}
             </p>
           </div>
           <div>
             <p className="text-sm text-muted-foreground mb-4">
-              {t('auth.createAccountOrLogin')}
+              {t("auth.createAccountOrLogin")}
             </p>
             <Button
               onClick={() => setAuthModalOpen(true)}
               className="w-full"
               data-testid="open-auth-modal-button"
             >
-              {t('auth.loginSignup')}
+              {t("auth.loginSignup")}
             </Button>
           </div>
         </div>
@@ -76,28 +77,28 @@ export function ProtectedFeature({
         <div className="mb-4">
           <h3 className="text-lg font-semibold flex items-center justify-between">
             <span className="flex items-center gap-2">
-              {t('protectedFeature.proFeature')}
+              {t("protectedFeature.proFeature")}
             </span>
             <Badge variant="default">PRO</Badge>
           </h3>
           <p className="text-sm text-muted-foreground">
-            {t('protectedFeature.upgradeDescription', { feature: featureName })}
+            {t("protectedFeature.upgradeDescription", { feature: featureName })}
           </p>
         </div>
         <div>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              {t('protectedFeature.exclusiveDescription')}
+              {t("protectedFeature.exclusiveDescription")}
             </p>
             <ul className="list-disc list-inside space-y-2 text-sm">
-              <li>{t('protectedFeature.features.manualClipExtraction')}</li>
-              <li>{t('protectedFeature.features.youtubeShortsComposition')}</li>
-              <li>{t('protectedFeature.features.customThumbnail')}</li>
-              <li>{t('protectedFeature.features.advancedVideoEditing')}</li>
-              <li>{t('protectedFeature.features.noWatermarks')}</li>
+              <li>{t("protectedFeature.features.manualClipExtraction")}</li>
+              <li>{t("protectedFeature.features.youtubeShortsComposition")}</li>
+              <li>{t("protectedFeature.features.customThumbnail")}</li>
+              <li>{t("protectedFeature.features.advancedVideoEditing")}</li>
+              <li>{t("protectedFeature.features.noWatermarks")}</li>
             </ul>
             <Button onClick={onUpgrade} className="w-full" variant="default">
-              {t('protectedFeature.upgradeToPro')}
+              {t("protectedFeature.upgradeToPro")}
             </Button>
           </div>
         </div>

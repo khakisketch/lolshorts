@@ -12,7 +12,7 @@ use tracing::{error, info, warn};
 
 #[cfg(target_os = "windows")]
 use super::types::get_window_rect;
-use super::types::RecordingConfig;
+use super::types::{CaptureBackend, CaptureMode, RecordingConfig};
 use crate::utils::ffmpeg::{get_ffmpeg_path, get_ffprobe_path};
 
 /// Monitor geometry list: (x, y, width, height) per display.
@@ -26,8 +26,17 @@ const SEGMENT_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const START_HEALTH_PROBE_DELAY: Duration = Duration::from_millis(1200);
 /// Number of trailing stderr lines kept for start-up failure diagnostics.
 const STDERR_TAIL_LINES: usize = 20;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
 /// Polling interval while waiting for the rolling buffer to cover a clip window.
 const COVERAGE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// A live WASAPI WAV has its header checkpointed every 500ms. Wait briefly for
+/// the advertised audio length to cover the chosen video window before FFmpeg
+/// opens it, rather than exporting an audio stream that ends early.
+const AUDIO_COVERAGE_WAIT: Duration = Duration::from_secs(2);
+const AUDIO_COVERAGE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Shortest window that still counts as a clip.
 ///
 /// When the requested window falls outside the rolling buffer `compute_clip_window`
@@ -65,6 +74,82 @@ const CONCAT_TRIM_GUARD_SECS: f64 = 3.0;
 /// Rolling tail of FFmpeg stderr lines shared with the stderr reader task.
 type StderrTail = Arc<Mutex<VecDeque<String>>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FfmpegTermination {
+    Graceful,
+    Forced,
+    WaitError,
+    ReapTimedOut,
+}
+
+async fn terminate_ffmpeg_process(
+    mut process: tokio::process::Child,
+    graceful_timeout: Duration,
+    forced_wait: Duration,
+) -> FfmpegTermination {
+    use tokio::io::AsyncWriteExt;
+
+    if let Some(mut stdin) = process.stdin.take() {
+        if let Err(e) = stdin.write_all(b"q\n").await {
+            warn!("FFmpeg graceful-stop command failed: {}", e);
+        } else if let Err(e) = stdin.flush().await {
+            warn!("FFmpeg graceful-stop flush failed: {}", e);
+        }
+        drop(stdin);
+    }
+
+    match tokio::time::timeout(graceful_timeout, process.wait()).await {
+        Ok(Ok(_)) => {
+            info!("FFmpeg 녹화 정상 중지됨");
+            FfmpegTermination::Graceful
+        }
+        Ok(Err(e)) => {
+            warn!("FFmpeg 프로세스 종료 오류: {}", e);
+            FfmpegTermination::WaitError
+        }
+        Err(_) => {
+            warn!("FFmpeg 프로세스 정상 종료 타임아웃 - 강제 종료 시도");
+            let _ = process.kill().await;
+            match tokio::time::timeout(forced_wait, process.wait()).await {
+                Ok(Ok(_)) => {
+                    info!("FFmpeg 강제 종료 후 프로세스 회수됨");
+                    FfmpegTermination::Forced
+                }
+                Ok(Err(e)) => {
+                    warn!("FFmpeg 강제 종료 후 wait 실패: {}", e);
+                    FfmpegTermination::WaitError
+                }
+                Err(_) => {
+                    warn!("FFmpeg 강제 종료 후 프로세스를 회수하지 못함");
+                    FfmpegTermination::ReapTimedOut
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn classify_windows_capture_mode(
+    usable_hwnd_rect: bool,
+    hwnd_was_found: bool,
+    usable_title_window: bool,
+    monitor_index: Option<u32>,
+) -> CaptureMode {
+    if usable_hwnd_rect {
+        return CaptureMode::HwndDesktopRegion;
+    }
+    if hwnd_was_found {
+        return CaptureMode::DesktopFallback;
+    }
+    if usable_title_window {
+        return CaptureMode::TitleWindow;
+    }
+    if monitor_index.is_some() {
+        return CaptureMode::MonitorDesktop;
+    }
+    CaptureMode::DesktopFallback
+}
+
 #[cfg(target_os = "windows")]
 use crate::recording::wasapi_audio::WasapiCapture;
 
@@ -74,10 +159,6 @@ use crate::recording::wasapi_audio::WasapiCapture;
 /// Win32 MONITORINFO API. Falls back to primary if the index is out of range.
 #[cfg(target_os = "windows")]
 fn get_monitor_offset(index: u32) -> (i32, i32, u32, u32) {
-    if index == 0 {
-        return (0, 0, 0, 0);
-    }
-
     // Collect all monitor rects via EnumDisplayMonitors callback.
     // The callback stores MONITORINFO for each monitor in insertion order
     // (which matches the EnumDisplayMonitors enumeration order on Windows).
@@ -135,6 +216,76 @@ fn get_monitor_offset(index: u32) -> (i32, i32, u32, u32) {
     }
 }
 
+/// Bounds of the virtual desktop which gdigrab captures for `-i desktop`.
+/// Kept only for structured diagnostics; FFmpeg still owns the actual capture.
+#[cfg(target_os = "windows")]
+fn get_virtual_desktop_rect() -> (i32, i32, u32, u32) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetSystemMetrics(index: i32) -> i32;
+    }
+
+    const SM_XVIRTUALSCREEN: i32 = 76;
+    const SM_YVIRTUALSCREEN: i32 = 77;
+    const SM_CXVIRTUALSCREEN: i32 = 78;
+    const SM_CYVIRTUALSCREEN: i32 = 79;
+
+    unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN).max(0) as u32,
+            GetSystemMetrics(SM_CYVIRTUALSCREEN).max(0) as u32,
+        )
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn stale_capture_cleanup_script(recordings_marker: &str) -> String {
+    let marker = recordings_marker.replace('\'', "''");
+    format!(
+        "$targets = Get-CimInstance Win32_Process -Filter \"Name LIKE 'ffmpeg%'\" | \
+         Where-Object {{ $_.CommandLine -and $_.CommandLine.Contains('{}') }}; \
+         $targets | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; $_.ProcessId }}",
+        marker
+    )
+}
+
+/// Stop only an orphaned capture-sidecar whose command line names this recorder's
+/// segment directory. The lookup and termination happen before stale segment deletion.
+#[cfg(target_os = "windows")]
+async fn terminate_stale_capture_ffmpeg(segment_dir: &std::path::Path) {
+    let script = stale_capture_cleanup_script(&segment_dir.to_string_lossy());
+    let result = tokio::task::spawn_blocking(move || {
+        let mut command = std::process::Command::new("powershell");
+        command.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        crate::utils::process::command_output_with_timeout(
+            command,
+            Duration::from_secs(3),
+            "startup capture ffmpeg cleanup",
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Ok(output)) if output.status.success() => {
+            let pids = String::from_utf8_lossy(&output.stdout);
+            for pid in pids.lines().map(str::trim).filter(|line| !line.is_empty()) {
+                warn!(
+                    stale_ffmpeg_pid = pid,
+                    "Stopped stale capture FFmpeg before cleanup"
+                );
+            }
+        }
+        Ok(Ok(output)) => warn!(
+            exit_code = ?output.status.code(),
+            "Startup capture FFmpeg cleanup returned a non-zero status"
+        ),
+        Ok(Err(e)) => warn!("Startup capture FFmpeg cleanup failed: {}", e),
+        Err(e) => warn!("Startup capture FFmpeg cleanup task failed: {}", e),
+    }
+}
+
 /// FFmpeg 세그먼트 기반 녹화기
 /// 세그먼트 muxer를 사용하여 순환 버퍼 구현
 pub struct SegmentRecorder {
@@ -172,6 +323,15 @@ pub struct SegmentRecorder {
     /// Latest cumulative encoded frame count parsed from FFmpeg progress output.
     /// Powers the real recording FPS stat instead of returning the configured value.
     pub(super) frame_count: Arc<AtomicU64>,
+    /// Actual input selected for the current session. Runtime diagnostics only.
+    pub(super) capture_mode: Option<CaptureMode>,
+    /// Persistent dashboard warning when capture had to leave the game window.
+    pub(super) capture_warning: Option<String>,
+    /// Actual frame acquisition backend selected for this session.
+    pub(super) capture_backend: Option<CaptureBackend>,
+    /// One-session circuit breaker set after a Desktop Duplication launch failure.
+    /// The immediate retry uses the known-compatible GDI path.
+    force_gdigrab: bool,
 }
 
 impl SegmentRecorder {
@@ -200,13 +360,41 @@ impl SegmentRecorder {
             mic_start_walltime: None,
             mic_active: false,
             frame_count: Arc::new(AtomicU64::new(0)),
+            capture_mode: None,
+            capture_warning: None,
+            capture_backend: None,
+            force_gdigrab: false,
         })
     }
 
     /// 세그먼트 기반 녹화 시작
     pub async fn start(&mut self) -> Result<()> {
         self.restart_attempted = false;
-        self.start_internal(true).await
+        self.force_gdigrab = false;
+        match self.start_internal(true).await {
+            Ok(()) => Ok(()),
+            Err(ddagrab_error)
+                if self.capture_backend == Some(CaptureBackend::DesktopDuplication) =>
+            {
+                warn!(
+                    error = %ddagrab_error,
+                    "Desktop Duplication capture failed during startup; retrying with GDI"
+                );
+                self.force_gdigrab = true;
+                self.start_internal(true).await.with_context(|| {
+                    format!(
+                        "Desktop Duplication 및 GDI 캡처 시작 실패. 첫 오류: {}",
+                        ddagrab_error
+                    )
+                })?;
+                self.capture_warning = Some(
+                    "Desktop Duplication was unavailable; recording with the compatible GDI backend."
+                        .to_string(),
+                );
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Internal FFmpeg launch shared by `start()` and crash-recovery restart.
@@ -219,6 +407,13 @@ impl SegmentRecorder {
         }
 
         if cleanup {
+            // A previous app crash can leave FFmpeg writing one of these segment files.
+            // Stop only a process whose command line contains this exact recording
+            // directory before deleting stale media; unrelated FFmpeg work is never
+            // selected by the cleanup query.
+            #[cfg(target_os = "windows")]
+            terminate_stale_capture_ffmpeg(&self.segment_dir).await;
+
             self.cleanup_old_segments()?;
 
             // Remove any stale WASAPI wav left over from a previous session so
@@ -243,6 +438,9 @@ impl SegmentRecorder {
             self.mic_start_walltime = None;
             self.mic_active = false;
             self.frame_count.store(0, Ordering::Relaxed);
+            self.capture_mode = None;
+            self.capture_warning = None;
+            self.capture_backend = None;
         }
 
         let ffmpeg_path = get_ffmpeg_path().context("FFmpeg를 찾을 수 없습니다")?;
@@ -284,50 +482,119 @@ impl SegmentRecorder {
         #[allow(unused_assignments)]
         let mut has_audio = false;
 
+        let encoder = self
+            .config
+            .encoder
+            .to_ffmpeg_name_with_hw(self.config.hw_accel);
+
+        #[cfg(target_os = "windows")]
+        let mut windows_ddagrab = false;
+
         // Record time before any capture backends start for audio-video sync analysis
         let video_start_instant = std::time::Instant::now();
 
         #[cfg(target_os = "windows")]
         {
-            cmd.arg("-f").arg("gdigrab");
-            cmd.arg("-framerate").arg(self.config.fps.to_string());
-            // 커서를 합성하지 않는다.
-            //
-            // gdigrab 의 기본값은 `draw_mouse=1` 이라 매 프레임 GDI 에서 커서를 읽어
-            // 합성하는데, 60fps 로 이걸 하면 **실제 화면의 커서가 깜빡이는 것처럼
-            // 보인다**(실사용 중 보고됨). 롤은 커서를 계속 움직이는 게임이라 특히
-            // 두드러진다. 녹화가 게임 플레이를 방해하는 것은 클립에 커서가 안 남는
-            // 것보다 나쁘다.
-            cmd.arg("-draw_mouse").arg("0");
-
-            // Re-resolve the League window at every recording start.
-            //
-            // `config.capture_hwnd` is filled in once, by `RecordingConfig::default()`
-            // when the app boots. Launching LoLShorts from the launcher — the normal
-            // order — therefore stores the CLIENT's handle ("League of Legends",
-            // LeagueClientUx), and the client window stays alive (just hidden) once a
-            // match starts. The stored handle keeps returning a valid rect, so capture
-            // silently records the client's screen region instead of the game.
-            // `find_league_hwnd` tries "League of Legends (TM) Client" first, so
-            // resolving here picks the in-game window whenever a match is running and
-            // falls back to the boot-time handle otherwise.
+            // Re-resolve the game HWND on every session. Desktop Duplication is the
+            // performance-first path when NVENC can consume D3D11 frames directly; GDI
+            // remains an automatic compatibility fallback.
             let capture_hwnd = super::types::find_league_hwnd().or(self.config.capture_hwnd);
 
-            if let Some(hwnd) = capture_hwnd {
-                // `even_dimensions`: GetWindowRect happily reports an odd width/height
-                // (a restored/DPI-scaled window is regularly 1919x1079), and h264 with
-                // yuv420p then dies instantly with "width not divisible by 2" — the
-                // spawn succeeds, so recording *looks* live while nothing is captured.
-                // 인코더가 받아들일 수 있는 최소 크기. 이보다 작으면 title 폴백도
-                // 소용이 없다 — 같은 창을 같은 크기로 잡을 뿐이다.
-                //
-                // 예전에는 `w == 0 || h == 0` 만 보고 title 캡처로 넘겼는데,
-                // 폴백 경로에는 크기 검증이 아예 없어서 1x1 창을 그대로 gdigrab 에
-                // 넘겼고 NVENC 가 즉사했다(실게임 관측). 재시도가 없어 그 판은
-                // 통째로 녹화되지 않았다.
+            if !self.force_gdigrab && encoder.contains("nvenc") {
                 const MIN_ENCODABLE: u32 = 64;
+                if let Some(hwnd) = capture_hwnd {
+                    let rect = get_window_rect(hwnd).and_then(|(x, y, w, h)| {
+                        let (w, h) = even_dimensions(w, h);
+                        (w >= MIN_ENCODABLE && h >= MIN_ENCODABLE).then_some((x, y, w, h))
+                    });
+                    if let Some((x, y, w, h)) = rect {
+                        let output_idx = self.config.monitor_index.unwrap_or(0);
+                        let (monitor_x, monitor_y, monitor_w, monitor_h) =
+                            get_monitor_offset(output_idx);
+                        let local_x = x - monitor_x;
+                        let local_y = y - monitor_y;
+                        let fits_output = monitor_w > 0
+                            && monitor_h > 0
+                            && local_x >= 0
+                            && local_y >= 0
+                            && local_x as u32 + w <= monitor_w
+                            && local_y as u32 + h <= monitor_h;
 
-                let rect = get_window_rect(hwnd).and_then(|(x, y, w, h)| {
+                        if fits_output {
+                            let filter = desktop_duplication_filter(
+                                output_idx,
+                                self.config.fps,
+                                w,
+                                h,
+                                local_x,
+                                local_y,
+                            );
+                            cmd.arg("-filter_complex").arg(filter);
+                            windows_ddagrab = true;
+                            self.capture_backend = Some(CaptureBackend::DesktopDuplication);
+                            self.capture_mode = Some(CaptureMode::HwndDesktopRegion);
+                            self.capture_warning = None;
+                            info!(
+                                capture_backend = CaptureBackend::DesktopDuplication.as_str(),
+                                capture_mode = CaptureMode::HwndDesktopRegion.as_str(),
+                                capture_hwnd = format_args!("0x{:X}", hwnd),
+                                capture_output = output_idx,
+                                capture_x = x,
+                                capture_y = y,
+                                capture_width = w,
+                                capture_height = h,
+                                "Recording capture input selected"
+                            );
+                        } else {
+                            warn!(
+                                capture_hwnd = format_args!("0x{:X}", hwnd),
+                                capture_output = output_idx,
+                                "Game window does not fit the selected Desktop Duplication output; using GDI"
+                            );
+                        }
+                    }
+                }
+            }
+
+            if !windows_ddagrab {
+                self.capture_backend = Some(CaptureBackend::GdiGrab);
+                cmd.arg("-f").arg("gdigrab");
+                cmd.arg("-framerate").arg(self.config.fps.to_string());
+                // 커서를 합성하지 않는다.
+                //
+                // gdigrab 의 기본값은 `draw_mouse=1` 이라 매 프레임 GDI 에서 커서를 읽어
+                // 합성하는데, 60fps 로 이걸 하면 **실제 화면의 커서가 깜빡이는 것처럼
+                // 보인다**(실사용 중 보고됨). 롤은 커서를 계속 움직이는 게임이라 특히
+                // 두드러진다. 녹화가 게임 플레이를 방해하는 것은 클립에 커서가 안 남는
+                // 것보다 나쁘다.
+                cmd.arg("-draw_mouse").arg("0");
+
+                // Re-resolve the League window at every recording start.
+                //
+                // `config.capture_hwnd` is filled in once, by `RecordingConfig::default()`
+                // when the app boots. Launching LoLShorts from the launcher — the normal
+                // order — therefore stores the CLIENT's handle ("League of Legends",
+                // LeagueClientUx), and the client window stays alive (just hidden) once a
+                // match starts. The stored handle keeps returning a valid rect, so capture
+                // silently records the client's screen region instead of the game.
+                // `find_league_hwnd` tries "League of Legends (TM) Client" first, so
+                // resolving here picks the in-game window whenever a match is running and
+                // falls back to the boot-time handle otherwise.
+                if let Some(hwnd) = capture_hwnd {
+                    // `even_dimensions`: GetWindowRect happily reports an odd width/height
+                    // (a restored/DPI-scaled window is regularly 1919x1079), and h264 with
+                    // yuv420p then dies instantly with "width not divisible by 2" — the
+                    // spawn succeeds, so recording *looks* live while nothing is captured.
+                    // 인코더가 받아들일 수 있는 최소 크기. 이보다 작으면 title 폴백도
+                    // 소용이 없다 — 같은 창을 같은 크기로 잡을 뿐이다.
+                    //
+                    // 예전에는 `w == 0 || h == 0` 만 보고 title 캡처로 넘겼는데,
+                    // 폴백 경로에는 크기 검증이 아예 없어서 1x1 창을 그대로 gdigrab 에
+                    // 넘겼고 NVENC 가 즉사했다(실게임 관측). 재시도가 없어 그 판은
+                    // 통째로 녹화되지 않았다.
+                    const MIN_ENCODABLE: u32 = 64;
+
+                    let rect = get_window_rect(hwnd).and_then(|(x, y, w, h)| {
                     let (w, h) = even_dimensions(w, h);
                     if w < MIN_ENCODABLE || h < MIN_ENCODABLE {
                         warn!(
@@ -340,61 +607,183 @@ impl SegmentRecorder {
                     }
                 });
 
-                // 창은 찾았는데 크기가 안 나오면, 제목으로 잡아도 같은 창을 같은
-                // 크기로 잡을 뿐이다. 그대로 두면 인코더가 죽고 그 판이 사라진다.
-                if rect.is_none() {
-                    anyhow::bail!(
-                        "League 창이 아직 캡처할 수 있는 크기가 아닙니다(게임 로딩 중일 수 있습니다)."
-                    );
-                }
-
-                if let Some((x, y, w, h)) = rect {
-                    cmd.arg("-offset_x").arg(x.to_string());
-                    cmd.arg("-offset_y").arg(y.to_string());
-                    cmd.arg("-video_size").arg(format!("{}x{}", w, h));
-                    info!("HWND capture: 0x{:X} at ({},{}) {}x{}", hwnd, x, y, w, h);
-                    cmd.arg("-i").arg("desktop");
-                } else {
-                    // HWND became invalid; fall back to title-based capture
-                    warn!(
-                        "HWND 0x{:X} is no longer valid, falling back to title capture",
-                        hwnd
-                    );
-                    let title = super::types::get_league_capture_title();
-                    cmd.arg("-i").arg(format!("title={}", title));
-                }
-            } else if let Some(ref target) = self.config.capture_target {
-                let safe_target = if target.contains("://")
-                    || target.starts_with("pipe:")
-                    || target.starts_with("tcp:")
-                    || target.starts_with("http:")
-                    || target.starts_with("smb:")
-                {
-                    warn!("Unsafe capture_target rejected: {}", target);
-                    super::types::get_league_capture_title()
-                } else {
-                    target.clone()
-                };
-                cmd.arg("-i").arg(format!("title={}", safe_target));
-            } else {
-                // Apply multi-monitor offset if a secondary monitor is requested
-                let monitor_index = self.config.monitor_index.unwrap_or(0);
-                if monitor_index > 0 {
-                    let (offset_x, offset_y, mon_w, mon_h) = get_monitor_offset(monitor_index);
-                    // Same yuv420p constraint as the HWND path: a monitor rect can be
-                    // odd (rotated/scaled displays), which kills the encoder on spawn.
-                    let (mon_w, mon_h) = even_dimensions(mon_w, mon_h);
-                    if mon_w > 0 && mon_h > 0 {
-                        cmd.arg("-offset_x").arg(offset_x.to_string());
-                        cmd.arg("-offset_y").arg(offset_y.to_string());
-                        cmd.arg("-video_size").arg(format!("{}x{}", mon_w, mon_h));
+                    // 창은 찾았는데 크기가 안 나오면, 제목으로 잡아도 같은 창을 같은
+                    // 크기로 잡을 뿐이다. 그대로 두면 인코더가 죽고 그 판이 사라진다.
+                    if let Some((x, y, w, h)) = rect {
+                        self.capture_mode = Some(classify_windows_capture_mode(
+                            true,
+                            true,
+                            false,
+                            self.config.monitor_index,
+                        ));
+                        self.capture_warning = None;
+                        cmd.arg("-offset_x").arg(x.to_string());
+                        cmd.arg("-offset_y").arg(y.to_string());
+                        cmd.arg("-video_size").arg(format!("{}x{}", w, h));
                         info!(
-                            "Capturing monitor {} at offset ({},{}) size {}x{}",
-                            monitor_index, offset_x, offset_y, mon_w, mon_h
+                            capture_mode = CaptureMode::HwndDesktopRegion.as_str(),
+                            capture_hwnd = format_args!("0x{:X}", hwnd),
+                            capture_x = x,
+                            capture_y = y,
+                            capture_width = w,
+                            capture_height = h,
+                            "Recording capture input selected"
                         );
+                        cmd.arg("-i").arg("desktop");
+                    } else {
+                        // The known game window is not yet encodable. Capturing the same
+                        // 1x1/title window would fail too, so keep the session alive by
+                        // recording the desktop and surface the loss of precision only in
+                        // the settings dashboard.
+                        let warning =
+                            "Game window capture was unavailable; recording the desktop instead."
+                                .to_string();
+                        self.capture_mode = Some(classify_windows_capture_mode(
+                            false,
+                            true,
+                            false,
+                            self.config.monitor_index,
+                        ));
+                        self.capture_warning = Some(warning.clone());
+                        let (x, y, w, h) = get_virtual_desktop_rect();
+                        warn!(
+                            capture_mode = CaptureMode::DesktopFallback.as_str(),
+                            capture_hwnd = format_args!("0x{:X}", hwnd),
+                            capture_x = x,
+                            capture_y = y,
+                            capture_width = w,
+                            capture_height = h,
+                            capture_warning = %warning,
+                            "Recording capture input selected"
+                        );
+                        cmd.arg("-i").arg("desktop");
                     }
+                } else if let Some(ref target) = self.config.capture_target {
+                    let safe_target = if target.contains("://")
+                        || target.starts_with("pipe:")
+                        || target.starts_with("tcp:")
+                        || target.starts_with("http:")
+                        || target.starts_with("smb:")
+                    {
+                        warn!("Unsafe capture_target rejected: {}", target);
+                        super::types::get_league_capture_title()
+                    } else {
+                        target.clone()
+                    };
+                    // A custom title is an explicit compatibility path. The default LoL
+                    // title is only a guess after HWND discovery failed, so prefer a
+                    // reliable desktop fallback in that case.
+                    let title_window_available = safe_target
+                        != super::types::get_league_capture_title()
+                        && super::types::find_window_by_title(&safe_target).is_some();
+                    if !title_window_available {
+                        let warning =
+                            "Game window could not be found; recording the desktop instead."
+                                .to_string();
+                        self.capture_mode = Some(classify_windows_capture_mode(
+                            false,
+                            false,
+                            false,
+                            self.config.monitor_index,
+                        ));
+                        self.capture_warning = Some(warning.clone());
+                        let (x, y, w, h) = get_virtual_desktop_rect();
+                        warn!(
+                            capture_mode = CaptureMode::DesktopFallback.as_str(),
+                            capture_x = x,
+                            capture_y = y,
+                            capture_width = w,
+                            capture_height = h,
+                            capture_warning = %warning,
+                            "Recording capture input selected"
+                        );
+                        cmd.arg("-i").arg("desktop");
+                    } else {
+                        self.capture_mode = Some(classify_windows_capture_mode(
+                            false,
+                            false,
+                            true,
+                            self.config.monitor_index,
+                        ));
+                        self.capture_warning = None;
+                        let title_rect = super::types::find_window_by_title(&safe_target)
+                            .and_then(get_window_rect);
+                        info!(
+                            capture_mode = CaptureMode::TitleWindow.as_str(),
+                            capture_title = %safe_target,
+                            capture_x = title_rect.map(|rect| rect.0),
+                            capture_y = title_rect.map(|rect| rect.1),
+                            capture_width = title_rect.map(|rect| rect.2),
+                            capture_height = title_rect.map(|rect| rect.3),
+                            "Recording capture input selected"
+                        );
+                        cmd.arg("-i").arg(format!("title={}", safe_target));
+                    }
+                } else {
+                    // Apply multi-monitor offset if a secondary monitor is requested
+                    let monitor_index = self.config.monitor_index.unwrap_or(0);
+                    self.capture_mode = Some(classify_windows_capture_mode(
+                        false,
+                        false,
+                        false,
+                        self.config.monitor_index,
+                    ));
+                    self.capture_warning = if self.config.monitor_index.is_some() {
+                        None
+                    } else {
+                        Some(
+                            "Game window could not be found; recording the desktop instead."
+                                .to_string(),
+                        )
+                    };
+                    if monitor_index > 0 {
+                        let (offset_x, offset_y, mon_w, mon_h) = get_monitor_offset(monitor_index);
+                        // Same yuv420p constraint as the HWND path: a monitor rect can be
+                        // odd (rotated/scaled displays), which kills the encoder on spawn.
+                        let (mon_w, mon_h) = even_dimensions(mon_w, mon_h);
+                        if mon_w > 0 && mon_h > 0 {
+                            cmd.arg("-offset_x").arg(offset_x.to_string());
+                            cmd.arg("-offset_y").arg(offset_y.to_string());
+                            cmd.arg("-video_size").arg(format!("{}x{}", mon_w, mon_h));
+                            info!(
+                                capture_mode = CaptureMode::MonitorDesktop.as_str(),
+                                capture_monitor = monitor_index,
+                                capture_x = offset_x,
+                                capture_y = offset_y,
+                                capture_width = mon_w,
+                                capture_height = mon_h,
+                                "Recording capture input selected"
+                            );
+                        }
+                    }
+                    if monitor_index == 0 {
+                        let (x, y, w, h) = get_virtual_desktop_rect();
+                        let mode = self.capture_mode.expect("capture mode set above");
+                        if let Some(ref warning) = self.capture_warning {
+                            warn!(
+                                capture_mode = mode.as_str(),
+                                capture_monitor = monitor_index,
+                                capture_x = x,
+                                capture_y = y,
+                                capture_width = w,
+                                capture_height = h,
+                                capture_warning = %warning,
+                                "Recording capture input selected"
+                            );
+                        } else {
+                            info!(
+                                capture_mode = mode.as_str(),
+                                capture_monitor = monitor_index,
+                                capture_x = x,
+                                capture_y = y,
+                                capture_width = w,
+                                capture_height = h,
+                                "Recording capture input selected"
+                            );
+                        }
+                    }
+                    cmd.arg("-i").arg("desktop");
                 }
-                cmd.arg("-i").arg("desktop");
             }
 
             if let Some(ref audio_cfg) = self.config.audio_config {
@@ -553,10 +942,6 @@ impl SegmentRecorder {
             cmd.arg("-i").arg(":0.0");
         }
 
-        let encoder = self
-            .config
-            .encoder
-            .to_ffmpeg_name_with_hw(self.config.hw_accel);
         cmd.arg("-c:v").arg(encoder);
         let bitrate_k = self.config.bitrate / 1000;
         cmd.arg("-b:v").arg(format!("{}k", bitrate_k));
@@ -584,6 +969,15 @@ impl SegmentRecorder {
         cmd.arg("-g").arg((self.config.fps * 2).to_string());
         cmd.arg("-keyint_min").arg(self.config.fps.to_string());
         cmd.arg("-sc_threshold").arg("0");
+        #[cfg(target_os = "windows")]
+        if windows_ddagrab {
+            // D3D11 frames must stay on the hardware path; forcing yuv420p asks FFmpeg
+            // for an unsupported software conversion and makes startup fail.
+            cmd.arg("-fps_mode").arg("cfr");
+        } else {
+            cmd.arg("-pix_fmt").arg("yuv420p");
+        }
+        #[cfg(not(target_os = "windows"))]
         cmd.arg("-pix_fmt").arg("yuv420p");
 
         if has_audio {
@@ -626,7 +1020,9 @@ impl SegmentRecorder {
         cmd.arg("-strftime").arg("0");
         cmd.arg(&self.segment_pattern);
 
-        cmd.stdin(Stdio::null());
+        // Keep stdin so shutdown can ask FFmpeg to finalize the current MP4 segment
+        // (`q`) before falling back to termination.
+        cmd.stdin(Stdio::piped());
         // stdout carries `-progress pipe:1` output; it MUST be consumed by the
         // reader task below or FFmpeg blocks once the pipe buffer fills.
         cmd.stdout(Stdio::piped());
@@ -634,7 +1030,7 @@ impl SegmentRecorder {
 
         #[cfg(target_os = "windows")]
         {
-            cmd.creation_flags(0x08000000);
+            cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
         info!("FFmpeg 녹화 시작: {:?}", cmd);
@@ -833,33 +1229,13 @@ impl SegmentRecorder {
 
     /// 녹화 중지
     pub async fn stop(&mut self) -> Result<()> {
-        if let Some(mut process) = self.ffmpeg_process.take() {
-            #[cfg(target_os = "windows")]
-            {
-                let _ = process.kill().await;
-            }
-
-            #[cfg(not(target_os = "windows"))]
-            {
-                use nix::sys::signal::{kill, Signal};
-                use nix::unistd::Pid;
-                if let Some(pid) = process.id() {
-                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGINT);
-                }
-            }
-
-            match tokio::time::timeout(std::time::Duration::from_secs(5), process.wait()).await {
-                Ok(Ok(_)) => {
-                    info!("FFmpeg 녹화 정상 중지됨");
-                }
-                Ok(Err(e)) => {
-                    warn!("FFmpeg 프로세스 종료 오류: {}", e);
-                }
-                Err(_) => {
-                    warn!("FFmpeg 프로세스 종료 타임아웃 (5초) - 강제 종료 시도");
-                    let _ = process.kill().await;
-                }
-            }
+        if let Some(process) = self.ffmpeg_process.take() {
+            let _ = terminate_ffmpeg_process(
+                process,
+                std::time::Duration::from_secs(2),
+                std::time::Duration::from_secs(1),
+            )
+            .await;
         }
 
         // Stop WASAPI capture if active
@@ -974,6 +1350,16 @@ impl SegmentRecorder {
         self.frame_count.load(Ordering::Relaxed)
     }
 
+    pub fn capture_diagnostics(
+        &self,
+    ) -> (Option<CaptureMode>, Option<CaptureBackend>, Option<String>) {
+        (
+            self.capture_mode,
+            self.capture_backend,
+            self.capture_warning.clone(),
+        )
+    }
+
     /// Whether system audio is actually being captured this session (WASAPI or DirectShow).
     pub fn system_audio_active(&self) -> bool {
         self.system_audio_active
@@ -1071,11 +1457,30 @@ impl ClipExtractionContext {
         end_anchor_wall: Option<f64>,
         coverage_timeout: Duration,
     ) -> Result<(PathBuf, f64)> {
+        self.save_clip_anchored_attempt(
+            output_path,
+            requested_secs,
+            end_anchor_wall,
+            coverage_timeout,
+            false,
+        )
+        .await
+    }
+
+    async fn save_clip_anchored_attempt(
+        &self,
+        output_path: &PathBuf,
+        requested_secs: f64,
+        end_anchor_wall: Option<f64>,
+        coverage_timeout: Duration,
+        strict_segment_validation: bool,
+    ) -> Result<(PathBuf, f64)> {
         info!(
-            "클립 저장 시작: {} (requested: {:.2}s, end_anchor: {:?})",
+            "클립 저장 시작: {} (requested: {:.2}s, end_anchor: {:?}, strict_validation: {})",
             output_path.display(),
             requested_secs,
-            end_anchor_wall
+            end_anchor_wall,
+            strict_segment_validation
         );
 
         // Resolve the window end ONCE, up front. For a manual save (`end_anchor_wall ==
@@ -1092,7 +1497,19 @@ impl ClipExtractionContext {
                 .await;
         }
 
-        let segments = self.get_sorted_segments()?;
+        let mut segments = self.get_sorted_segments()?;
+
+        // The newest MP4 has no moov atom until the rolling writer closes it. Feeding
+        // that expected-incomplete file to validation was the `moov atom not found`
+        // warning seen at GameEnd and needlessly launched a full decode pass.
+        if self.ffmpeg_running && !segments.is_empty() {
+            if let Some(active) = segments.pop() {
+                info!(
+                    active_segment = %active.display(),
+                    "Skipping active rolling segment during clip extraction"
+                );
+            }
+        }
 
         if segments.is_empty() {
             anyhow::bail!("저장된 세그먼트가 없습니다");
@@ -1146,7 +1563,7 @@ impl ClipExtractionContext {
                 }
             }
 
-            if verify_segment(&segment, &ffmpeg_path).await {
+            if !strict_segment_validation || verify_segment(&segment, &ffmpeg_path).await {
                 verified_segments.push(segment);
             } else {
                 warn!("손상된 세그먼트 파일 제외: {}", segment.display());
@@ -1288,6 +1705,30 @@ impl ClipExtractionContext {
         let mic_wav_path = self.segment_dir.join("mic_capture.wav");
         let has_mic_audio = self.mic_start_walltime.is_some() && mic_wav_path.exists();
 
+        // FFmpeg opens a growing WAV once, using the length published in its current
+        // header. Waiting here is normally at most one 500ms checkpoint, but prevents
+        // the end-of-game clip from losing the last seconds of game audio when the video
+        // segment closed just ahead of the WASAPI header update.
+        if has_system_audio {
+            wait_for_wav_coverage(
+                &wav_path,
+                window.audio_ss + window.duration,
+                "WASAPI loopback",
+            )
+            .await;
+        }
+        if has_mic_audio {
+            wait_for_wav_coverage(&mic_wav_path, window.mic_ss + window.duration, "microphone")
+                .await;
+        }
+
+        // Never expose a half-written clip in the vault. The temporary file stays in
+        // the destination directory so the final rename is atomic on the same volume.
+        let partial_output = partial_output_path(output_path);
+        if partial_output.exists() {
+            let _ = tokio::fs::remove_file(&partial_output).await;
+        }
+
         let mut cmd = tokio::process::Command::new(&ffmpeg_path);
         cmd.arg("-y");
 
@@ -1364,7 +1805,9 @@ impl ClipExtractionContext {
                 // volume is applied before mixing.
                 let filter = format!(
                     "[{sys}:a]volume={sys_vol}[a1];[{mic}:a]volume={mic_vol}[a2];\
-                     [a1][a2]amix=inputs=2:duration=first[outa]"
+                     [a1][a2]amix=inputs=2:duration=longest[mixed];\
+                     [mixed]apad=whole_dur={:.3}[outa]",
+                    window.duration
                 );
                 info!(
                     "Muxing system audio + microphone (amix): video_ss={:.2}s, \
@@ -1379,7 +1822,9 @@ impl ClipExtractionContext {
                 cmd.arg("-b:a").arg(format!("{}k", audio_bitrate));
             }
             (Some(_sys), None) => {
-                // System audio only — UNCHANGED legacy 2-input path (system is input 1).
+                // Pad a short live-WAV tail with silence. This keeps the audio track's
+                // timestamp domain equal to the video even if the final header update
+                // could not catch up inside the bounded coverage wait.
                 info!(
                     "Muxing WASAPI loopback audio: {} (video_ss={:.2}s, audio_ss={:.2}s, dur={:.2}s)",
                     wav_path.display(),
@@ -1387,8 +1832,10 @@ impl ClipExtractionContext {
                     window.audio_ss,
                     window.duration
                 );
+                let filter = audio_pad_filter(1, window.duration);
+                cmd.arg("-filter_complex").arg(filter);
                 cmd.arg("-map").arg("0:v");
-                cmd.arg("-map").arg("1:a");
+                cmd.arg("-map").arg("[outa]");
                 cmd.arg("-c:v").arg("copy");
                 cmd.arg("-c:a").arg("aac");
                 cmd.arg("-b:a").arg(format!("{}k", audio_bitrate));
@@ -1408,7 +1855,9 @@ impl ClipExtractionContext {
                     );
                     format!(
                         "[0:a]volume={sys_vol}[a1];[{mic}:a]volume={mic_vol}[a2];\
-                         [a1][a2]amix=inputs=2:duration=first[outa]"
+                         [a1][a2]amix=inputs=2:duration=longest[mixed];\
+                         [mixed]apad=whole_dur={:.3}[outa]",
+                        window.duration
                     )
                 } else {
                     info!(
@@ -1418,7 +1867,11 @@ impl ClipExtractionContext {
                         window.mic_ss,
                         window.duration
                     );
-                    format!("[{mic}:a]volume={mic_vol}[outa]")
+                    format!(
+                        "[{mic}:a]volume={mic_vol}[mixed];\
+                         [mixed]apad=whole_dur={:.3}[outa]",
+                        window.duration
+                    )
                 };
                 cmd.arg("-filter_complex").arg(filter);
                 cmd.arg("-map").arg("0:v");
@@ -1433,7 +1886,7 @@ impl ClipExtractionContext {
         }
 
         cmd.arg("-movflags").arg("+faststart");
-        cmd.arg(output_path);
+        cmd.arg(&partial_output);
 
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::null());
@@ -1441,7 +1894,7 @@ impl ClipExtractionContext {
 
         #[cfg(target_os = "windows")]
         {
-            cmd.creation_flags(0x08000000);
+            cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
         }
 
         let output =
@@ -1450,10 +1903,53 @@ impl ClipExtractionContext {
         let _ = tokio::fs::remove_file(&concat_file).await;
 
         if !output.status.success() {
+            let _ = tokio::fs::remove_file(&partial_output).await;
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("클립 저장 실패: {}", stderr);
             anyhow::bail!("클립 저장 실패: {}", stderr);
         }
+
+        // Fast path validates the produced artifact once instead of fully decoding every
+        // input segment. If it fails, decode the candidate segments, exclude the corrupt
+        // ones and retry exactly once. This turns the measured 10-20s preflight spike into
+        // a cheap header probe for healthy sessions while retaining corruption recovery.
+        if !verify_segment(&partial_output, &ffmpeg_path).await {
+            let _ = tokio::fs::remove_file(&partial_output).await;
+            if !strict_segment_validation {
+                warn!(
+                    output = %output_path.display(),
+                    "Published clip validation failed; retrying once with strict segment validation"
+                );
+                return Box::pin(self.save_clip_anchored_attempt(
+                    output_path,
+                    requested_secs,
+                    Some(end_anchor),
+                    Duration::ZERO,
+                    true,
+                ))
+                .await;
+            }
+            anyhow::bail!(
+                "엄격한 세그먼트 복구 후에도 클립 출력 검증에 실패했습니다: {}",
+                output_path.display()
+            );
+        }
+
+        if output_path.exists() {
+            let _ = tokio::fs::remove_file(&partial_output).await;
+            anyhow::bail!(
+                "기존 클립을 덮어쓰지 않기 위해 공개를 중단했습니다: {}",
+                output_path.display()
+            );
+        }
+        tokio::fs::rename(&partial_output, output_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "검증된 클립을 최종 경로로 공개하지 못했습니다: {}",
+                    output_path.display()
+                )
+            })?;
 
         // Report the REAL length. `window.duration` is only an upper bound: it is clamped
         // whenever the buffer could not cover the request, and `-c copy` additionally cuts
@@ -1664,6 +2160,65 @@ async fn wait_for_capturable_window() {
 
 fn even_dimensions(width: u32, height: u32) -> (u32, u32) {
     (width & !1, height & !1)
+}
+
+/// Desktop Duplication already produces capture-clock timestamps. Keep those intervals
+/// (and only normalize the first timestamp to zero): synthesizing `N/(fps*TB)` made a
+/// 58fps under-load capture play as 60fps, steadily pulling video ahead of WASAPI audio.
+#[cfg(target_os = "windows")]
+fn desktop_duplication_filter(
+    output_idx: u32,
+    fps: u32,
+    width: u32,
+    height: u32,
+    offset_x: i32,
+    offset_y: i32,
+) -> String {
+    format!(
+        "ddagrab=output_idx={output_idx}:framerate={fps}:draw_mouse=false:\
+         video_size={width}x{height}:offset_x={offset_x}:offset_y={offset_y},\
+         setpts=PTS-STARTPTS"
+    )
+}
+
+/// Current duration advertised by a checkpointed PCM WAV header.
+fn wav_duration_secs(path: &std::path::Path) -> Option<f64> {
+    let reader = hound::WavReader::open(path).ok()?;
+    let spec = reader.spec();
+    (spec.sample_rate > 0).then(|| reader.duration() as f64 / spec.sample_rate as f64)
+}
+
+/// Wait for a live WAV header to include all audio needed by an already-selected clip.
+/// The timeout is intentionally short: after it, export proceeds with `apad` so a bad
+/// device or an interrupted capture cannot stall clip saving indefinitely.
+async fn wait_for_wav_coverage(path: &std::path::Path, required_secs: f64, label: &str) {
+    if !required_secs.is_finite() || required_secs <= 0.0 {
+        return;
+    }
+
+    let deadline = Instant::now() + AUDIO_COVERAGE_WAIT;
+    loop {
+        match wav_duration_secs(path) {
+            Some(actual) if actual + CLIP_LENGTH_TOLERANCE_SECS >= required_secs => {
+                return;
+            }
+            _ if Instant::now() >= deadline => {
+                let actual = wav_duration_secs(path).unwrap_or(0.0);
+                warn!(
+                    audio_source = label,
+                    required_secs,
+                    available_secs = actual,
+                    "Audio WAV did not reach clip coverage before export; padding its tail with silence"
+                );
+                return;
+            }
+            _ => tokio::time::sleep(AUDIO_COVERAGE_POLL_INTERVAL).await,
+        }
+    }
+}
+
+fn audio_pad_filter(input_idx: usize, duration: f64) -> String {
+    format!("[{input_idx}:a]apad=whole_dur={duration:.3}[outa]")
 }
 
 /// Build the concat-demuxer list for `segments`, pairing every `file` line with an
@@ -2107,6 +2662,18 @@ fn ensure_usable_clip_window(
     Ok(())
 }
 
+fn partial_output_path(output_path: &std::path::Path) -> PathBuf {
+    let stem = output_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("clip");
+    let extension = output_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("mp4");
+    output_path.with_file_name(format!("{stem}.partial.{extension}"))
+}
+
 /// Verify a segment file is not corrupt by running a null-output FFmpeg decode pass.
 ///
 /// Uses FFmpeg's `-f null -` output to decode the file without writing anything.
@@ -2123,6 +2690,9 @@ pub async fn verify_segment(segment_path: &std::path::Path, ffmpeg_path: &std::p
         .arg(segment_path)
         .args(["-f", "null", "-"])
         .kill_on_drop(true);
+
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
 
     let result = run_command_with_timeout(
         &mut command,
@@ -2199,11 +2769,27 @@ pub async fn monitor_disk_space(
             break;
         }
 
-        // Use sysinfo to get available disk space for the recordings directory
-        let available_mb = get_available_mb(&recordings_dir);
+        let probe_path = recordings_dir.clone();
+        let available_mb = tokio::task::spawn_blocking(move || get_available_mb(&probe_path))
+            .await
+            .ok()
+            .flatten();
 
         const WARN_THRESHOLD_MB: u64 = 1024; // 1 GB
         const CRIT_THRESHOLD_MB: u64 = 512; // 500 MB
+
+        let Some(available_mb) = available_mb else {
+            tracing::error!(
+                "Recording disk is no longer measurable; stopping capture to avoid silent data loss"
+            );
+            let _ = app_handle.emit("disk-unavailable", ());
+            crate::utils::telemetry::capture_operational_error(
+                "recording",
+                "recording_disk_unavailable",
+            );
+            stop_capture_for_disk_safety(&app_handle).await;
+            break;
+        };
 
         if available_mb < CRIT_THRESHOLD_MB {
             tracing::error!(
@@ -2211,6 +2797,12 @@ pub async fn monitor_disk_space(
                 available_mb
             );
             let _ = app_handle.emit("disk-critical", available_mb);
+            crate::utils::telemetry::capture_operational_error(
+                "recording",
+                "recording_disk_critical",
+            );
+            stop_capture_for_disk_safety(&app_handle).await;
+            break;
         } else if available_mb < WARN_THRESHOLD_MB {
             warn!(
                 "Disk space low: {}MB available on recording volume",
@@ -2223,33 +2815,39 @@ pub async fn monitor_disk_space(
     }
 }
 
-/// Returns available disk space in MB for the given path, or u64::MAX on error.
-fn get_available_mb(path: &std::path::Path) -> u64 {
-    use sysinfo::Disks;
+async fn stop_capture_for_disk_safety(app_handle: &tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
 
-    let disks = Disks::new_with_refreshed_list();
-    let path_str = path.to_string_lossy().to_lowercase();
+    let state = app_handle.state::<crate::AppState>();
+    let outcome = crate::recording::game_lifecycle::stop_capture_pipeline(
+        state.storage.as_ref(),
+        &state.recording_manager,
+        &state.clip_manager,
+    )
+    .await;
+    *state.recording_disk_monitor.write().await = None;
+    crate::overlay::hide_overlay(app_handle);
+    let _ = app_handle.emit(
+        "recording-status",
+        serde_json::json!({ "recording": false }),
+    );
 
-    // Find the disk whose mount point is the longest prefix of our path
-    // (most specific match)
-    let best = disks
-        .iter()
-        .filter(|d| {
-            let mount = d.mount_point().to_string_lossy().to_lowercase();
-            path_str.starts_with(mount.as_str())
-        })
-        .max_by_key(|d| d.mount_point().to_string_lossy().len());
-
-    if let Some(disk) = best {
-        disk.available_space() / (1024 * 1024)
-    } else {
-        // Fallback: return the first disk's available space
-        disks
-            .iter()
-            .next()
-            .map(|d| d.available_space() / (1024 * 1024))
-            .unwrap_or(u64::MAX)
+    if let Err(error) = outcome.event_monitoring {
+        tracing::error!(%error, "Disk-safety stop could not flush event monitoring");
     }
+    if let Err(error) = outcome.recording_stopped {
+        tracing::error!(%error, "Disk-safety stop could not stop the recorder");
+    }
+    if let Err(error) = outcome.finalized {
+        tracing::error!(%error, "Disk-safety stop could not finalize game metadata");
+    }
+}
+
+/// Returns available disk space in MB for the exact recording volume.
+fn get_available_mb(path: &std::path::Path) -> Option<u64> {
+    crate::utils::disk::query_disk_space(path)
+        .ok()
+        .map(|snapshot| snapshot.available_bytes / (1024 * 1024))
 }
 
 impl Drop for SegmentRecorder {
@@ -2318,14 +2916,122 @@ mod progress_parse_tests {
     }
 }
 
+#[cfg(all(test, target_os = "windows"))]
+mod capture_lifecycle_tests {
+    use super::{
+        classify_windows_capture_mode, stale_capture_cleanup_script, terminate_ffmpeg_process,
+        CaptureMode, FfmpegTermination,
+    };
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    #[test]
+    fn capture_mode_selection_covers_every_windows_input_path() {
+        assert_eq!(
+            classify_windows_capture_mode(true, true, false, None),
+            CaptureMode::HwndDesktopRegion
+        );
+        assert_eq!(
+            classify_windows_capture_mode(false, false, true, None),
+            CaptureMode::TitleWindow
+        );
+        assert_eq!(
+            classify_windows_capture_mode(false, true, false, None),
+            CaptureMode::DesktopFallback
+        );
+        assert_eq!(
+            classify_windows_capture_mode(false, false, false, Some(2)),
+            CaptureMode::MonitorDesktop
+        );
+    }
+
+    #[test]
+    fn startup_cleanup_is_scoped_to_ffmpeg_and_the_recording_directory() {
+        let script = stale_capture_cleanup_script(r"C:\Users\tester\LoLShorts\recordings");
+        assert!(script.contains("Name LIKE 'ffmpeg%'"));
+        assert!(script.contains(r"C:\Users\tester\LoLShorts\recordings"));
+        assert!(script.contains("CommandLine.Contains"));
+        assert!(!script.contains("Get-Process ffmpeg"));
+    }
+
+    #[tokio::test]
+    async fn graceful_q_shutdown_is_preferred() {
+        let mut command = tokio::process::Command::new("powershell");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$line = [Console]::In.ReadLine(); if ($line -eq 'q') { exit 0 } else { exit 2 }",
+        ]);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = command.spawn().expect("spawn q-aware child");
+
+        assert_eq!(
+            // Windows CI can briefly starve a freshly spawned PowerShell child
+            // when the full crate suite is running. Keep the graceful budget
+            // aligned with the production stop path while leaving the forced
+            // fallback test below intentionally short.
+            terminate_ffmpeg_process(child, Duration::from_secs(2), Duration::from_secs(1)).await,
+            FfmpegTermination::Graceful
+        );
+    }
+
+    #[tokio::test]
+    async fn unresponsive_child_falls_back_to_forced_termination() {
+        let mut command = tokio::process::Command::new("powershell");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ]);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = command.spawn().expect("spawn unresponsive child");
+
+        assert_eq!(
+            terminate_ffmpeg_process(child, Duration::from_millis(100), Duration::from_secs(1),)
+                .await,
+            FfmpegTermination::Forced
+        );
+    }
+}
+
 #[cfg(test)]
 mod clip_window_tests {
-    use super::{compute_clip_window, ensure_usable_clip_window, MIN_CLIP_DURATION_SECS};
+    use super::{
+        audio_pad_filter, compute_clip_window, ensure_usable_clip_window, MIN_CLIP_DURATION_SECS,
+    };
 
     const EPS: f64 = 1e-6;
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn audio_padding_preserves_the_selected_clip_duration() {
+        assert_eq!(
+            audio_pad_filter(1, 13.0),
+            "[1:a]apad=whole_dur=13.000[outa]"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn desktop_duplication_keeps_capture_clock_timestamps() {
+        let filter = super::desktop_duplication_filter(0, 60, 1920, 1080, 0, 0);
+
+        assert!(filter.contains("setpts=PTS-STARTPTS"), "{filter}");
+        assert!(
+            !filter.contains("setpts=N/("),
+            "frame-count timestamps would make a slow capture run ahead of audio: {filter}"
+        );
     }
 
     #[test]
@@ -2675,12 +3381,12 @@ mod clip_window_tests {
 
         // (총 버퍼 길이, content_end, end_anchor, requested)
         let cases: [(f64, f64, f64, f64); 6] = [
-            (90.0, 1200.0, 1195.0, 13.0),  // 버퍼 충분
-            (90.0, 1200.0, 1195.0, 85.0),  // 거의 딱 맞음
-            (30.0, 1200.0, 1195.0, 60.0),  // 버퍼 부족
-            (90.0, 1200.0, 1210.0, 13.0),  // end_anchor 가 미래(커버리지 타임아웃)
-            (90.0, 1200.0, 1195.0, 0.0),   // 요청 0
-            (90.0, 1200.0, 1195.0, -3.0),  // 요청 음수
+            (90.0, 1200.0, 1195.0, 13.0), // 버퍼 충분
+            (90.0, 1200.0, 1195.0, 85.0), // 거의 딱 맞음
+            (30.0, 1200.0, 1195.0, 60.0), // 버퍼 부족
+            (90.0, 1200.0, 1210.0, 13.0), // end_anchor 가 미래(커버리지 타임아웃)
+            (90.0, 1200.0, 1195.0, 0.0),  // 요청 0
+            (90.0, 1200.0, 1195.0, -3.0), // 요청 음수
         ];
 
         for (total, content_end, end_anchor, requested) in cases {
@@ -2882,7 +3588,11 @@ mod concat_list_tests {
 
         assert_eq!(kept.len(), kept_durations.len());
         assert_eq!(kept, segments[segments.len() - kept.len()..].to_vec());
-        assert_eq!(kept.last(), segments.last(), "가장 최신 세그먼트는 항상 남는다");
+        assert_eq!(
+            kept.last(),
+            segments.last(),
+            "가장 최신 세그먼트는 항상 남는다"
+        );
     }
 
     #[test]
@@ -2904,8 +3614,7 @@ mod concat_list_tests {
         let (measured, measured_durations) = retain_measured_segments(&segments, &probed).unwrap();
         assert_eq!(measured, vec![segments[2].clone(), segments[3].clone()]);
 
-        let (kept, _) =
-            trim_concat_to_window(&measured, &measured_durations, 13.0, 1195.0, 1200.0);
+        let (kept, _) = trim_concat_to_window(&measured, &measured_durations, 13.0, 1195.0, 1200.0);
         assert!(
             !kept.contains(&segments[0]) && !kept.contains(&segments[1]),
             "구멍 앞 세그먼트가 되살아났다: {:?}",

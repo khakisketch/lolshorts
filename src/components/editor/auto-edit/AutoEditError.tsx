@@ -1,9 +1,9 @@
-import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
-import { Separator } from '@/components/ui/separator';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   CheckCircle2,
   ChevronDown,
@@ -11,8 +11,8 @@ import {
   RotateCcw,
   RefreshCw,
   XCircle,
-} from 'lucide-react';
-import { VideoError as AutoEditErrorType } from '@/types/autoEdit';
+} from "lucide-react";
+import { VideoError as AutoEditErrorType } from "@/types/autoEdit";
 
 interface AutoEditErrorProps {
   error: AutoEditErrorType;
@@ -20,7 +20,11 @@ interface AutoEditErrorProps {
   onStartNew: () => void;
 }
 
-export function AutoEditErrorView({ error, onRetry, onStartNew }: AutoEditErrorProps) {
+export function AutoEditErrorView({
+  error,
+  onRetry,
+  onStartNew,
+}: AutoEditErrorProps) {
   const { t } = useTranslation();
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
@@ -30,9 +34,12 @@ export function AutoEditErrorView({ error, onRetry, onStartNew }: AutoEditErrorP
         <div className="mb-4">
           <h3 className="text-lg font-semibold flex items-center gap-2 text-gaming-magenta">
             <XCircle className="w-5 h-5" />
-            {t('autoEdit.videoGenerationFailed')}
+            {t("autoEdit.videoGenerationFailed")}
           </h3>
-          <p className="text-sm text-muted-foreground text-base" data-testid="error-message">
+          <p
+            className="text-sm text-muted-foreground text-base"
+            data-testid="error-message"
+          >
             {error.message}
           </p>
         </div>
@@ -41,7 +48,7 @@ export function AutoEditErrorView({ error, onRetry, onStartNew }: AutoEditErrorP
           {/* Recovery Suggestions */}
           <div data-testid="error-recovery-suggestions">
             <Label className="text-sm font-medium mb-2 block">
-              {t('autoEdit.trySolutions')}
+              {t("autoEdit.trySolutions")}
             </Label>
             <ul className="space-y-2">
               {error.recovery_suggestions.map((suggestion, idx) => (
@@ -62,7 +69,9 @@ export function AutoEditErrorView({ error, onRetry, onStartNew }: AutoEditErrorP
                 onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}
                 className="w-full justify-between"
               >
-                <span className="text-sm font-medium">{t('autoEdit.technicalDetails')}</span>
+                <span className="text-sm font-medium">
+                  {t("autoEdit.technicalDetails")}
+                </span>
                 {showTechnicalDetails ? (
                   <ChevronUp className="w-4 h-4" />
                 ) : (
@@ -91,7 +100,7 @@ export function AutoEditErrorView({ error, onRetry, onStartNew }: AutoEditErrorP
               data-testid="retry-button"
             >
               <RotateCcw className="w-4 h-4 mr-2" />
-              {t('autoEdit.retryGeneration')}
+              {t("autoEdit.retryGeneration")}
             </Button>
 
             <Button
@@ -101,7 +110,7 @@ export function AutoEditErrorView({ error, onRetry, onStartNew }: AutoEditErrorP
               data-testid="reset-button"
             >
               <RefreshCw className="w-4 h-4 mr-2" />
-              {t('autoEdit.startOver')}
+              {t("autoEdit.startOver")}
             </Button>
           </div>
         </div>

@@ -408,7 +408,7 @@ async fn test_recording_config_defaults() {
     let default_config = RecordingConfig::default();
 
     assert_eq!(default_config.fps, 60);
-    assert_eq!(default_config.bitrate, 15_000_000);
+    assert_eq!(default_config.bitrate, 20_000_000);
     assert_eq!(default_config.resolution, (1920, 1080));
     assert!(matches!(default_config.encoder, VideoEncoder::H264));
     assert_eq!(default_config.buffer_duration_secs, 90);

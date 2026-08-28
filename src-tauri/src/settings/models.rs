@@ -4,6 +4,10 @@ use std::collections::HashMap;
 /// Complete recording settings structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingSettings {
+    /// Persisted settings schema. Missing values are treated as a pre-v4 file
+    /// by the loader, then upgraded without relying on a sidecar marker.
+    #[serde(default)]
+    pub schema_version: u32,
     pub event_filter: EventFilterSettings,
     pub game_mode: GameModeSettings,
     pub video: VideoSettings,
@@ -14,7 +18,8 @@ pub struct RecordingSettings {
     pub storage: StorageSettings,
 
     // General settings
-    pub auto_start_with_league: bool,
+    #[serde(default, alias = "auto_start_with_league")]
+    pub launch_on_windows_startup: bool,
     pub minimize_to_tray: bool,
     pub show_notifications: bool,
     #[serde(default = "default_show_replay_popup")]
@@ -48,6 +53,7 @@ fn default_contest_window() -> u32 {
 impl Default for RecordingSettings {
     fn default() -> Self {
         Self {
+            schema_version: SETTINGS_SCHEMA_VERSION,
             event_filter: EventFilterSettings::default(),
             game_mode: GameModeSettings::default(),
             video: VideoSettings::default(),
@@ -56,7 +62,7 @@ impl Default for RecordingSettings {
             hotkeys: HotkeySettings::default(),
             storage: StorageSettings::default(),
 
-            auto_start_with_league: true,
+            launch_on_windows_startup: false,
             minimize_to_tray: true,
             show_notifications: true,
             show_replay_popup: true,
@@ -72,6 +78,9 @@ impl Default for RecordingSettings {
         }
     }
 }
+
+/// The current on-disk shape of [`RecordingSettings`].
+pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
 
 impl RecordingSettings {
     pub fn validate(&self) -> Result<(), String> {
@@ -699,7 +708,7 @@ pub struct ClipTimingSettings {
 
     // 이벤트 병합
     pub merge_consecutive_events: bool,
-    pub merge_time_threshold: f64, // 15초 기본
+    pub merge_time_threshold: f64, // 10초 기본
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -712,39 +721,68 @@ impl Default for ClipTimingSettings {
     fn default() -> Self {
         let mut event_timings = HashMap::new();
 
-        // 멀티킬은 길게
-        event_timings.insert(
-            "multikill".to_string(),
-            EventTiming {
-                pre_duration: 15,
-                post_duration: 5,
-            },
-        );
-
-        // 스틸은 더 길게 (빌드업 포함)
-        event_timings.insert(
-            "steal".to_string(),
-            EventTiming {
-                pre_duration: 20,
-                post_duration: 5,
-            },
-        );
-
-        // 일반 킬은 짧게
         event_timings.insert(
             "kill".to_string(),
             EventTiming {
+                pre_duration: 8,
+                post_duration: 5,
+            },
+        );
+        for event_type in ["death", "assist", "turret"] {
+            event_timings.insert(
+                event_type.to_string(),
+                EventTiming {
+                    pre_duration: 6,
+                    post_duration: 4,
+                },
+            );
+        }
+        for event_type in ["multikill", "outplay"] {
+            event_timings.insert(
+                event_type.to_string(),
+                EventTiming {
+                    pre_duration: 12,
+                    post_duration: 8,
+                },
+            );
+        }
+        for event_type in ["dragon", "baron", "herald", "objective"] {
+            event_timings.insert(
+                event_type.to_string(),
+                EventTiming {
+                    pre_duration: 10,
+                    post_duration: 6,
+                },
+            );
+        }
+        event_timings.insert(
+            "steal".to_string(),
+            EventTiming {
+                pre_duration: 15,
+                post_duration: 10,
+            },
+        );
+        event_timings.insert(
+            "ace".to_string(),
+            EventTiming {
                 pre_duration: 10,
+                post_duration: 10,
+            },
+        );
+        event_timings.insert(
+            "game_end".to_string(),
+            EventTiming {
+                pre_duration: 12,
                 post_duration: 3,
             },
         );
 
         Self {
-            default_pre_duration: 10,
-            default_post_duration: 3,
+            default_pre_duration: 8,
+            default_post_duration: 5,
             event_timings,
             merge_consecutive_events: true,
-            merge_time_threshold: 15.0,
+            merge_time_threshold: 10.0,
         }
     }
 }
@@ -759,6 +797,22 @@ impl ClipTimingSettings {
                 pre_duration: self.default_pre_duration,
                 post_duration: self.default_post_duration,
             })
+    }
+
+    /// The exact timing profile written by releases before schema v4.
+    ///
+    /// A strict comparison is deliberate: a user changing even one duration,
+    /// adding an event override, or changing the merge threshold keeps their
+    /// chosen profile intact during the v4 upgrade.
+    pub fn is_legacy_default_profile(&self) -> bool {
+        self.default_pre_duration == 10
+            && self.default_post_duration == 3
+            && self.merge_consecutive_events
+            && self.merge_time_threshold == 15.0
+            && self.event_timings.len() == 3
+            && matches!(self.event_timings.get("kill"), Some(timing) if timing.pre_duration == 10 && timing.post_duration == 3)
+            && matches!(self.event_timings.get("multikill"), Some(timing) if timing.pre_duration == 15 && timing.post_duration == 5)
+            && matches!(self.event_timings.get("steal"), Some(timing) if timing.pre_duration == 20 && timing.post_duration == 5)
     }
 }
 
@@ -816,10 +870,11 @@ mod tests {
         assert_eq!(settings.audio.system_audio_volume, 100);
 
         // Clip timing defaults
-        assert_eq!(settings.clip_timing.default_pre_duration, 10);
-        assert_eq!(settings.clip_timing.default_post_duration, 3);
+        assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(settings.clip_timing.default_pre_duration, 8);
+        assert_eq!(settings.clip_timing.default_post_duration, 5);
         assert!(settings.clip_timing.merge_consecutive_events);
-        assert_eq!(settings.clip_timing.merge_time_threshold, 15.0);
+        assert_eq!(settings.clip_timing.merge_time_threshold, 10.0);
 
         // Hotkey defaults
         assert_eq!(settings.hotkeys.manual_save_clip, "F8");
@@ -828,16 +883,73 @@ mod tests {
     }
 
     #[test]
+    fn legacy_autostart_field_migrates_to_windows_startup_name() {
+        let mut value = serde_json::to_value(RecordingSettings::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("launch_on_windows_startup");
+        object.insert(
+            "auto_start_with_league".to_string(),
+            serde_json::json!(true),
+        );
+
+        let settings: RecordingSettings = serde_json::from_value(value).unwrap();
+        assert!(settings.launch_on_windows_startup);
+
+        let persisted = serde_json::to_value(settings).unwrap();
+        assert_eq!(persisted["launch_on_windows_startup"], true);
+        assert!(persisted.get("auto_start_with_league").is_none());
+    }
+
+    #[test]
     fn test_event_timing_lookup() {
         let settings = ClipTimingSettings::default();
 
         let multikill_timing = settings.get_timing_for_event("multikill");
-        assert_eq!(multikill_timing.pre_duration, 15);
-        assert_eq!(multikill_timing.post_duration, 5);
+        assert_eq!(multikill_timing.pre_duration, 12);
+        assert_eq!(multikill_timing.post_duration, 8);
 
         let unknown_timing = settings.get_timing_for_event("unknown_event");
-        assert_eq!(unknown_timing.pre_duration, 10); // fallback to default
-        assert_eq!(unknown_timing.post_duration, 3);
+        assert_eq!(unknown_timing.pre_duration, 8); // fallback to default
+        assert_eq!(unknown_timing.post_duration, 5);
+    }
+
+    #[test]
+    fn fresh_clip_timing_uses_the_balanced_v4_profile() {
+        let settings = ClipTimingSettings::default();
+
+        for event_type in ["death", "assist", "turret"] {
+            let timing = settings.get_timing_for_event(event_type);
+            assert_eq!((timing.pre_duration, timing.post_duration), (6, 4));
+        }
+        for event_type in ["multikill", "outplay"] {
+            let timing = settings.get_timing_for_event(event_type);
+            assert_eq!((timing.pre_duration, timing.post_duration), (12, 8));
+        }
+        for event_type in ["dragon", "baron", "herald", "objective"] {
+            let timing = settings.get_timing_for_event(event_type);
+            assert_eq!((timing.pre_duration, timing.post_duration), (10, 6));
+        }
+        assert_eq!(
+            (
+                settings.get_timing_for_event("steal").pre_duration,
+                settings.get_timing_for_event("steal").post_duration,
+            ),
+            (15, 10)
+        );
+        assert_eq!(
+            (
+                settings.get_timing_for_event("ace").pre_duration,
+                settings.get_timing_for_event("ace").post_duration,
+            ),
+            (10, 10)
+        );
+        assert_eq!(
+            (
+                settings.get_timing_for_event("game_end").pre_duration,
+                settings.get_timing_for_event("game_end").post_duration,
+            ),
+            (12, 3)
+        );
     }
 
     #[test]

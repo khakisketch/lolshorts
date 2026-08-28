@@ -14,7 +14,45 @@ pub struct AutoEditConfig {
     pub game_ids: Vec<String>,
 
     /// 수동으로 선택된 클립 ID 목록 (자동 선택 무시)
+    ///
+    /// **프론트에서는 쓸 수 없다.** 이 `id` 는 `load_clips_from_games` 가 읽는
+    /// 순서대로 매기는 위치 카운터라, 같은 클립이라도 어떤 게임들을 함께 실었는지에
+    /// 따라 값이 달라진다. 프론트가 안정적으로 지목할 수 있는 것은 파일 경로뿐이므로
+    /// 화면에서 온 선택은 `selected_clip_paths` 를 쓴다.
     pub selected_clip_ids: Option<Vec<i64>>,
+
+    /// 화면에서 고른 클립의 파일 경로 목록 (자동 선택 무시)
+    ///
+    /// 홈·편집기가 사용자의 선택을 넘기는 통로다. 경로가 사실상 PK 이고
+    /// (`ClipMetadata.file_path`, 프론트도 이미 그렇게 쓴다) 저장 위치가 바뀌지 않는
+    /// 한 안정적이다.
+    ///
+    /// **목표 길이를 넘겨도 자르지 않는다** — 사용자가 직접 고른 것이므로 "고른 걸
+    /// 넣어준다" 가 맞다. 자동 선택일 때만 길이 예산이 의미가 있다.
+    #[serde(default)]
+    pub selected_clip_paths: Option<Vec<String>>,
+
+    /// Exact user-reviewed timeline. New clients use this instead of
+    /// `selected_clip_paths`; sending both is rejected as ambiguous.
+    #[serde(default)]
+    pub storyboard: Option<Vec<StoryboardClip>>,
+
+    /// Whether this render is a Short, a lossless Shorts series, or one
+    /// general vertical video.
+    #[serde(default)]
+    pub output_intent: AutoEditOutputIntent,
+
+    /// Deterministic vertical presentation used by the renderer.
+    #[serde(default)]
+    pub framing_mode: AutoEditFramingMode,
+
+    /// Export/readiness policy. TikTok/Reels remain file-export presets.
+    #[serde(default)]
+    pub platform_preset: PlatformPreset,
+
+    /// Durable upload defaults carried into the result library.
+    #[serde(default)]
+    pub publish_metadata: PublishMetadata,
 
     /// 캔버스 템플릿 설정
     pub canvas_template: Option<CanvasTemplate>,
@@ -60,6 +98,105 @@ pub struct AutoEditConfig {
     /// 생략하면 영어로 본다(`CaptionLocale::default()`, 앱의 `fallbackLng` 과 동일).
     #[serde(default)]
     pub caption_locale: CaptionLocale,
+}
+
+impl Default for AutoEditConfig {
+    fn default() -> Self {
+        Self {
+            target_duration: 60,
+            game_ids: Vec::new(),
+            selected_clip_ids: None,
+            selected_clip_paths: None,
+            storyboard: None,
+            output_intent: AutoEditOutputIntent::default(),
+            framing_mode: AutoEditFramingMode::default(),
+            platform_preset: PlatformPreset::default(),
+            publish_metadata: PublishMetadata::default(),
+            canvas_template: None,
+            background_music: None,
+            audio_levels: AudioLevels::default(),
+            allow_duplicates: false,
+            enable_event_zoom: false,
+            enable_hook_captions: true,
+            caption_locale: CaptionLocale::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StoryboardClip {
+    pub game_id: String,
+    pub file_path: String,
+    pub order: u32,
+    pub trim_start_secs: f64,
+    /// Absolute end offset in the source clip.
+    pub trim_end_secs: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoEditOutputIntent {
+    #[default]
+    SingleShort,
+    ShortsSeries,
+    VerticalVideo,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoEditFramingMode {
+    #[default]
+    LolFocusStack,
+    SafeFullFrame,
+    CenterCrop,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformPreset {
+    #[default]
+    YoutubeShorts,
+    Tiktok,
+    InstagramReels,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PublishMetadata {
+    pub title: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub privacy_status: String,
+}
+
+impl Default for PublishMetadata {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            description: String::new(),
+            tags: Vec::new(),
+            privacy_status: "unlisted".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoEditPlanClip {
+    #[serde(flatten)]
+    pub storyboard: StoryboardClip,
+    pub source_duration_secs: f64,
+    pub event_offset_secs: Option<f64>,
+    pub event_type: String,
+    pub highlight_score: f64,
+    pub recommended_order: u32,
+    pub thumbnail_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoEditPlan {
+    pub clips: Vec<AutoEditPlanClip>,
+    pub estimated_duration_secs: f64,
+    pub recommended_output_intent: AutoEditOutputIntent,
+    pub estimated_part_count: usize,
 }
 
 fn default_true() -> bool {
@@ -204,6 +341,10 @@ pub struct AutoEditProgress {
 
     /// 오류 메시지 (실패 시 제공)
     pub error: Option<String>,
+
+    /// Completed files. Empty until the job reaches a terminal state.
+    #[serde(default)]
+    pub outputs: Vec<AutoEditOutput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -228,6 +369,33 @@ pub enum AutoEditStatus {
     Processing,
     Completed,
     Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoEditJobReceipt {
+    pub job_id: String,
+    pub status: AutoEditStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoEditOutput {
+    pub result_id: String,
+    pub output_path: String,
+    pub duration: f64,
+    pub clips_used: usize,
+    pub file_size_bytes: u64,
+    pub output_kind: AutoEditOutputKind,
+    pub part_index: Option<usize>,
+    pub part_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoEditOutputKind {
+    Short,
+    ShortSeriesPart,
+    VerticalVideo,
 }
 
 #[cfg(test)]
@@ -266,6 +434,7 @@ mod tests {
             target_duration: 60,
             game_ids: vec!["game-1".to_string()],
             selected_clip_ids: None,
+            selected_clip_paths: None,
             canvas_template: None,
             background_music: None,
             audio_levels: AudioLevels::default(),
@@ -273,6 +442,7 @@ mod tests {
             enable_event_zoom: false,
             enable_hook_captions: false,
             caption_locale: CaptionLocale::default(),
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&config).expect("serialization should succeed");
@@ -287,6 +457,7 @@ mod tests {
             target_duration: 120,
             game_ids: vec!["g1".to_string(), "g2".to_string()],
             selected_clip_ids: Some(vec![1, 2, 3]),
+            selected_clip_paths: None,
             canvas_template: None,
             background_music: None,
             audio_levels: AudioLevels {
@@ -297,6 +468,7 @@ mod tests {
             enable_event_zoom: true,
             enable_hook_captions: false,
             caption_locale: CaptionLocale::default(),
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed");

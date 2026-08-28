@@ -4,9 +4,15 @@
  * Modal dialog for video playback with proper focus management
  */
 
-import { useState, useEffect, useRef } from 'react';
-import { Dialog, DialogContent, DialogOverlay, DialogTitle } from '@/components/ui/dialog';
-import { VideoPlayer } from './VideoPlayer';
+import { useState, useEffect, useRef } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogOverlay,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { VideoPlayer } from "./VideoPlayer";
 
 interface VideoModalProps {
   isOpen: boolean;
@@ -21,7 +27,7 @@ export function VideoModal({
   onClose,
   src,
   title,
-  autoPlay = false
+  autoPlay = false,
 }: VideoModalProps) {
   const [focusElement, setFocusElement] = useState<HTMLElement | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -52,14 +58,14 @@ export function VideoModal({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!isOpen) return;
 
-      if (e.key === 'Escape') {
+      if (e.key === "Escape") {
         e.preventDefault();
         onClose();
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose]);
 
   return (
@@ -69,17 +75,18 @@ export function VideoModal({
         onClick={handleOverlayClick}
         className="fixed inset-0 bg-black/90 backdrop-blur-sm z-50"
       />
-      <DialogContent className="fixed inset-4 z-50 bg-background rounded-lg shadow-2xl outline-none max-w-none">
-        <DialogTitle className="sr-only">
-          {title || 'Video Player'}
-        </DialogTitle>
-        <div className="h-full flex flex-col">
+      <DialogContent className="h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-none overflow-hidden rounded-lg bg-background p-0 shadow-2xl outline-none">
+        <DialogTitle className="sr-only">{title || "Video Player"}</DialogTitle>
+        <DialogDescription className="sr-only">
+          Video playback dialog with controls
+        </DialogDescription>
+        <div className="flex h-full min-h-0 flex-col">
           <VideoPlayer
             src={src}
             title={title}
             autoPlay={autoPlay}
             onClose={onClose}
-            className="flex-1"
+            className="min-h-0 flex-1"
           />
         </div>
       </DialogContent>

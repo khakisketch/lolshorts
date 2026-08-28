@@ -67,7 +67,11 @@ test.describe("Home Game Status", () => {
     await settings.getByTestId("settings-nav-diagnostics").click();
 
     // 진단은 기본으로 접혀 있다(설정 화면을 조용하게 두려고).
-    await settings.getByTestId("diagnostics-section").getByRole("button").first().click();
+    await settings
+      .getByTestId("diagnostics-section")
+      .getByRole("button")
+      .first()
+      .click();
 
     const blockers = settings.getByTestId("diagnostics-blockers");
     await expect(blockers).toBeVisible({ timeout: 10000 });
@@ -90,7 +94,7 @@ test.describe("Navigation", () => {
 
   test("should navigate to results", async ({ page }) => {
     // 예전 `nav-library`/`nav-games` 는 사라졌다 — 사용자가 가진 것은 모두 결과로.
-    await page.getByTestId("nav-results").click();
+    await page.getByTestId("nav-library").click();
     await page.waitForLoadState("networkidle");
 
     await expect(page).toHaveURL(/\/results/);
@@ -100,10 +104,13 @@ test.describe("Navigation", () => {
     page,
   }) => {
     // 옛 링크·북마크가 404 로 죽지 않아야 한다(App.tsx 의 redirect 라우트).
-    for (const legacy of ["/games", "/replays"]) {
+    for (const [legacy, tab] of [
+      ["/games", "clips"],
+      ["/replays", "replays"],
+    ] as const) {
       await page.goto(`${BASE_URL}${legacy}`);
       await page.waitForLoadState("networkidle");
-      await expect(page).toHaveURL(/\/results/);
+      await expect(page).toHaveURL(new RegExp(`/results\\?tab=${tab}$`));
     }
   });
 
@@ -112,6 +119,41 @@ test.describe("Navigation", () => {
     await page.waitForLoadState("networkidle");
 
     await expect(page.getByTestId("settings")).toBeVisible({ timeout: 5000 });
+  });
+
+  test("keeps the desktop sidebar compact on settings until explicitly expanded", async ({
+    page,
+  }) => {
+    await page.getByTestId("nav-settings").click();
+    await page.waitForLoadState("networkidle");
+
+    const sidebar = page.locator("#desktop-sidebar-content");
+    const toggle = page.getByTestId("sidebar-toggle");
+    await expect(sidebar).toHaveClass(/w-16/);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await toggle.click();
+    await expect(sidebar).toHaveClass(/w-64/);
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    // The explicit expansion is session-scoped and survives route changes.
+    await page.getByTestId("nav-library").click();
+    await page.waitForLoadState("networkidle");
+    await expect(sidebar).toHaveClass(/w-64/);
+  });
+
+  test("normalizes the legacy games tab into the game-records tab", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE_URL}/results?tab=games`);
+    await page.waitForLoadState("networkidle");
+
+    await expect(page).toHaveURL(/\/results\?tab=clips$/);
+    await expect(page.getByTestId("results-tab-clips")).toHaveAttribute(
+      "data-state",
+      "active",
+    );
+    await expect(page.getByTestId("results-tab-games")).toHaveCount(0);
   });
 
   test("should render Settings recording fixture shape from mocked Tauri settings", async ({
@@ -132,7 +174,9 @@ test.describe("Navigation", () => {
     });
 
     await settings.getByTestId("settings-nav-storage").click();
-    await expect(settings.getByTestId("settings-section-storage")).toBeVisible();
+    await expect(
+      settings.getByTestId("settings-section-storage"),
+    ).toBeVisible();
   });
 
   test("should reach the editor from results", async ({ page }) => {
@@ -209,7 +253,7 @@ test.describe("Performance", () => {
     await page.getByTestId("nav-dashboard").click();
     await page.waitForLoadState("networkidle");
 
-    await page.getByTestId("nav-results").click();
+    await page.getByTestId("nav-library").click();
     await page.waitForLoadState("networkidle");
 
     const elapsed = Date.now() - startTime;

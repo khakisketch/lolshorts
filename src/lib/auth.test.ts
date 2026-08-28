@@ -49,7 +49,6 @@ jest.mock("./supabase", () => ({
   supabase: {
     auth: {
       signInWithPassword: jest.fn(),
-      signInWithOAuth: jest.fn(),
       signUp: jest.fn(),
       signOut: jest.fn(),
       refreshSession: jest.fn(),
@@ -202,47 +201,6 @@ describe("Auth Store", () => {
     });
   });
 
-  describe("Google OAuth Login", () => {
-    it("should initiate Google OAuth login", async () => {
-      const { supabase } = require("./supabase");
-      supabase.auth.signInWithOAuth.mockResolvedValue({
-        data: {},
-        error: null,
-      });
-
-      const { result } = renderHook(() => useAuthStore());
-
-      await act(async () => {
-        await result.current.loginWithGoogle();
-      });
-
-      expect(supabase.auth.signInWithOAuth).toHaveBeenCalledWith({
-        provider: "google",
-        options: {
-          redirectTo: window.location.origin,
-        },
-      });
-      expect(result.current.isLoading).toBe(false);
-    });
-
-    it("should handle Google OAuth error", async () => {
-      const { supabase } = require("./supabase");
-      supabase.auth.signInWithOAuth.mockRejectedValue(
-        new Error("OAuth failed"),
-      );
-
-      const { result } = renderHook(() => useAuthStore());
-
-      await act(async () => {
-        await expect(result.current.loginWithGoogle()).rejects.toThrow(
-          "errors.generic",
-        );
-      });
-
-      expect(result.current.error).toBe("errors.generic");
-    });
-  });
-
   describe("Signup Functionality", () => {
     it("should handle successful signup", async () => {
       const mockUser = {
@@ -300,11 +258,12 @@ describe("Auth Store", () => {
       const { result } = renderHook(() => useAuthStore());
 
       await act(async () => {
-        await result.current.signup({
+        const signupResult = await result.current.signup({
           email: "newuser@example.com",
           password: "password123",
           confirm_password: "password123",
         });
+        expect(signupResult).toBe("signed_in");
       });
 
       expect(result.current.user).toEqual({
@@ -312,6 +271,36 @@ describe("Auth Store", () => {
         tier: "FREE", // Default tier for new users
       });
       expect(result.current.isAuthenticated).toBe(true);
+    });
+
+    it("should treat email confirmation as a successful pending signup", async () => {
+      const { supabase } = require("./supabase");
+      supabase.auth.signUp.mockResolvedValue({
+        data: {
+          user: { id: "pending-user-id", email: "pending@example.com" },
+          session: null,
+        },
+        error: null,
+      });
+
+      const { result } = renderHook(() => useAuthStore());
+
+      let signupResult: string | undefined;
+      await act(async () => {
+        signupResult = await result.current.signup({
+          email: "pending@example.com",
+          password: "password123",
+          confirm_password: "password123",
+        });
+      });
+
+      expect(signupResult).toBe("confirmation_required");
+      expect(supabase.from).not.toHaveBeenCalled();
+      expect(authApi.setSession).not.toHaveBeenCalled();
+      expect(result.current.user).toBeNull();
+      expect(result.current.isAuthenticated).toBe(false);
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.error).toBeNull();
     });
 
     it("should reject signup with mismatched passwords", async () => {
@@ -364,6 +353,39 @@ describe("Auth Store", () => {
       });
 
       expect(result.current.user).toBeNull();
+      expect(result.current.isAuthenticated).toBe(false);
+      expect(result.current.error).toBeNull();
+      expect(authApi.logout).toHaveBeenCalledTimes(1);
+    });
+
+    it("should fail closed when a remote sign-out cannot reach the backend", async () => {
+      (authApi.logout as jest.Mock).mockRejectedValueOnce(
+        new Error("backend unavailable"),
+      );
+      useAuthStore.setState({
+        user: {
+          id: "remote-user-id",
+          email: "remote@example.com",
+          tier: "FREE",
+          profile: null,
+          supabaseUser: {
+            id: "remote-user-id",
+            email: "remote@example.com",
+          } as never,
+        },
+        isAuthenticated: true,
+        isLoading: false,
+        error: null,
+      });
+
+      const { result } = renderHook(() => useAuthStore());
+
+      await act(async () => {
+        await result.current.syncSignedOut();
+      });
+
+      expect(result.current.user).toBeNull();
+      expect(result.current.entitlement).toBeNull();
       expect(result.current.isAuthenticated).toBe(false);
       expect(result.current.error).toBeNull();
     });
@@ -503,7 +525,10 @@ describe("Auth Store", () => {
 
       const { result } = renderHook(() => useAuthStore());
 
-      const licenseInfo = await result.current.getLicenseInfo();
+      let licenseInfo;
+      await act(async () => {
+        licenseInfo = await result.current.getLicenseInfo();
+      });
 
       expect(licenseInfo).toEqual({
         tier: "PRO",
@@ -548,7 +573,10 @@ describe("Auth Store", () => {
 
       const { result } = renderHook(() => useAuthStore());
 
-      const licenseInfo = await result.current.getLicenseInfo();
+      let licenseInfo;
+      await act(async () => {
+        licenseInfo = await result.current.getLicenseInfo();
+      });
 
       expect(licenseInfo).toEqual({
         tier: "FREE",
@@ -585,7 +613,10 @@ describe("Auth Store", () => {
 
       const { result } = renderHook(() => useAuthStore());
 
-      const licenseInfo = await result.current.getLicenseInfo();
+      let licenseInfo;
+      await act(async () => {
+        licenseInfo = await result.current.getLicenseInfo();
+      });
       expect(licenseInfo).toEqual({
         tier: "FREE",
         features: ["basic_clips", "basic_editor"],
@@ -685,6 +716,13 @@ describe("Auth Store", () => {
       });
 
       // Token refresh should not change the auth state if successful
+      expect(authApi.setSession).toHaveBeenCalledWith(
+        "access-token",
+        "refresh-token",
+        "refresh-user-id",
+        "refresh@example.com",
+        9999999999,
+      );
       expect(result.current.user).toEqual(mockUser);
       expect(result.current.isAuthenticated).toBe(true);
     });

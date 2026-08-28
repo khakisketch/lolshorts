@@ -113,6 +113,8 @@ export interface StorageSettings {
 
 // Main Recording Settings Type
 export interface RecordingSettings {
+  /** Persisted Rust settings schema; retained in the IPC contract for migrations. */
+  schema_version: number;
   video: VideoSettings;
   audio: AudioSettings;
   event_filter: EventFilterSettings;
@@ -120,7 +122,7 @@ export interface RecordingSettings {
   clip_timing: ClipTimingSettings;
   hotkeys: HotkeySettings;
   storage: StorageSettings;
-  auto_start_with_league: boolean;
+  launch_on_windows_startup: boolean;
   minimize_to_tray: boolean;
   show_notifications: boolean;
   show_replay_popup: boolean;
@@ -130,7 +132,7 @@ export interface RecordingSettings {
 
 // Recording Readiness Types
 export interface ReadinessComponent {
-  status: 'ok' | 'warning' | 'error';
+  status: "ok" | "warning" | "error";
   message: string;
 }
 
@@ -139,7 +141,7 @@ export interface ReadinessBlocker {
   component?: string;
   message: string;
   action?: string;
-  severity: 'critical' | 'warning';
+  severity: "critical" | "warning";
 }
 
 export interface RecordingReadiness {
@@ -147,10 +149,20 @@ export interface RecordingReadiness {
   blockers: ReadinessBlocker[];
   component_statuses: {
     ffmpeg: ReadinessComponent;
+    ffprobe: ReadinessComponent;
     audio: ReadinessComponent;
     disk: ReadinessComponent;
     lcu: ReadinessComponent;
     gpu: ReadinessComponent;
+    nvenc: ReadinessComponent;
+    capture?: ReadinessComponent;
+    overlay_exclusion?: ReadinessComponent;
+    release_config?: ReadinessComponent;
+    supabase?: ReadinessComponent;
+    youtube?: ReadinessComponent;
+    updater?: ReadinessComponent;
+    telemetry?: ReadinessComponent;
+    autostart?: ReadinessComponent;
   };
 }
 
@@ -195,4 +207,103 @@ export interface RecommendedSettings {
   audio: AudioRecommendations;
   performance: PerformanceRecommendations;
   storage: StorageRecommendations;
+}
+
+// PlatformConfig IPC contract (matches Rust platform_config/types.rs).
+export type PlatformKind = "Windows" | "MacOS" | "Linux";
+export type HardwareGpuVendor =
+  | "Nvidia"
+  | "Amd"
+  | "Intel"
+  | "Apple"
+  | "Unknown";
+
+export interface CpuInfo {
+  model: string;
+  cores: number;
+  logical_cores: number;
+  max_frequency: number;
+  has_avx: boolean;
+  has_avx2: boolean;
+  architecture: string;
+}
+
+export interface GpuInfo {
+  name: string;
+  vendor: HardwareGpuVendor;
+  memory_mb: number;
+  driver_version: string;
+  is_primary: boolean;
+  supports_encoding: boolean;
+  supports_nvenc: boolean;
+  supports_amf: boolean;
+  supports_qsv: boolean;
+}
+
+export interface MemoryInfo {
+  total_gb: number;
+  available_gb: number;
+  speed_mhz: number | null;
+}
+
+export interface DisplayInfo {
+  id: string;
+  name: string;
+  resolution: [number, number];
+  refresh_rate: number;
+  is_primary: boolean;
+  scaling_factor: number;
+}
+
+export interface AudioDeviceInfo {
+  input_devices: AudioDeviceInfoItem[];
+  output_devices: AudioDeviceInfoItem[];
+  default_input: string | null;
+  default_output: string | null;
+}
+
+export interface AudioDeviceInfoItem {
+  id: string;
+  name: string;
+  channels: number;
+  sample_rate: number;
+  is_default: boolean;
+}
+
+export interface PlatformStorageInfo {
+  total_space_gb: number;
+  free_space_gb: number;
+  install_drive: string;
+  temp_directory: string;
+}
+
+export interface HardwareCapabilities {
+  cpu: CpuInfo;
+  gpu: GpuInfo[];
+  memory: MemoryInfo;
+  displays: DisplayInfo[];
+  audio_devices: AudioDeviceInfo;
+  storage: PlatformStorageInfo;
+}
+
+export interface PlatformFeatures {
+  supports_windows_capture: boolean;
+  supports_ffmpeg_native: boolean;
+  supports_core_graphics: boolean;
+  supports_hardware_acceleration: boolean;
+  supports_system_tray: boolean;
+  supports_global_hotkeys: boolean;
+  supports_file_associations: boolean;
+  supports_auto_start: boolean;
+  supports_notifications: boolean;
+  supports_api_detection: boolean;
+  supports_window_enumeration: boolean;
+}
+
+export interface PlatformConfig {
+  platform: PlatformKind;
+  hardware: HardwareCapabilities;
+  default_overrides: RecordingSettings;
+  features: PlatformFeatures;
+  recommended_settings: RecommendedSettings;
 }

@@ -72,6 +72,8 @@ const INFLIGHT_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 /// This is a ceiling on how long game-end can stall, not a target — the drain below
 /// normally leaves nothing for the flush to do.
 const FLUSH_EXTRACTION_BUDGET: Duration = Duration::from_secs(60);
+/// Preserve the final on-screen result moment without making shutdown feel hung.
+const GAME_END_POST_ROLL_CAP: Duration = Duration::from_secs(3);
 
 /// Extra delay added to the merge-flush timer.
 ///
@@ -169,6 +171,11 @@ pub struct AutoClipManager {
     /// Processing lock to prevent concurrent clip saves
     processing_lock: Arc<TokioMutex<()>>,
 
+    /// Low-priority, single-slot thumbnail lane. Clip publication and metadata never
+    /// wait for JPEG extraction, and burst events cannot launch thumbnail FFmpeg jobs
+    /// concurrently during gameplay.
+    thumbnail_lock: Arc<TokioMutex<()>>,
+
     /// Event monitoring task handle
     monitor_task: Arc<TokioMutex<Option<JoinHandle<()>>>>,
 
@@ -240,6 +247,7 @@ impl AutoClipManager {
             last_game_summary: Arc::new(TokioRwLock::new(None)),
             current_game_id: Arc::new(TokioRwLock::new(None)),
             processing_lock: Arc::new(TokioMutex::new(())),
+            thumbnail_lock: Arc::new(TokioMutex::new(())),
             monitor_task: Arc::new(TokioMutex::new(None)),
             cancel_token: Arc::new(TokioMutex::new(CancellationToken::new())),
             task_cancel: Arc::new(TokioMutex::new(CancellationToken::new())),
@@ -268,6 +276,7 @@ impl AutoClipManager {
             last_game_summary: Arc::clone(&self.last_game_summary),
             current_game_id: Arc::clone(&self.current_game_id),
             processing_lock: Arc::clone(&self.processing_lock),
+            thumbnail_lock: Arc::clone(&self.thumbnail_lock),
             monitor_task: Arc::new(TokioMutex::new(None)),
             cancel_token: Arc::new(TokioMutex::new(CancellationToken::new())),
             task_cancel: Arc::clone(&self.task_cancel),
@@ -462,6 +471,7 @@ impl AutoClipManager {
         let storage = Arc::clone(&self.storage);
         let current_game_id = Arc::clone(&self.current_game_id);
         let processing_lock = Arc::clone(&self.processing_lock);
+        let thumbnail_lock = Arc::clone(&self.thumbnail_lock);
         let current_game_mode = Arc::clone(&self.current_game_mode);
         let current_queue_id = Arc::clone(&self.current_queue_id);
         let saved_clip_count = Arc::clone(&self.saved_clip_count);
@@ -491,82 +501,83 @@ impl AutoClipManager {
             info!("Event monitoring task started");
 
             // Create callback closure that processes events
-            let callback =
-                move |trigger: EventTrigger, event: super::live_client::GameEvent| {
-                    // 이벤트를 그대로 쓴다 — 같은 타입인데 필드를 옮겨 적던 변환이
-                    // `moment`·`result` 를 매번 버리고 있었다.
+            let callback = move |trigger: EventTrigger, event: super::live_client::GameEvent| {
+                // 이벤트를 그대로 쓴다 — 같은 타입인데 필드를 옮겨 적던 변환이
+                // `moment`·`result` 를 매번 버리고 있었다.
 
-                    // Clone Arc references for the async block
-                    let event_queue = Arc::clone(&event_queue);
-                    let settings = Arc::clone(&settings);
-                    let recorder = Arc::clone(&recorder);
-                    let storage = Arc::clone(&storage);
-                    let current_game_id = Arc::clone(&current_game_id);
-                    let processing_lock = Arc::clone(&processing_lock);
-                    let current_game_mode = Arc::clone(&current_game_mode);
-                    let current_queue_id = Arc::clone(&current_queue_id);
-                    let saved_clip_count = Arc::clone(&saved_clip_count);
-                    let merge_flush_armed = Arc::clone(&merge_flush_armed);
-                    let app_handle = Arc::clone(&app_handle);
-                    let task_cancel = Arc::clone(&task_cancel);
-                    let events_write_lock = Arc::clone(&events_write_lock);
-                    let inflight_clip_tasks = Arc::clone(&inflight_clip_tasks);
-                    let last_game_summary = Arc::clone(&last_game_summary);
-                    // Counted BEFORE the spawn so `stop_event_monitoring` can never
-                    // observe zero for a task that has been created but not yet polled.
-                    let inflight = InflightGuard::new(Arc::clone(&inflight_clip_tasks));
+                // Clone Arc references for the async block
+                let event_queue = Arc::clone(&event_queue);
+                let settings = Arc::clone(&settings);
+                let recorder = Arc::clone(&recorder);
+                let storage = Arc::clone(&storage);
+                let current_game_id = Arc::clone(&current_game_id);
+                let processing_lock = Arc::clone(&processing_lock);
+                let thumbnail_lock = Arc::clone(&thumbnail_lock);
+                let current_game_mode = Arc::clone(&current_game_mode);
+                let current_queue_id = Arc::clone(&current_queue_id);
+                let saved_clip_count = Arc::clone(&saved_clip_count);
+                let merge_flush_armed = Arc::clone(&merge_flush_armed);
+                let app_handle = Arc::clone(&app_handle);
+                let task_cancel = Arc::clone(&task_cancel);
+                let events_write_lock = Arc::clone(&events_write_lock);
+                let inflight_clip_tasks = Arc::clone(&inflight_clip_tasks);
+                let last_game_summary = Arc::clone(&last_game_summary);
+                // Counted BEFORE the spawn so `stop_event_monitoring` can never
+                // observe zero for a task that has been created but not yet polled.
+                let inflight = InflightGuard::new(Arc::clone(&inflight_clip_tasks));
 
-                    // Spawn a task to process the event asynchronously
-                    tokio::spawn(async move {
-                        let _inflight = inflight;
-                        // Create a temporary AutoClipManager instance for processing.
-                        // `cancel_token` is fresh (its Drop must not kill the session);
-                        // `task_cancel` is the shared session token so the post-event
-                        // waits inside actually observe a stop.
-                        let temp_manager = AutoClipManager {
-                            recorder,
-                            storage,
-                            settings,
-                            event_queue,
-                            last_game_summary,
-                            current_game_id,
-                            processing_lock,
-                            monitor_task: Arc::new(TokioMutex::new(None)),
-                            cancel_token: Arc::new(TokioMutex::new(CancellationToken::new())),
-                            task_cancel,
-                            inflight_clip_tasks,
-                            events_write_lock,
-                            current_game_mode,
-                            current_queue_id,
-                            saved_clip_count,
-                            merge_flush_armed,
-                            app_handle,
-                        };
+                // Spawn a task to process the event asynchronously
+                tokio::spawn(async move {
+                    let _inflight = inflight;
+                    // Create a temporary AutoClipManager instance for processing.
+                    // `cancel_token` is fresh (its Drop must not kill the session);
+                    // `task_cancel` is the shared session token so the post-event
+                    // waits inside actually observe a stop.
+                    let temp_manager = AutoClipManager {
+                        recorder,
+                        storage,
+                        settings,
+                        event_queue,
+                        last_game_summary,
+                        current_game_id,
+                        processing_lock,
+                        thumbnail_lock,
+                        monitor_task: Arc::new(TokioMutex::new(None)),
+                        cancel_token: Arc::new(TokioMutex::new(CancellationToken::new())),
+                        task_cancel,
+                        inflight_clip_tasks,
+                        events_write_lock,
+                        current_game_mode,
+                        current_queue_id,
+                        saved_clip_count,
+                        merge_flush_armed,
+                        app_handle,
+                    };
 
-                        let trigger_display = format!("{:?}", trigger);
+                    let trigger_display = format!("{:?}", trigger);
 
-                        // Already stopping: do not open a new save that would write to a
-                        // session the caller is about to finalize.
-                        if temp_manager.session_cancelled().await {
-                            debug!(
-                                "Dropping event {} — monitoring is stopping",
-                                trigger_display
-                            );
-                            return;
-                        }
+                    // Already stopping: do not open a new save that would write to a
+                    // session the caller is about to finalize.
+                    if temp_manager.session_cancelled().await {
+                        debug!(
+                            "Dropping event {} — monitoring is stopping",
+                            trigger_display
+                        );
+                        return;
+                    }
 
-                        // NOTE: the processing future itself is deliberately NOT wrapped
-                        // in a `select!` against the cancel token. Dropping it mid-save
-                        // would throw away an extraction that is often nearly finished —
-                        // typically the last fight of the game. Instead the waits inside
-                        // are cancellation-aware (`sleep_or_cancelled`) so a stop makes
-                        // this task finish promptly, and `stop_event_monitoring` waits
-                        // (bounded) for the in-flight count to drain.
-                        if let Err(e) = temp_manager.process_event(trigger, event).await {
-                            error!("Failed to process event {}: {}", trigger_display, e);
-                        }
-                    });
-                };
+                    // NOTE: the processing future itself is deliberately NOT wrapped
+                    // in a `select!` against the cancel token. Dropping it mid-save
+                    // would throw away an extraction that is often nearly finished —
+                    // typically the last fight of the game. Instead the waits inside
+                    // are cancellation-aware (`sleep_or_cancelled`) so a stop makes
+                    // this task finish promptly, and `stop_event_monitoring` waits
+                    // (bounded) for the in-flight count to drain.
+                    if let Err(e) = temp_manager.process_event(trigger, event).await {
+                        error!("Failed to process event {}: {}", trigger_display, e);
+                    }
+                });
+            };
 
             // Run the monitor until cancelled
             let monitoring = monitor.start_monitoring(callback);
@@ -617,6 +628,12 @@ impl AutoClipManager {
         flush_budget: Duration,
     ) -> Result<()> {
         info!("Stopping event monitoring...");
+
+        // The GameEnd signal arrives before the result screen has visually settled.
+        // Keep the recorder alive for only the remaining configured post-roll, capped at
+        // three seconds. The previous stop path cancelled waits immediately and produced
+        // a visibly abrupt ~2s tail in the field recording.
+        self.wait_for_game_end_post_roll().await;
 
         // Cancel the monitoring task so no new events arrive during the flush.
         {
@@ -672,6 +689,37 @@ impl AutoClipManager {
         }
 
         Ok(())
+    }
+
+    async fn wait_for_game_end_post_roll(&self) {
+        let detected_at = {
+            let queue = self.event_queue.lock().await;
+            queue
+                .iter()
+                .rev()
+                .find(|queued| matches!(queued.trigger, EventTrigger::GameEnd))
+                .map(|queued| queued.received_wall_secs)
+        };
+        let Some(detected_at) = detected_at else {
+            return;
+        };
+
+        let configured_post = {
+            let settings = self.settings.read().await;
+            self.calculate_clip_window(&EventTrigger::GameEnd, &settings)
+                .post_duration as f64
+        };
+        let remaining = (detected_at + configured_post - now_wall_secs())
+            .max(0.0)
+            .min(GAME_END_POST_ROLL_CAP.as_secs_f64());
+        if remaining > 0.0 {
+            info!(
+                remaining_secs = remaining,
+                configured_post_secs = configured_post,
+                "Waiting for final GameEnd post-roll before stopping capture"
+            );
+            tokio::time::sleep(Duration::from_secs_f64(remaining)).await;
+        }
     }
 
     /// Whether the current monitoring session has been cancelled.
@@ -1288,6 +1336,7 @@ impl AutoClipManager {
         {
             Ok(guard) => guard,
             Err(_) => {
+                crate::utils::telemetry::capture_operational_error("clip", "clip_save_timeout");
                 error!(
                     "processing_lock acquisition timed out after {:.0}s in save_single_event; \
                      skipping the clip (event data was already persisted)",
@@ -1324,6 +1373,7 @@ impl AutoClipManager {
                 Some((path, actual_duration))
             }
             Err(e) => {
+                crate::utils::telemetry::capture_operational_error("clip", "clip_save_failed");
                 error!("Failed to save clip for event {}: {}", event.event_name, e);
                 self.emit_event(
                     "clip-save-failed",
@@ -1614,13 +1664,22 @@ impl AutoClipManager {
         let settings_key = match trigger {
             EventTrigger::Multikill(_) => Some("multikill"),
             EventTrigger::Steal => Some("steal"),
-            EventTrigger::Death => Some("death"),
+            EventTrigger::Death | EventTrigger::FirstBloodVictim => Some("death"),
+            EventTrigger::Assist => Some("assist"),
+            EventTrigger::TurretKill => Some("turret"),
+            EventTrigger::Outplay1vX(_) | EventTrigger::LowHpOutplay => Some("outplay"),
+            EventTrigger::DragonKill | EventTrigger::ElderDragonKill => Some("dragon"),
+            EventTrigger::BaronKill => Some("baron"),
+            EventTrigger::HeraldKill => Some("herald"),
+            EventTrigger::InhibitorKill
+            | EventTrigger::VoidgrubsKill
+            | EventTrigger::AtakhanKill => Some("objective"),
+            EventTrigger::Ace => Some("ace"),
             EventTrigger::GameEnd => Some("game_end"),
-            EventTrigger::ChampionKill => Some("kill"),
-            // 나머지는 설정에 대응하는 키가 없다 — 예전에는 전부 "kill" 로
-            // 떨어뜨렸는데, 그 바람에 에이스·바론·1vX 아웃플레이·저체력 역전이
-            // 전부 킬과 같은 13초가 됐다.
-            _ => None,
+            EventTrigger::ChampionKill
+            | EventTrigger::FirstBlood
+            | EventTrigger::Shutdown
+            | EventTrigger::TradeKill => Some("kill"),
         };
 
         if let Some(key) = settings_key {
@@ -1673,43 +1732,10 @@ impl AutoClipManager {
         let game_id = self.current_game_id.read().await;
 
         if let Some(ref game_id) = *game_id {
-            // 썸네일은 여기서 만든다.
-            //
-            // 지금까지 이 값은 언제나 `None` 이었고, 화면은 클립 목록을 열 때마다
-            // IPC 로 하나씩 만들어 붙이고 있었다. 그래서 목록을 열 때마다 회색
-            // 사각형이 먼저 뜨고, 앱을 껐다 켜면 처음부터 다시 만들었다. 클립을
-            // 저장한 직후가 가장 싼 시점이다 — 파일이 방금 디스크에 있고, 게임은
-            // 이미 끝난 장면이라 프레임 하나 뽑는 비용이 체감되지 않는다.
-            //
-            // 실패해도 클립 저장을 막지 않는다. 썸네일이 없으면 화면이 아이콘으로
-            // 대신하지만, 메타데이터가 없으면 클립 자체가 목록에서 사라진다.
-            // 하이라이트가 일어난 지점에서 뽑는다.
-            //
-            // `auto_generate_thumbnail` 은 클립 **중앙**을 찍는데, 킬 클립은
-            // pre-roll 10초 뒤에 킬이 있으므로 13초 클립의 6.5초 = 아무 일도
-            // 일어나지 않은 이동 장면이 잡힌다. 실게임에서 확인했다 — 더블킬은
-            // 33초 지점인데 썸네일은 21.5초(중앙)를 찍었다.
-            //
-            // 이 JPEG 은 화면 목록의 미리보기이자 YouTube 커스텀 썸네일로 그대로
-            // 올라가므로, 어느 프레임을 고르느냐가 곧 클릭률이다.
+            // Publish metadata first. Thumbnail FFmpeg work runs later in a dedicated
+            // single-slot lane so a saved highlight is visible immediately and JPEG
+            // decoding never extends the clip extraction critical section.
             let thumb_at = event_offset_secs.clamp(0.0, (duration - 0.1).max(0.0));
-            let thumbnail_path = match crate::video::thumbnail::generate_event_thumbnail(
-                clip_path.to_path_buf(),
-                clip_path
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."))
-                    .to_path_buf(),
-                thumb_at,
-                clip_id,
-            )
-            .await
-            {
-                Ok(path) => Some(path.to_string_lossy().to_string()),
-                Err(e) => {
-                    warn!("클립 썸네일 생성 실패({}): {}", clip_path.display(), e);
-                    None
-                }
-            };
 
             // 앞이 잘린 클립에서는 이벤트가 그만큼 앞으로 당겨진다. 길이를 넘는
             // 오프셋은 썸네일 추출을 실패시키므로 클립 안으로 조인다.
@@ -1753,12 +1779,15 @@ impl AutoClipManager {
                     moment.enemies_alive
                 );
             } else {
-                info!("클립 {} 점수 {:.1} — {:?}", clip_id, score.value, score.reasons);
+                info!(
+                    "클립 {} 점수 {:.1} — {:?}",
+                    clip_id, score.value, score.reasons
+                );
             }
 
             let metadata = ClipMetadata {
                 file_path: clip_path.to_string_lossy().to_string(),
-                thumbnail_path,
+                thumbnail_path: None,
                 event_offset_secs: event_offset,
                 // 원시 이벤트 이름(`event.event_name`)이 아니라 트리거로 적는다.
                 // 이름만 쓰던 동안 더블킬도 셧다운도 전부 `Custom("ChampionKill")`
@@ -1799,6 +1828,43 @@ impl AutoClipManager {
                 }),
             )
             .await;
+
+            let thumbnail_lock = Arc::clone(&self.thumbnail_lock);
+            let storage = Arc::clone(&self.storage);
+            let game_id = game_id.clone();
+            let clip_id = clip_id.to_string();
+            let clip_path = clip_path.to_path_buf();
+            let thumbnail_dir = clip_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf();
+            let mut thumbnail_metadata = metadata.clone();
+            tokio::spawn(async move {
+                let _thumbnail_slot = thumbnail_lock.lock().await;
+                match crate::video::thumbnail::generate_event_thumbnail(
+                    clip_path.clone(),
+                    thumbnail_dir,
+                    thumb_at,
+                    &clip_id,
+                )
+                .await
+                {
+                    Ok(path) => {
+                        thumbnail_metadata.thumbnail_path =
+                            Some(path.to_string_lossy().to_string());
+                        if let Err(e) = storage.save_clip_metadata(&game_id, &thumbnail_metadata) {
+                            warn!(
+                                "클립 썸네일 메타데이터 갱신 실패({}): {}",
+                                clip_path.display(),
+                                e
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("클립 썸네일 생성 실패({}): {}", clip_path.display(), e);
+                    }
+                }
+            });
         } else {
             warn!("No current game ID set - clip metadata not saved");
         }

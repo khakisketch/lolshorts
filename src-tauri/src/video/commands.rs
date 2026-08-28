@@ -2,12 +2,20 @@ use crate::auth::command_policy::require_command_access;
 use crate::auth::{AuthManager, SubscriptionTier};
 use crate::error::{AppError, AppResult};
 use crate::storage::models::ClipMetadata;
-use crate::storage::{CanvasTemplateInfo, StorageError};
+use crate::storage::{
+    CanvasTemplateInfo, MediaJobKind, MediaJobSnapshot, MediaJobStatus, PlatformExportMetadata,
+    StorageError,
+};
 use crate::utils::security;
+use crate::video::auto_composer::{
+    AutoEditJobReceipt, AutoEditOutput, AutoEditOutputIntent, AutoEditOutputKind, AutoEditPlan,
+    AutoEditStatus, StoryboardClip,
+};
 use crate::video::processor::types::{
     ChainedEffects, ClipSpec, ColorGrading, ComposeOptions, TextPosition, TextStyle,
+    VerticalFraming,
 };
-use crate::video::{AutoEditConfig, AutoEditProgress, AutoEditResult, VideoProcessor};
+use crate::video::{AutoEditConfig, AutoEditProgress, VideoProcessor};
 use crate::AppState;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -295,8 +303,8 @@ pub async fn create_longform_video(
     clip_paths: Vec<String>,
     output_path: String,
 ) -> AppResult<String> {
-    // Montage export is a paid (PRO) feature: it produces an un-watermarked
-    // multi-clip composite, so it is gated identically to compose_shorts.
+    // The free public edition requires an account for editing/export, but does
+    // not require a paid entitlement. Keep this aligned with command_policy.
     require_command_access(&state.auth, "create_longform_video")
         .map_err(|e| AppError::Auth(e.to_string()))?;
 
@@ -447,6 +455,7 @@ pub async fn compose_shorts_v2(
         // 수동 편집기 내보내기 — 자막은 사용자가 캔버스로 직접 얹는다.
         // 훅 자막은 자동 편집이 "왜 이 장면인지" 를 아는 경로에만 붙는다.
         captions: None,
+        framing: VerticalFraming::CenterCrop,
     };
 
     emit_export_progress(&app, 45.0);
@@ -470,7 +479,7 @@ pub async fn compose_shorts_v2(
 pub async fn start_auto_edit(
     state: State<'_, AppState>,
     config: AutoEditConfig,
-) -> AppResult<AutoEditResult> {
+) -> AppResult<AutoEditJobReceipt> {
     // Auth-gated here; the FREE monthly quota vs PRO-unlimited split is enforced below.
     let policy_user = require_command_access(&state.auth, "start_auto_edit")
         .map_err(|e| AppError::Auth(e.to_string()))?;
@@ -487,6 +496,10 @@ pub async fn start_auto_edit(
         .get_tier()
         .map_err(|e| AppError::Auth(e.to_string()))?;
     let is_pro = matches!(tier, SubscriptionTier::Pro);
+
+    if !is_pro {
+        reconcile_pending_quota(&state.auth, &state.storage, &user_id).await;
+    }
 
     // Quota gate (FREE only; PRO is unlimited on both server and local).
     //
@@ -526,8 +539,24 @@ pub async fn start_auto_edit(
         tracing::info!("Auto-edit quota check skipped: tier={:?} (unlimited)", tier);
     }
 
-    // Generate unique job ID
-    let job_id = format!("auto_edit_{}", chrono::Local::now().format("%Y%m%d_%H%M%S"));
+    let job_id = format!("auto_edit_{}", uuid::Uuid::new_v4());
+    let cancellation = state
+        .auto_composer
+        .begin_job(&job_id)
+        .await
+        .map_err(|error| AppError::Validation(error.to_string()))?;
+
+    let config_json = serde_json::to_string(&config)
+        .map_err(|error| AppError::Validation(format!("Invalid auto-edit snapshot: {error}")))?;
+    if let Err(error) = state.storage.create_media_job(
+        &job_id,
+        &user_id,
+        crate::storage::MediaJobKind::AutoEdit,
+        &config_json,
+    ) {
+        state.auto_composer.finish_job(&job_id).await;
+        return Err(AppError::Database(error.to_string()));
+    }
 
     tracing::info!(
         "Starting auto-edit job: {} with target duration: {}s",
@@ -535,42 +564,690 @@ pub async fn start_auto_edit(
         config.target_duration
     );
 
-    // Start auto-composition
-    let result = state
-        .auto_composer
-        .compose(config.clone(), job_id.clone(), is_pro)
-        .await
-        .map_err(|e| {
-            tracing::error!("Auto-edit failed for job {}: {}", job_id, e);
-            AppError::Video(format!("Auto-edit failed: {}", e))
-        })?;
+    let composer = state.auto_composer.clone();
+    let storage = state.storage.clone();
+    let auth = state.auth.clone();
+    let executor = state.media_job_executor.clone();
+    let spawned_job_id = job_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let completed = run_durable_auto_edit_job(
+            composer.clone(),
+            storage,
+            auth,
+            spawned_job_id.clone(),
+            user_id,
+            is_pro,
+            config,
+            cancellation,
+            executor,
+        )
+        .await;
+        if completed {
+            composer.cleanup_job_artifacts(&spawned_job_id).await;
+        }
+        composer.finish_job(&spawned_job_id).await;
+    });
 
-    // 결과 메타데이터(썸네일 포함)는 AutoComposer::compose가 이미 저장한다 —
-    // 여기서 다시 저장하면 thumbnail_path가 None으로 덮여 사라지므로 중복 저장 금지.
+    Ok(AutoEditJobReceipt {
+        job_id,
+        status: AutoEditStatus::Queued,
+    })
+}
 
-    // Increment usage counter on success (FREE only).
-    if !is_pro {
-        // Authoritative consume on the server. Best effort: the compose already
-        // succeeded, so a server outage must not fail the user's export -- the
-        // local cache counter below still advances to keep the offline fallback
-        // warm and approximately correct.
-        server_quota_consume(&state.auth).await;
+#[derive(Clone)]
+struct DurablePartOutput {
+    result_id: String,
+    config: AutoEditConfig,
+    validated_path: PathBuf,
+    validation: crate::video::OutputValidationReport,
+    clip_count: usize,
+    clip_keys: Vec<(String, String)>,
+    output_kind: AutoEditOutputKind,
+    part_index: usize,
+    part_count: usize,
+}
 
-        state
-            .storage
-            .increment_auto_edit_usage(&user_id)
-            .map_err(|e| {
-                tracing::error!("Failed to increment usage: {}", e);
-                // Just log warning, don't fail operation
-            })
-            .ok();
+#[allow(clippy::too_many_arguments)]
+async fn run_durable_auto_edit_job(
+    composer: std::sync::Arc<crate::video::AutoComposer>,
+    storage: std::sync::Arc<crate::storage::Storage>,
+    auth: std::sync::Arc<AuthManager>,
+    job_id: String,
+    user_id: String,
+    is_pro: bool,
+    config: AutoEditConfig,
+    cancellation: tokio_util::sync::CancellationToken,
+    executor: std::sync::Arc<crate::video::media_job_executor::MediaJobExecutor>,
+) -> bool {
+    let started = std::time::Instant::now();
+    let run = crate::video::with_auto_edit_context(job_id.clone(), cancellation, async {
+        storage
+            .update_media_job_status(
+                &job_id,
+                crate::storage::MediaJobStatus::Running,
+                "planning",
+                1.0,
+                None,
+                None,
+            )
+            .map_err(storage_video_error)?;
+        let render_configs = build_render_configs(&composer, config).await?;
+        let part_count = render_configs.len();
+        let snapshot = storage
+            .load_media_job(&job_id)
+            .map_err(storage_video_error)?;
+        if snapshot.parts.is_empty() {
+            let trims = render_configs
+                .iter()
+                .map(|part| {
+                    serde_json::to_string(&part.storyboard).unwrap_or_else(|_| "[]".to_string())
+                })
+                .collect::<Vec<_>>();
+            storage
+                .initialize_media_job_parts(&job_id, &trims)
+                .map_err(storage_video_error)?;
+        }
+
+        let mut drafts = Vec::with_capacity(part_count);
+        for (index, part_config) in render_configs.into_iter().enumerate() {
+            let part_index = index + 1;
+            let result_id = if part_count == 1 {
+                job_id.clone()
+            } else {
+                format!("{}_part_{:02}", job_id, part_index)
+            };
+            let output_kind = match part_config.output_intent {
+                AutoEditOutputIntent::VerticalVideo => AutoEditOutputKind::VerticalVideo,
+                AutoEditOutputIntent::ShortsSeries if part_count > 1 => {
+                    AutoEditOutputKind::ShortSeriesPart
+                }
+                _ => AutoEditOutputKind::Short,
+            };
+            let clip_keys = part_config
+                .storyboard
+                .as_ref()
+                .map(|storyboard| {
+                    storyboard
+                        .iter()
+                        .map(|clip| (clip.game_id.clone(), clip.file_path.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let planned_duration = part_config.storyboard.as_ref().map(|storyboard| {
+                storyboard
+                    .iter()
+                    .map(|clip| clip.trim_end_secs - clip.trim_start_secs)
+                    .sum::<f64>()
+            });
+            let mut persisted = storage
+                .load_media_job(&job_id)
+                .map_err(storage_video_error)?
+                .parts
+                .into_iter()
+                .find(|part| part.part_index == part_index)
+                .ok_or_else(|| crate::video::VideoError::ProcessingError {
+                    message: format!("Missing durable part checkpoint {part_index}"),
+                })?;
+
+            let recovered = recover_existing_part(
+                &executor,
+                &composer,
+                &storage,
+                &job_id,
+                &result_id,
+                &part_config,
+                &mut persisted,
+            )
+            .await?;
+
+            let (validated_path, validation, clip_count) = if let Some((path, report)) = recovered {
+                (path, report, clip_keys.len())
+            } else {
+                render_and_validate_part(
+                    &executor,
+                    &composer,
+                    &storage,
+                    &job_id,
+                    result_id.clone(),
+                    part_config.clone(),
+                    is_pro,
+                    persisted,
+                    planned_duration,
+                )
+                .await?
+            };
+
+            drafts.push(DurablePartOutput {
+                result_id,
+                config: part_config,
+                validated_path,
+                validation,
+                clip_count,
+                clip_keys,
+                output_kind,
+                part_index,
+                part_count,
+            });
+        }
+
+        storage
+            .update_media_job_status(
+                &job_id,
+                crate::storage::MediaJobStatus::Validating,
+                "publishing",
+                99.0,
+                None,
+                None,
+            )
+            .map_err(storage_video_error)?;
+        let final_dir = composer.final_dir();
+        tokio::fs::create_dir_all(&final_dir)
+            .await
+            .map_err(|error| crate::video::VideoError::ProcessingError {
+                message: format!("Could not create final output directory: {error}"),
+            })?;
+        let mut results = Vec::with_capacity(drafts.len());
+        let mut completed_outputs = Vec::with_capacity(drafts.len());
+        let mut all_clip_keys = Vec::new();
+        for draft in drafts {
+            let final_path = final_dir.join(format!("{}.mp4", draft.result_id));
+            move_media_file(&draft.validated_path, &final_path).await?;
+            let fingerprint =
+                crate::video::output_validation::file_fingerprint_async(final_path.clone())
+                    .await
+                    .map_err(|error| crate::video::VideoError::ProcessingError {
+                        message: error.to_string(),
+                    })?;
+            let mut checkpoint = storage
+                .load_media_job(&job_id)
+                .map_err(storage_video_error)?
+                .parts
+                .into_iter()
+                .find(|part| part.part_index == draft.part_index)
+                .ok_or_else(|| crate::video::VideoError::ProcessingError {
+                    message: "Missing publication checkpoint".to_string(),
+                })?;
+            checkpoint.output_path = Some(final_path.to_string_lossy().to_string());
+            checkpoint.file_fingerprint = Some(fingerprint);
+            storage
+                .update_media_job_part(&job_id, &checkpoint)
+                .map_err(storage_video_error)?;
+            let thumbnail_path =
+                crate::video::thumbnail::auto_generate_thumbnail(&final_path, &final_dir)
+                    .await
+                    .ok()
+                    .map(|path| path.to_string_lossy().to_string());
+            let file_size_bytes = tokio::fs::metadata(&final_path)
+                .await
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            let output_kind = serde_json::to_value(draft.output_kind)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_default();
+            results.push(crate::storage::AutoEditResultMetadata {
+                result_id: draft.result_id.clone(),
+                job_id: job_id.clone(),
+                output_path: final_path.to_string_lossy().to_string(),
+                thumbnail_path,
+                created_at: chrono::Utc::now(),
+                duration: draft.validation.duration,
+                clip_count: draft.clip_count,
+                game_ids: draft.config.game_ids.clone(),
+                target_duration: draft.config.target_duration,
+                canvas_template_name: draft
+                    .config
+                    .canvas_template
+                    .as_ref()
+                    .map(|template| template.name.clone()),
+                has_background_music: draft.config.background_music.is_some(),
+                youtube_status: Some(crate::storage::YouTubeUploadStatus {
+                    video_id: None,
+                    status: crate::storage::UploadStatus::NotUploaded,
+                    upload_started_at: None,
+                    upload_completed_at: None,
+                    progress: 0.0,
+                    error: None,
+                }),
+                file_size_bytes,
+                publish_title: draft.config.publish_metadata.title.clone(),
+                publish_description: draft.config.publish_metadata.description.clone(),
+                publish_tags: draft.config.publish_metadata.tags.clone(),
+                publish_privacy_status: draft.config.publish_metadata.privacy_status.clone(),
+                output_intent: enum_string(draft.config.output_intent),
+                framing_mode: enum_string(draft.config.framing_mode),
+                platform_preset: enum_string(draft.config.platform_preset),
+                series_id: job_id.clone(),
+                part_index: draft.part_index,
+                part_count: draft.part_count,
+                output_kind,
+                validation: Some(draft.validation.clone()),
+                platform_exports: Vec::new(),
+            });
+            completed_outputs.push(AutoEditOutput {
+                result_id: draft.result_id,
+                output_path: final_path.to_string_lossy().to_string(),
+                duration: draft.validation.duration,
+                clips_used: draft.clip_count,
+                file_size_bytes,
+                output_kind: draft.output_kind,
+                part_index: (draft.part_count > 1).then_some(draft.part_index),
+                part_count: (draft.part_count > 1).then_some(draft.part_count),
+            });
+            all_clip_keys.extend(draft.clip_keys);
+        }
+        all_clip_keys.sort();
+        all_clip_keys.dedup();
+        executor.before(crate::video::media_job_executor::MediaFailurePoint::Publish)?;
+        let server_synced = is_pro
+            || (executor
+                .before(crate::video::media_job_executor::MediaFailurePoint::QuotaSync)
+                .is_ok()
+                && server_quota_consume(&auth, &job_id).await);
+        storage
+            .publish_auto_edit_series(
+                &job_id,
+                &user_id,
+                is_pro,
+                server_synced,
+                &results,
+                &all_clip_keys,
+            )
+            .map_err(storage_video_error)?;
+        composer
+            .update_progress_completed_outputs(
+                &job_id,
+                completed_outputs,
+                started.elapsed().as_secs_f64(),
+            )
+            .await;
+        Ok::<(), crate::video::VideoError>(())
+    })
+    .await;
+
+    match run {
+        Ok(()) => true,
+        Err(error) => {
+            let (status, code, stage) = match executor.classify(&error) {
+                crate::video::media_job_executor::MediaFailureClass::Paused => (
+                    crate::storage::MediaJobStatus::Paused,
+                    "cancelled",
+                    "paused",
+                ),
+                crate::video::media_job_executor::MediaFailureClass::Recoverable => (
+                    crate::storage::MediaJobStatus::Recoverable,
+                    "recoverable_media_error",
+                    "recoverable",
+                ),
+                crate::video::media_job_executor::MediaFailureClass::Failed => (
+                    crate::storage::MediaJobStatus::Failed,
+                    "render_failed",
+                    "failed",
+                ),
+            };
+            if let Err(storage_error) = storage.update_media_job_status(
+                &job_id,
+                status,
+                stage,
+                0.0,
+                Some(code),
+                Some(&error.to_string()),
+            ) {
+                tracing::warn!("Could not persist failed media job: {}", storage_error);
+            }
+            if matches!(error, crate::video::VideoError::Cancelled) {
+                let _ = composer.cancel_job(&job_id).await;
+            } else {
+                composer
+                    .update_progress_failed(
+                        &job_id,
+                        error.to_string(),
+                        started.elapsed().as_secs_f64(),
+                    )
+                    .await;
+            }
+            false
+        }
     }
+}
 
-    tracing::info!(
-        "Auto-edit completed successfully and metadata saved: {:?}",
-        result.output_path
+#[allow(clippy::too_many_arguments)]
+async fn render_and_validate_part(
+    executor: &crate::video::media_job_executor::MediaJobExecutor,
+    composer: &crate::video::AutoComposer,
+    storage: &crate::storage::Storage,
+    job_id: &str,
+    result_id: String,
+    config: AutoEditConfig,
+    is_pro: bool,
+    mut checkpoint: crate::storage::MediaJobPart,
+    planned_duration: Option<f64>,
+) -> crate::video::Result<(PathBuf, crate::video::OutputValidationReport, usize)> {
+    executor.before(crate::video::media_job_executor::MediaFailurePoint::Process)?;
+    storage
+        .update_media_job_status(
+            job_id,
+            crate::storage::MediaJobStatus::Running,
+            &format!("rendering_part_{}", checkpoint.part_index),
+            ((checkpoint.part_index.saturating_sub(1)) as f64
+                / checkpoint.part_count.max(1) as f64)
+                * 90.0,
+            None,
+            None,
+        )
+        .map_err(storage_video_error)?;
+    checkpoint.status = crate::storage::MediaJobStatus::Running;
+    checkpoint.attempt_count = checkpoint.attempt_count.saturating_add(1);
+    checkpoint.progress_percentage = 1.0;
+    storage
+        .update_media_job_part(job_id, &checkpoint)
+        .map_err(storage_video_error)?;
+    let result = composer.compose(config.clone(), result_id, is_pro).await?;
+    let mut partial = PathBuf::from(&result.output_path);
+    checkpoint.partial_path = Some(result.output_path.clone());
+    checkpoint.status = crate::storage::MediaJobStatus::Validating;
+    checkpoint.progress_percentage = 95.0;
+    storage
+        .update_media_job_part(job_id, &checkpoint)
+        .map_err(storage_video_error)?;
+    storage
+        .update_media_job_status(
+            job_id,
+            crate::storage::MediaJobStatus::Validating,
+            &format!("validating_part_{}", checkpoint.part_index),
+            90.0,
+            None,
+            None,
+        )
+        .map_err(storage_video_error)?;
+    executor.before(crate::video::media_job_executor::MediaFailurePoint::Validate)?;
+    let mut report =
+        crate::video::OutputValidator::validate(&partial, config.platform_preset, planned_duration)
+            .await;
+    if !report.is_delivery_ready() {
+        // Composer inputs are allowed to be silent or use a non-delivery codec.
+        // Normalize once through the shared contract path before declaring the
+        // part invalid. Corrupt/truncated media still fails this transcode.
+        let normalized = partial.with_file_name(format!(
+            "{}.normalized.partial.mp4",
+            partial
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("output")
+        ));
+        crate::video::OutputValidator::transcode_to_contract(&partial, &normalized)
+            .await
+            .map_err(|message| crate::video::VideoError::ProcessingError { message })?;
+        let normalized_report = crate::video::OutputValidator::validate(
+            &normalized,
+            config.platform_preset,
+            planned_duration,
+        )
+        .await;
+        if normalized_report.is_delivery_ready() {
+            tokio::fs::remove_file(&partial).await.map_err(|error| {
+                crate::video::VideoError::ProcessingError {
+                    message: error.to_string(),
+                }
+            })?;
+            partial = normalized;
+            checkpoint.partial_path = Some(partial.to_string_lossy().to_string());
+        }
+        report = normalized_report;
+    }
+    checkpoint.validation = Some(report.clone());
+    if !report.is_delivery_ready() {
+        checkpoint.status = crate::storage::MediaJobStatus::Failed;
+        storage
+            .update_media_job_part(job_id, &checkpoint)
+            .map_err(storage_video_error)?;
+        return Err(crate::video::VideoError::ProcessingError {
+            message: format!(
+                "Output validation failed: {}",
+                report
+                    .issues
+                    .iter()
+                    .map(|issue| issue.code.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        });
+    }
+    let validated = crate::video::output_validation::validated_path_for(&partial);
+    move_media_file(&partial, &validated).await?;
+    checkpoint.status = crate::storage::MediaJobStatus::Complete;
+    checkpoint.progress_percentage = 100.0;
+    checkpoint.output_path = Some(validated.to_string_lossy().to_string());
+    checkpoint.file_fingerprint = Some(
+        crate::video::output_validation::file_fingerprint_async(validated.clone())
+            .await
+            .map_err(|error| crate::video::VideoError::ProcessingError {
+                message: error.to_string(),
+            })?,
     );
-    Ok(result)
+    executor.before(crate::video::media_job_executor::MediaFailurePoint::PartCheckpoint)?;
+    storage
+        .update_media_job_part(job_id, &checkpoint)
+        .map_err(storage_video_error)?;
+    Ok((validated, report, result.clip_count))
+}
+
+async fn recover_existing_part(
+    executor: &crate::video::media_job_executor::MediaJobExecutor,
+    composer: &crate::video::AutoComposer,
+    storage: &crate::storage::Storage,
+    job_id: &str,
+    result_id: &str,
+    config: &AutoEditConfig,
+    checkpoint: &mut crate::storage::MediaJobPart,
+) -> crate::video::Result<Option<(PathBuf, crate::video::OutputValidationReport)>> {
+    use crate::video::media_job_executor::MediaFailurePoint;
+
+    let persisted_path = checkpoint.output_path.as_deref().map(std::path::Path::new);
+    let candidates = executor.file_system.validated_candidates(
+        &composer.job_stage_dir(job_id),
+        &composer.final_dir(),
+        result_id,
+        persisted_path,
+    );
+    for candidate in candidates {
+        if !candidate.is_file() {
+            continue;
+        }
+        let fingerprint = match executor.file_system.fingerprint(&candidate).await {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if checkpoint.output_path.as_deref() == candidate.to_str()
+            && checkpoint
+                .file_fingerprint
+                .as_ref()
+                .is_some_and(|expected| expected != &fingerprint)
+        {
+            continue;
+        }
+        executor.before(MediaFailurePoint::Validate)?;
+        let planned_duration = config.storyboard.as_ref().map(|storyboard| {
+            storyboard
+                .iter()
+                .map(|clip| clip.trim_end_secs - clip.trim_start_secs)
+                .sum::<f64>()
+        });
+        let report = crate::video::OutputValidator::validate(
+            &candidate,
+            config.platform_preset,
+            planned_duration,
+        )
+        .await;
+        if !report.is_delivery_ready() {
+            continue;
+        }
+        checkpoint.status = crate::storage::MediaJobStatus::Complete;
+        checkpoint.progress_percentage = 100.0;
+        checkpoint.output_path = Some(candidate.to_string_lossy().to_string());
+        checkpoint.file_fingerprint = Some(fingerprint);
+        checkpoint.validation = Some(report.clone());
+        executor.before(MediaFailurePoint::PartCheckpoint)?;
+        storage
+            .update_media_job_part(job_id, checkpoint)
+            .map_err(storage_video_error)?;
+        return Ok(Some((candidate, report)));
+    }
+    Ok(None)
+}
+
+async fn move_media_file(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> crate::video::Result<()> {
+    if source == destination {
+        return Ok(());
+    }
+    if let Some(parent) = destination.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            crate::video::VideoError::ProcessingError {
+                message: error.to_string(),
+            }
+        })?;
+    }
+    if destination.exists() {
+        tokio::fs::remove_file(destination).await.map_err(|error| {
+            crate::video::VideoError::ProcessingError {
+                message: error.to_string(),
+            }
+        })?;
+    }
+    if tokio::fs::rename(source, destination).await.is_err() {
+        tokio::fs::copy(source, destination)
+            .await
+            .map_err(|error| crate::video::VideoError::ProcessingError {
+                message: error.to_string(),
+            })?;
+        tokio::fs::remove_file(source).await.map_err(|error| {
+            crate::video::VideoError::ProcessingError {
+                message: error.to_string(),
+            }
+        })?;
+    }
+    Ok(())
+}
+
+fn storage_video_error(error: crate::storage::StorageError) -> crate::video::VideoError {
+    crate::video::VideoError::ProcessingError {
+        message: error.to_string(),
+    }
+}
+
+fn enum_string<T: serde::Serialize>(value: T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+async fn build_render_configs(
+    composer: &crate::video::AutoComposer,
+    mut config: AutoEditConfig,
+) -> crate::video::Result<Vec<AutoEditConfig>> {
+    if config.output_intent != AutoEditOutputIntent::ShortsSeries {
+        return Ok(vec![config]);
+    }
+    if config.storyboard.is_none() {
+        let plan = composer.plan(&config).await?;
+        config.storyboard = Some(plan.clips.into_iter().map(|clip| clip.storyboard).collect());
+        config.selected_clip_paths = None;
+    }
+    let parts = partition_storyboard(config.storyboard.take().unwrap_or_default(), 180.0)?;
+    if parts.is_empty() {
+        return Err(crate::video::VideoError::NoClipsFound);
+    }
+    Ok(parts
+        .into_iter()
+        .map(|part| {
+            let mut part_config = config.clone();
+            part_config.game_ids = part
+                .iter()
+                .map(|clip| clip.game_id.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            part_config.storyboard = Some(part);
+            part_config
+        })
+        .collect())
+}
+
+fn partition_storyboard(
+    mut storyboard: Vec<StoryboardClip>,
+    max_duration: f64,
+) -> crate::video::Result<Vec<Vec<StoryboardClip>>> {
+    storyboard.sort_by_key(|clip| clip.order);
+    let mut parts: Vec<Vec<StoryboardClip>> = Vec::new();
+    let mut current: Vec<StoryboardClip> = Vec::new();
+    let mut current_duration = 0.0;
+
+    for clip in storyboard {
+        let mut start = clip.trim_start_secs;
+        let end = clip.trim_end_secs;
+        if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
+            return Err(crate::video::VideoError::ProcessingError {
+                message: format!("invalid storyboard range for {}", clip.file_path),
+            });
+        }
+        while start < end - 0.001 {
+            let remaining = end - start;
+            if remaining > max_duration {
+                if !current.is_empty() {
+                    renumber_storyboard(&mut current);
+                    parts.push(std::mem::take(&mut current));
+                    current_duration = 0.0;
+                }
+                let mut segment = clip.clone();
+                segment.trim_start_secs = start;
+                segment.trim_end_secs = start + max_duration;
+                segment.order = 0;
+                parts.push(vec![segment]);
+                start += max_duration;
+                continue;
+            }
+            if !current.is_empty() && current_duration + remaining > max_duration + 0.001 {
+                renumber_storyboard(&mut current);
+                parts.push(std::mem::take(&mut current));
+                current_duration = 0.0;
+            }
+            let mut segment = clip.clone();
+            segment.trim_start_secs = start;
+            segment.trim_end_secs = end;
+            current_duration += remaining;
+            current.push(segment);
+            start = end;
+        }
+    }
+    if !current.is_empty() {
+        renumber_storyboard(&mut current);
+        parts.push(current);
+    }
+    Ok(parts)
+}
+
+fn renumber_storyboard(storyboard: &mut [StoryboardClip]) {
+    for (index, clip) in storyboard.iter_mut().enumerate() {
+        clip.order = index as u32;
+    }
+}
+
+#[tauri::command]
+pub async fn plan_auto_edit(
+    state: State<'_, AppState>,
+    config: AutoEditConfig,
+) -> AppResult<AutoEditPlan> {
+    require_command_access(&state.auth, "plan_auto_edit")
+        .map_err(|error| AppError::Auth(error.to_string()))?;
+    state
+        .auto_composer
+        .plan(&config)
+        .await
+        .map_err(|error| AppError::Video(error.to_string()))
 }
 
 /// Verdict from the authoritative server-side auto-edit quota.
@@ -628,7 +1305,11 @@ fn resolve_quota_gate(
 /// session's access token. Returns `None` (treated as server-unavailable) when
 /// there is no authenticated session/token, no Supabase client, or the call
 /// fails for any reason (offline, timeout, non-2xx).
-async fn call_quota_action(auth: &AuthManager, action: &str) -> Option<serde_json::Value> {
+async fn call_quota_action(
+    auth: &AuthManager,
+    action: &str,
+    job_id: Option<&str>,
+) -> Option<serde_json::Value> {
     let user = auth.get_current_user().ok().flatten()?;
     if user.access_token.is_empty() {
         return None;
@@ -638,7 +1319,7 @@ async fn call_quota_action(auth: &AuthManager, action: &str) -> Option<serde_jso
         .call_edge_function(
             "quota",
             &user.access_token,
-            &serde_json::json!({ "action": action }),
+            &serde_json::json!({ "action": action, "job_id": job_id }),
         )
         .await
     {
@@ -652,7 +1333,7 @@ async fn call_quota_action(auth: &AuthManager, action: &str) -> Option<serde_jso
 
 /// Consult the authoritative server quota before composing.
 async fn server_quota_check(auth: &AuthManager) -> ServerQuotaVerdict {
-    match call_quota_action(auth, "check").await {
+    match call_quota_action(auth, "check", None).await {
         Some(value) => parse_quota_verdict(&value),
         None => ServerQuotaVerdict::Unavailable,
     }
@@ -660,11 +1341,12 @@ async fn server_quota_check(auth: &AuthManager) -> ServerQuotaVerdict {
 
 /// Record one authoritative consume after a successful compose. Best effort:
 /// any failure is logged and swallowed because the export already succeeded.
-async fn server_quota_consume(auth: &AuthManager) {
-    match call_quota_action(auth, "consume").await {
+async fn server_quota_consume(auth: &AuthManager, job_id: &str) -> bool {
+    match call_quota_action(auth, "consume", Some(job_id)).await {
         Some(value) => match parse_quota_verdict(&value) {
             ServerQuotaVerdict::Allowed => {
                 tracing::info!("Server auto-edit quota consume recorded");
+                true
             }
             ServerQuotaVerdict::Denied { used, limit } => {
                 tracing::warn!(
@@ -672,13 +1354,38 @@ async fn server_quota_consume(auth: &AuthManager) {
                     used,
                     limit
                 );
+                false
             }
-            ServerQuotaVerdict::Unavailable => {}
+            ServerQuotaVerdict::Unavailable => false,
         },
         None => {
             tracing::warn!(
                 "Server auto-edit quota consume unavailable; relying on the local counter cache"
             );
+            false
+        }
+    }
+}
+
+async fn reconcile_pending_quota(
+    auth: &AuthManager,
+    storage: &crate::storage::Storage,
+    user_id: &str,
+) {
+    let pending = match storage.pending_quota_job_ids(user_id) {
+        Ok(pending) => pending,
+        Err(error) => {
+            tracing::warn!("Could not load pending quota sync records: {}", error);
+            return;
+        }
+    };
+    for job_id in pending {
+        if !server_quota_consume(auth, &job_id).await {
+            break;
+        }
+        if let Err(error) = storage.mark_quota_job_synced(user_id, &job_id) {
+            tracing::warn!("Could not mark quota job {} synced: {}", job_id, error);
+            break;
         }
     }
 }
@@ -687,12 +1394,553 @@ async fn server_quota_consume(auth: &AuthManager) {
 #[tauri::command]
 pub async fn get_auto_edit_progress(
     state: State<'_, AppState>,
+    job_id: String,
 ) -> AppResult<Option<AutoEditProgress>> {
     require_command_access(&state.auth, "get_auto_edit_progress")
         .map_err(|e| AppError::Auth(e.to_string()))?;
 
-    let progress = state.auto_composer.get_progress().await;
+    if let Some(progress) = state.auto_composer.get_progress(&job_id).await {
+        return Ok(Some(progress));
+    }
+    let snapshot = match state.storage.load_media_job(&job_id) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return Ok(None),
+    };
+    let status = match snapshot.status {
+        MediaJobStatus::Queued => AutoEditStatus::Queued,
+        MediaJobStatus::Complete => AutoEditStatus::Completed,
+        MediaJobStatus::Paused | MediaJobStatus::Discarded => AutoEditStatus::Cancelled,
+        MediaJobStatus::Failed => AutoEditStatus::Failed,
+        _ => AutoEditStatus::Processing,
+    };
+    let outputs = state
+        .storage
+        .load_auto_edit_results()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|result| result.job_id == job_id)
+        .map(|result| AutoEditOutput {
+            result_id: result.result_id,
+            output_path: result.output_path,
+            duration: result.duration,
+            clips_used: result.clip_count,
+            file_size_bytes: result.file_size_bytes,
+            output_kind: match result.output_kind.as_str() {
+                "short_series_part" => AutoEditOutputKind::ShortSeriesPart,
+                "vertical_video" => AutoEditOutputKind::VerticalVideo,
+                _ => AutoEditOutputKind::Short,
+            },
+            part_index: (result.part_count > 1).then_some(result.part_index),
+            part_count: (result.part_count > 1).then_some(result.part_count),
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(AutoEditProgress {
+        job_id,
+        status,
+        progress: snapshot.progress_percentage,
+        current_step: snapshot.current_stage,
+        elapsed_seconds: 0.0,
+        estimated_seconds: 0.0,
+        output_path: outputs.first().map(|output| output.output_path.clone()),
+        error: snapshot.error_message,
+        outputs,
+    }))
+}
+
+#[tauri::command]
+pub async fn cancel_auto_edit(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> AppResult<AutoEditProgress> {
+    require_command_access(&state.auth, "cancel_auto_edit")
+        .map_err(|error| AppError::Auth(error.to_string()))?;
+    let progress = state
+        .auto_composer
+        .cancel_job(&job_id)
+        .await
+        .map_err(|error| AppError::Video(error.to_string()))?;
+    if let Ok(snapshot) = state.storage.load_media_job(&job_id) {
+        if matches!(
+            snapshot.status,
+            MediaJobStatus::Queued | MediaJobStatus::Running | MediaJobStatus::Validating
+        ) {
+            let _ = state.storage.update_media_job_status(
+                &job_id,
+                MediaJobStatus::Paused,
+                "paused",
+                snapshot.progress_percentage,
+                None,
+                None,
+            );
+        }
+    }
     Ok(progress)
+}
+
+#[tauri::command]
+pub async fn get_media_job(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> AppResult<MediaJobSnapshot> {
+    let user = require_command_access(&state.auth, "get_media_job")
+        .map_err(|error| AppError::Auth(error.to_string()))?
+        .ok_or_else(|| AppError::Auth("Authentication required".to_string()))?;
+    let snapshot = state
+        .storage
+        .load_media_job(&job_id)
+        .map_err(|error| AppError::Database(error.to_string()))?;
+    if snapshot.user_id != user.id {
+        return Err(AppError::Auth(
+            "Media job does not belong to the current user".to_string(),
+        ));
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub async fn list_recoverable_media_jobs(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<MediaJobSnapshot>> {
+    let user = require_command_access(&state.auth, "list_recoverable_media_jobs")
+        .map_err(|error| AppError::Auth(error.to_string()))?
+        .ok_or_else(|| AppError::Auth("Authentication required".to_string()))?;
+    state
+        .storage
+        .list_recoverable_media_jobs(&user.id)
+        .map_err(|error| AppError::Database(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn pause_media_job(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> AppResult<MediaJobSnapshot> {
+    let _ = get_media_job(state.clone(), job_id.clone()).await?;
+    let _ = state.auto_composer.cancel_job(&job_id).await;
+    let snapshot = state
+        .storage
+        .load_media_job(&job_id)
+        .map_err(|error| AppError::Database(error.to_string()))?;
+    if matches!(
+        snapshot.status,
+        MediaJobStatus::Queued | MediaJobStatus::Running | MediaJobStatus::Validating
+    ) {
+        state
+            .storage
+            .update_media_job_status(
+                &job_id,
+                MediaJobStatus::Paused,
+                "paused",
+                snapshot.progress_percentage,
+                None,
+                None,
+            )
+            .map_err(|error| AppError::Database(error.to_string()))?;
+    }
+    state
+        .storage
+        .load_media_job(&job_id)
+        .map_err(|error| AppError::Database(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn resume_media_job(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> AppResult<AutoEditJobReceipt> {
+    let user = require_command_access(&state.auth, "resume_media_job")
+        .map_err(|error| AppError::Auth(error.to_string()))?
+        .ok_or_else(|| AppError::Auth("Authentication required".to_string()))?;
+    let snapshot = state
+        .storage
+        .load_media_job(&job_id)
+        .map_err(|error| AppError::Database(error.to_string()))?;
+    if snapshot.user_id != user.id
+        || snapshot.kind != MediaJobKind::AutoEdit
+        || !snapshot.recoverable
+    {
+        return Err(AppError::Validation(
+            "Media job cannot be resumed".to_string(),
+        ));
+    }
+    let config: AutoEditConfig = serde_json::from_str(&snapshot.config_json)
+        .map_err(|error| AppError::Validation(format!("Saved job snapshot is invalid: {error}")))?;
+    let tier = state
+        .auth
+        .get_tier()
+        .map_err(|error| AppError::Auth(error.to_string()))?;
+    let is_pro = matches!(tier, SubscriptionTier::Pro);
+    let cancellation = state
+        .auto_composer
+        .begin_job(&job_id)
+        .await
+        .map_err(|error| AppError::Validation(error.to_string()))?;
+    state
+        .storage
+        .update_media_job_status(
+            &job_id,
+            MediaJobStatus::Queued,
+            "queued",
+            snapshot.progress_percentage,
+            None,
+            None,
+        )
+        .map_err(|error| AppError::Database(error.to_string()))?;
+    let composer = state.auto_composer.clone();
+    let storage = state.storage.clone();
+    let auth = state.auth.clone();
+    let executor = state.media_job_executor.clone();
+    let spawned_job_id = job_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let completed = run_durable_auto_edit_job(
+            composer.clone(),
+            storage,
+            auth,
+            spawned_job_id.clone(),
+            user.id,
+            is_pro,
+            config,
+            cancellation,
+            executor,
+        )
+        .await;
+        if completed {
+            composer.cleanup_job_artifacts(&spawned_job_id).await;
+        }
+        composer.finish_job(&spawned_job_id).await;
+    });
+    Ok(AutoEditJobReceipt {
+        job_id,
+        status: AutoEditStatus::Queued,
+    })
+}
+
+#[tauri::command]
+pub async fn discard_media_job(state: State<'_, AppState>, job_id: String) -> AppResult<()> {
+    let snapshot = get_media_job(state.clone(), job_id.clone()).await?;
+    if !snapshot.recoverable && snapshot.status != MediaJobStatus::Failed {
+        return Err(AppError::Validation(
+            "Only paused, recoverable, or failed media jobs can be discarded".to_string(),
+        ));
+    }
+    let _ = state.auto_composer.cancel_job(&job_id).await;
+    let roots = [
+        state.auto_composer.job_stage_dir(&job_id),
+        state.auto_composer.final_dir(),
+    ];
+    for part in &snapshot.parts {
+        for value in [part.partial_path.as_ref(), part.output_path.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            let path = std::path::Path::new(value);
+            if safe_unpublished_job_path(path, &roots, &job_id) && path.is_file() {
+                tokio::fs::remove_file(path).await.map_err(|error| {
+                    AppError::Video(format!("Could not discard media artifact: {error}"))
+                })?;
+            }
+        }
+    }
+    let stage = state.auto_composer.job_stage_dir(&job_id);
+    if stage.is_dir() {
+        tokio::fs::remove_dir_all(&stage).await.map_err(|error| {
+            AppError::Video(format!("Could not discard job directory: {error}"))
+        })?;
+    }
+    let storage = state.storage.clone();
+    tokio::task::spawn_blocking(move || {
+        storage.update_media_job_status(
+            &job_id,
+            MediaJobStatus::Discarded,
+            "discarded",
+            snapshot.progress_percentage,
+            None,
+            None,
+        )
+    })
+    .await
+    .map_err(|error| AppError::Internal(format!("Discard checkpoint task failed: {error}")))?
+    .map_err(|error| AppError::Database(error.to_string()))?;
+    Ok(())
+}
+
+fn safe_unpublished_job_path(path: &std::path::Path, roots: &[PathBuf; 2], job_id: &str) -> bool {
+    let file_matches = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.starts_with(job_id))
+        .unwrap_or(false);
+    if !file_matches {
+        return false;
+    }
+    let Ok(path) = path.canonicalize() else {
+        return false;
+    };
+    roots
+        .iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .any(|root| path.starts_with(root))
+}
+
+#[tauri::command]
+pub async fn export_auto_edit_for_platform(
+    state: State<'_, AppState>,
+    result_id: String,
+    platform_preset: String,
+) -> AppResult<String> {
+    let receipt = begin_platform_export(
+        &state,
+        result_id,
+        platform_preset,
+        "export_auto_edit_for_platform",
+    )
+    .await?;
+    Ok(receipt.job_id)
+}
+
+#[tauri::command]
+pub async fn start_platform_export(
+    state: State<'_, AppState>,
+    result_id: String,
+    platform_preset: String,
+) -> AppResult<AutoEditJobReceipt> {
+    begin_platform_export(&state, result_id, platform_preset, "start_platform_export").await
+}
+
+async fn begin_platform_export(
+    state: &AppState,
+    result_id: String,
+    platform_preset: String,
+    command_name: &str,
+) -> AppResult<AutoEditJobReceipt> {
+    let user = require_command_access(&state.auth, command_name)
+        .map_err(|error| AppError::Auth(error.to_string()))?
+        .ok_or_else(|| AppError::Auth("Authentication required".to_string()))?;
+    let preset = match platform_preset.as_str() {
+        "tiktok" => crate::video::auto_composer::PlatformPreset::Tiktok,
+        "instagram_reels" => crate::video::auto_composer::PlatformPreset::InstagramReels,
+        "youtube_shorts" => crate::video::auto_composer::PlatformPreset::YoutubeShorts,
+        _ => {
+            return Err(AppError::Validation(format!(
+                "Unsupported platform preset: {platform_preset}"
+            )))
+        }
+    };
+    let result = state
+        .storage
+        .load_auto_edit_result(&result_id)
+        .map_err(|error| AppError::Database(error.to_string()))?;
+    let source = PathBuf::from(&result.output_path);
+    if !source.is_file() {
+        return Err(AppError::Validation(
+            "Auto-edit output is missing".to_string(),
+        ));
+    }
+    let job_id = format!("platform_export_{}", uuid::Uuid::new_v4());
+    let cancellation = state
+        .auto_composer
+        .begin_job(&job_id)
+        .await
+        .map_err(|error| AppError::Validation(error.to_string()))?;
+    let config = serde_json::json!({ "result_id": result_id, "platform_preset": platform_preset });
+    if let Err(error) = state.storage.create_media_job(
+        &job_id,
+        &user.id,
+        MediaJobKind::PlatformExport,
+        &config.to_string(),
+    ) {
+        state.auto_composer.finish_job(&job_id).await;
+        return Err(AppError::Database(error.to_string()));
+    }
+    state
+        .storage
+        .initialize_media_job_parts(&job_id, &[config.to_string()])
+        .map_err(|error| AppError::Database(error.to_string()))?;
+    let storage = state.storage.clone();
+    let composer = state.auto_composer.clone();
+    let executor = state.media_job_executor.clone();
+    let spawned_job_id = job_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let run =
+            crate::video::with_auto_edit_context(spawned_job_id.clone(), cancellation, async {
+                storage
+                    .update_media_job_status(
+                        &spawned_job_id,
+                        MediaJobStatus::Running,
+                        "validating_source",
+                        5.0,
+                        None,
+                        None,
+                    )
+                    .map_err(storage_video_error)?;
+                let source_report =
+                    crate::video::OutputValidator::validate(&source, preset, Some(result.duration))
+                        .await;
+                let (output_path, passthrough, owns_file, report) = if source_report
+                    .is_delivery_ready()
+                {
+                    (source.clone(), true, false, source_report)
+                } else {
+                    executor
+                        .before(crate::video::media_job_executor::MediaFailurePoint::Process)?;
+                    let export_dir = composer.final_dir().join("platform_exports");
+                    tokio::fs::create_dir_all(&export_dir)
+                        .await
+                        .map_err(|error| crate::video::VideoError::ProcessingError {
+                            message: error.to_string(),
+                        })?;
+                    let partial = export_dir.join(format!("{}.partial.mp4", spawned_job_id));
+                    crate::video::OutputValidator::transcode_to_contract(&source, &partial)
+                        .await
+                        .map_err(|message| crate::video::VideoError::ProcessingError { message })?;
+                    storage
+                        .update_media_job_status(
+                            &spawned_job_id,
+                            MediaJobStatus::Validating,
+                            "validating_export",
+                            90.0,
+                            None,
+                            None,
+                        )
+                        .map_err(storage_video_error)?;
+                    let report =
+                        crate::video::OutputValidator::validate(&partial, preset, None).await;
+                    if !report.is_delivery_ready() {
+                        return Err(crate::video::VideoError::ProcessingError {
+                            message: format!(
+                                "Platform export validation failed: {}",
+                                report
+                                    .issues
+                                    .iter()
+                                    .map(|issue| issue.code.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        });
+                    }
+                    let destination = export_dir.join(format!(
+                        "{}_{}.mp4",
+                        result.result_id,
+                        enum_string(preset)
+                    ));
+                    move_media_file(&partial, &destination).await?;
+                    (destination, false, true, report)
+                };
+                let export = PlatformExportMetadata {
+                    export_id: format!("export_{}", uuid::Uuid::new_v4()),
+                    job_id: spawned_job_id.clone(),
+                    result_id: result.result_id.clone(),
+                    preset,
+                    output_path: output_path.to_string_lossy().to_string(),
+                    passthrough,
+                    owns_file,
+                    created_at: chrono::Utc::now(),
+                    validation: report.clone(),
+                };
+                storage
+                    .update_media_job_status(
+                        &spawned_job_id,
+                        MediaJobStatus::Validating,
+                        "committing_export",
+                        95.0,
+                        None,
+                        None,
+                    )
+                    .map_err(storage_video_error)?;
+                executor.before(crate::video::media_job_executor::MediaFailurePoint::Publish)?;
+                storage
+                    .save_platform_export(&export)
+                    .map_err(storage_video_error)?;
+                let mut part = storage
+                    .load_media_job(&spawned_job_id)
+                    .map_err(storage_video_error)?
+                    .parts
+                    .remove(0);
+                part.status = MediaJobStatus::Complete;
+                part.progress_percentage = 100.0;
+                part.output_path = Some(export.output_path);
+                part.validation = Some(report);
+                part.file_fingerprint =
+                    crate::video::output_validation::file_fingerprint_async(output_path.clone())
+                        .await
+                        .ok();
+                storage
+                    .update_media_job_part(&spawned_job_id, &part)
+                    .map_err(storage_video_error)?;
+                storage
+                    .update_media_job_status(
+                        &spawned_job_id,
+                        MediaJobStatus::Complete,
+                        "complete",
+                        100.0,
+                        None,
+                        None,
+                    )
+                    .map_err(storage_video_error)?;
+                Ok::<(), crate::video::VideoError>(())
+            })
+            .await;
+        if let Err(error) = run {
+            let status = match executor.classify(&error) {
+                crate::video::media_job_executor::MediaFailureClass::Paused => {
+                    MediaJobStatus::Paused
+                }
+                crate::video::media_job_executor::MediaFailureClass::Recoverable => {
+                    MediaJobStatus::Recoverable
+                }
+                crate::video::media_job_executor::MediaFailureClass::Failed => {
+                    MediaJobStatus::Failed
+                }
+            };
+            let _ = storage.update_media_job_status(
+                &spawned_job_id,
+                status,
+                if status == MediaJobStatus::Recoverable {
+                    "recoverable"
+                } else {
+                    "failed"
+                },
+                0.0,
+                Some("platform_export_failed"),
+                Some(&error.to_string()),
+            );
+        }
+        composer.finish_job(&spawned_job_id).await;
+    });
+    Ok(AutoEditJobReceipt {
+        job_id,
+        status: AutoEditStatus::Queued,
+    })
+}
+
+#[tauri::command]
+pub async fn revalidate_auto_edit_result(
+    state: State<'_, AppState>,
+    result_id: String,
+) -> AppResult<crate::video::OutputValidationReport> {
+    require_command_access(&state.auth, "revalidate_auto_edit_result")
+        .map_err(|error| AppError::Auth(error.to_string()))?;
+    let mut result = state
+        .storage
+        .load_auto_edit_result(&result_id)
+        .map_err(|error| AppError::Database(error.to_string()))?;
+    let preset = match result.platform_preset.as_str() {
+        "tiktok" => crate::video::auto_composer::PlatformPreset::Tiktok,
+        "instagram_reels" => crate::video::auto_composer::PlatformPreset::InstagramReels,
+        _ => crate::video::auto_composer::PlatformPreset::YoutubeShorts,
+    };
+    let report = crate::video::OutputValidator::validate(
+        std::path::Path::new(&result.output_path),
+        preset,
+        Some(result.duration),
+    )
+    .await;
+    result.validation = Some(report.clone());
+    state
+        .storage
+        .save_auto_edit_result(&result)
+        .map_err(|error| AppError::Database(error.to_string()))?;
+    Ok(report)
 }
 
 // ========================================================================
@@ -905,16 +2153,6 @@ pub async fn export_video(
         width, height, width, height
     );
 
-    // Bound concurrent offline FFmpeg processes (hardware encoders limit sessions).
-    let _pool_permit = crate::utils::ffmpeg_pool::global_ffmpeg_pool()
-        .acquire()
-        .await
-        .map_err(|e| {
-            let msg = format!("FFmpeg pool acquire failed: {}", e);
-            emit_export_error(&app, &msg);
-            msg
-        })?;
-
     let mut command = TokioCommand::new(&ffmpeg_path);
     command.args(["-y", "-i"]);
     command.arg(validated_input.as_os_str());
@@ -925,10 +2163,6 @@ pub async fn export_video(
     }
 
     command.arg(output_path.as_os_str());
-    command.stdout(std::process::Stdio::null());
-    command.stderr(std::process::Stdio::piped());
-    command.kill_on_drop(true);
-
     tracing::info!(
         "Exporting video: format={}, resolution={}x{}, output={:?}",
         format,
@@ -939,31 +2173,12 @@ pub async fn export_video(
 
     emit_export_progress(&app, 40.0);
 
-    let child = command.spawn().map_err(|e| {
-        let msg = format!("Failed to start FFmpeg: {}", e);
-        emit_export_error(&app, &msg);
-        msg
-    })?;
-    let result = child.wait_with_output().await.map_err(|e| {
-        let msg = format!("FFmpeg process error: {}", e);
-        emit_export_error(&app, &msg);
-        msg
-    })?;
-
-    if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        tracing::error!("Export failed: {}", stderr);
-        let msg = format!(
-            "Export failed: {}",
-            stderr.chars().take(500).collect::<String>()
-        );
+    if let Err(error) = crate::video::execute_ffmpeg_command(&mut command).await {
+        let msg = format!("Export failed: {error}");
+        tracing::error!("{}", msg);
         emit_export_error(&app, &msg);
         return Err(msg);
     }
-
-    // Release the pool slot before the normalization pass, which acquires its
-    // own slot via the shared execute path (avoids a self-deadlock).
-    drop(_pool_permit);
 
     emit_export_progress(&app, 85.0);
 
@@ -980,14 +2195,14 @@ pub async fn export_video(
                 .await
             {
                 Ok(_) => {
-                    if let Err(e) = std::fs::rename(&normalized, &output_path) {
+                    if let Err(e) = tokio::fs::rename(&normalized, &output_path).await {
                         tracing::warn!("Failed to swap in normalized audio: {}", e);
-                        let _ = std::fs::remove_file(&normalized);
+                        let _ = tokio::fs::remove_file(&normalized).await;
                     }
                 }
                 Err(e) => {
                     tracing::warn!("Audio normalization skipped (non-fatal): {}", e);
-                    let _ = std::fs::remove_file(&normalized);
+                    let _ = tokio::fs::remove_file(&normalized).await;
                 }
             }
         }
@@ -1262,6 +2477,52 @@ pub async fn export_as_gif(
 mod quota_gate_tests {
     use super::*;
     use std::cell::Cell;
+
+    fn storyboard_clip(path: &str, start: f64, end: f64, order: u32) -> StoryboardClip {
+        StoryboardClip {
+            game_id: "game-1".to_string(),
+            file_path: path.to_string(),
+            order,
+            trim_start_secs: start,
+            trim_end_secs: end,
+        }
+    }
+
+    #[test]
+    fn shorts_series_partition_preserves_every_selected_second_in_order() {
+        let input = vec![
+            storyboard_clip("a.mp4", 0.0, 100.0, 0),
+            storyboard_clip("b.mp4", 5.0, 105.0, 1),
+            storyboard_clip("c.mp4", 0.0, 50.0, 2),
+        ];
+        let parts = partition_storyboard(input, 180.0).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert!(parts.iter().all(|part| {
+            part.iter()
+                .map(|clip| clip.trim_end_secs - clip.trim_start_secs)
+                .sum::<f64>()
+                <= 180.001
+        }));
+        let total: f64 = parts
+            .iter()
+            .flatten()
+            .map(|clip| clip.trim_end_secs - clip.trim_start_secs)
+            .sum();
+        assert!((total - 250.0).abs() < 0.001);
+        assert_eq!(parts[0][0].file_path, "a.mp4");
+        assert_eq!(parts[1][0].file_path, "b.mp4");
+    }
+
+    #[test]
+    fn shorts_series_splits_one_long_range_without_loss_or_overlap() {
+        let parts =
+            partition_storyboard(vec![storyboard_clip("long.mp4", 10.0, 410.0, 0)], 180.0).unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0][0].trim_start_secs, 10.0);
+        assert_eq!(parts[0][0].trim_end_secs, 190.0);
+        assert_eq!(parts[1][0].trim_start_secs, 190.0);
+        assert_eq!(parts[2][0].trim_end_secs, 410.0);
+    }
 
     #[test]
     fn parse_verdict_allowed() {

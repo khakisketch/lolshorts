@@ -2,7 +2,7 @@ import {
   isPermissionGranted,
   requestPermission,
   sendNotification,
-} from '@tauri-apps/plugin-notification';
+} from "@tauri-apps/plugin-notification";
 
 let permissionChecked = false;
 let hasPermission = false;
@@ -17,7 +17,7 @@ async function ensurePermission(): Promise<boolean> {
     hasPermission = await isPermissionGranted();
     if (!hasPermission) {
       const permission = await requestPermission();
-      hasPermission = permission === 'granted';
+      hasPermission = permission === "granted";
     }
     permissionChecked = true;
   } catch {
@@ -47,27 +47,27 @@ export async function notify(title: string, body: string): Promise<void> {
 export async function notifyGameStarted(champion?: string): Promise<void> {
   const body = champion
     ? `${champion} 게임 시작 - 녹화가 활성화되었습니다`
-    : '게임 시작 - 녹화가 활성화되었습니다';
-  await notify('LoLShorts', body);
+    : "게임 시작 - 녹화가 활성화되었습니다";
+  await notify("LoLShorts", body);
 }
 
 /**
  * 게임 종료 알림
  */
 export async function notifyGameEnded(clipCount: number): Promise<void> {
-  await notify('LoLShorts', `게임 종료 - ${clipCount}개 클립 저장됨`);
+  await notify("LoLShorts", `게임 종료 - ${clipCount}개 클립 저장됨`);
 }
 
 /**
  * 클립 저장 알림
  */
 export async function notifyClipSaved(clipName: string): Promise<void> {
-  await notify('LoLShorts', `클립 저장됨: ${clipName}`);
+  await notify("LoLShorts", `클립 저장됨: ${clipName}`);
 }
 
 /**
  * 업로드 완료 알림
  */
 export async function notifyUploadComplete(videoTitle: string): Promise<void> {
-  await notify('LoLShorts', `업로드 완료: ${videoTitle}`);
+  await notify("LoLShorts", `업로드 완료: ${videoTitle}`);
 }

@@ -6,6 +6,9 @@ use std::sync::Arc;
 /// 이 값과 비교해 판정한다. 한쪽만 바뀌면 그 가드가 조용히 죽어서 챔피언이 영영
 /// 갱신되지 않는다 — 실제로 한 번 그 상태로 통과했다.
 const UNKNOWN_CHAMPION: &str = "Unknown";
+/// 판 모드를 못 얻었을 때의 자리표시자. `finish_auto_capture_session` 이
+/// `GameEnd` 요약으로 늦게 채울 수 있는지 판정하는 기준이기도 하다.
+const UNKNOWN_GAME_MODE: &str = "UNKNOWN";
 
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
@@ -79,7 +82,7 @@ pub fn build_game_metadata(
         game_mode: context
             .game_mode
             .clone()
-            .unwrap_or_else(|| "UNKNOWN".to_string()),
+            .unwrap_or_else(|| UNKNOWN_GAME_MODE.to_string()),
         start_time: started_at,
         end_time: None,
         result: None,
@@ -163,6 +166,20 @@ pub async fn finish_auto_capture_session(
                 metadata.champion.is_empty() || metadata.champion == UNKNOWN_CHAMPION;
             if champion_unset && !summary.champion.is_empty() {
                 metadata.champion = summary.champion.clone();
+            }
+
+            // 판 모드도 같은 이유로 늦게 채운다.
+            //
+            // 세션은 로딩 화면에서 시작되는 일이 흔하고 그때 Live Client API 는
+            // 아직 응답하지 않는다 — 그래서 결과 화면에 "트린다미어 - UNKNOWN"
+            // 이 나갔다. 챔피언에는 이 길이 있었는데 모드에는 없었다.
+            //
+            // `game_id` 는 고치지 않는다. 이미 그 이름으로 디스크에 클립이 쌓였고
+            // 저장 계층의 키다 — 화면에 나가는 값만 바로잡는다.
+            let mode_unset =
+                metadata.game_mode.is_empty() || metadata.game_mode == UNKNOWN_GAME_MODE;
+            if mode_unset && !summary.game_mode.is_empty() {
+                metadata.game_mode = summary.game_mode.clone();
             }
             metadata.kda = Some(crate::storage::models::KDA {
                 kills: summary.kills,
@@ -429,6 +446,7 @@ pub async fn stop_capture_pipeline(
 mod tests {
     use super::*;
     use crate::recording::integration_backend::RecordingConfig;
+    use crate::recording::live_client::PlayerSummary;
     use crate::settings::models::RecordingSettings;
 
     async fn test_recorder(
@@ -584,6 +602,93 @@ mod tests {
             .expect("saved metadata")
             .end_time
             .is_some());
+    }
+
+    /// 로딩 중에 시작된 판은 챔피언도 모드도 모른 채로 굳는다.
+    ///
+    /// 실기기에서 결과 화면에 "트린다미어 - UNKNOWN" 으로 나갔다. 챔피언에는
+    /// `GameEnd` 요약으로 늦게 채우는 길이 있었는데 모드에는 없었다.
+    #[tokio::test]
+    async fn game_mode_is_filled_in_from_the_game_end_summary() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).expect("storage"));
+        let recorder = test_recorder(temp_dir.path()).await;
+        let clip_manager = test_clip_manager(Arc::clone(&recorder), Arc::clone(&storage)).await;
+
+        // Live Client API 가 아직 응답하지 않는 시점 — 둘 다 못 얻은 채 시작한다.
+        let metadata = begin_auto_capture_session(
+            &storage,
+            &recorder,
+            &clip_manager,
+            GameSessionContext::default(),
+        )
+        .await
+        .expect("session starts");
+        assert_eq!(metadata.game_mode, UNKNOWN_GAME_MODE);
+
+        *clip_manager.summary_slot().write().await = Some(PlayerSummary {
+            champion: "Tryndamere".to_string(),
+            kills: 12,
+            deaths: 2,
+            assists: 4,
+            result: Some("Win".to_string()),
+            game_mode: "ARAM".to_string(),
+        });
+
+        let finalized = finish_auto_capture_session(&storage, &recorder, &clip_manager)
+            .await
+            .expect("session finishes")
+            .expect("finalized game");
+
+        assert_eq!(finalized.game_mode, "ARAM");
+        assert_eq!(finalized.champion, "Tryndamere");
+        // 저장된 것도 같아야 한다 — 화면은 디스크에서 읽는다.
+        assert_eq!(
+            storage
+                .load_game_metadata(&metadata.game_id)
+                .expect("saved metadata")
+                .game_mode,
+            "ARAM"
+        );
+        // `game_id` 는 그대로다. 이미 그 이름으로 클립이 쌓였고 저장 계층의 키다.
+        assert_eq!(finalized.game_id, metadata.game_id);
+    }
+
+    /// 이미 아는 모드를 요약이 덮어쓰지 않는다.
+    #[tokio::test]
+    async fn a_known_game_mode_is_not_overwritten() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).expect("storage"));
+        let recorder = test_recorder(temp_dir.path()).await;
+        let clip_manager = test_clip_manager(Arc::clone(&recorder), Arc::clone(&storage)).await;
+
+        begin_auto_capture_session(
+            &storage,
+            &recorder,
+            &clip_manager,
+            GameSessionContext {
+                champion: Some("Jinx".to_string()),
+                game_mode: Some("CLASSIC".to_string()),
+            },
+        )
+        .await
+        .expect("session starts");
+
+        *clip_manager.summary_slot().write().await = Some(PlayerSummary {
+            champion: "Jinx".to_string(),
+            kills: 1,
+            deaths: 1,
+            assists: 1,
+            result: None,
+            game_mode: "ARAM".to_string(),
+        });
+
+        let finalized = finish_auto_capture_session(&storage, &recorder, &clip_manager)
+            .await
+            .expect("session finishes")
+            .expect("finalized game");
+
+        assert_eq!(finalized.game_mode, "CLASSIC");
     }
 
     #[tokio::test]

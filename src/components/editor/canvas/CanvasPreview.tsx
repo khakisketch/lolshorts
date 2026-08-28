@@ -1,6 +1,6 @@
-import { useRef } from 'react';
-import { CanvasTemplate } from '@/types/autoEdit';
-import { useTranslation } from 'react-i18next';
+import { useRef } from "react";
+import { CanvasTemplate } from "@/types/autoEdit";
+import { useTranslation } from "react-i18next";
 
 interface CanvasPreviewProps {
   template: CanvasTemplate;
@@ -26,9 +26,9 @@ export function CanvasPreview({
           ref={canvasRef}
           className="relative bg-black rounded-lg overflow-hidden shadow-2xl cursor-crosshair"
           style={{
-            width: '360px',
-            height: '640px',
-            aspectRatio: '9/16',
+            width: "360px",
+            height: "640px",
+            aspectRatio: "9/16",
           }}
           onClick={onCanvasClick}
           data-testid="canvas-preview"
@@ -37,16 +37,18 @@ export function CanvasPreview({
           <div
             className="absolute inset-0"
             style={{
-              background: template.background.type === 'Color'
-                ? template.background.value
-                : template.background.type === 'Gradient'
-                ? `linear-gradient(${template.background.value.split(':').join(', ')})`
-                : undefined,
-              backgroundImage: template.background.type === 'Image'
-                ? `url(${template.background.path})`
-                : undefined,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
+              background:
+                template.background.type === "Color"
+                  ? template.background.value
+                  : template.background.type === "Gradient"
+                    ? `linear-gradient(${template.background.value.split(":").join(", ")})`
+                    : undefined,
+              backgroundImage:
+                template.background.type === "Image"
+                  ? `url(${template.background.path})`
+                  : undefined,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
             }}
           />
 
@@ -56,29 +58,29 @@ export function CanvasPreview({
               key={index}
               role="button"
               tabIndex={0}
-              aria-label={`Select ${element.type === 'Text' ? 'text' : 'image'} element ${index + 1}`}
+              aria-label={`Select ${element.type === "Text" ? "text" : "image"} element ${index + 1}`}
               className={`absolute cursor-pointer transition-all ${
-                selectedElementIndex === index ? 'ring-2 ring-primary' : ''
+                selectedElementIndex === index ? "ring-2 ring-primary" : ""
               }`}
               data-element-id={String(index)}
               style={{
                 left: `${element.position.x}%`,
                 top: `${element.position.y}%`,
-                transform: 'translate(-50%, -50%)',
+                transform: "translate(-50%, -50%)",
               }}
               onClick={(e) => {
                 e.stopPropagation();
                 onElementClick(index);
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
+                if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   e.stopPropagation();
                   onElementClick(index);
                 }
               }}
             >
-              {element.type === 'Text' ? (
+              {element.type === "Text" ? (
                 <div
                   style={{
                     fontFamily: element.font,
@@ -87,7 +89,7 @@ export function CanvasPreview({
                     textShadow: element.outline
                       ? `0 0 4px ${element.outline}, 0 0 8px ${element.outline}`
                       : undefined,
-                    whiteSpace: 'nowrap',
+                    whiteSpace: "nowrap",
                   }}
                 >
                   {element.content}
@@ -99,7 +101,7 @@ export function CanvasPreview({
                   style={{
                     width: `${element.width}px`,
                     height: `${element.height}px`,
-                    objectFit: 'contain',
+                    objectFit: "contain",
                   }}
                 />
               )}
@@ -110,8 +112,10 @@ export function CanvasPreview({
           {template.elements.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center text-white/50 p-4">
-                <p className="text-sm">{t('editor.canvas.emptyHint')}</p>
-                <p className="text-xs mt-1">{t('editor.canvas.positionHint')}</p>
+                <p className="text-sm">{t("editor.canvas.emptyHint")}</p>
+                <p className="text-xs mt-1">
+                  {t("editor.canvas.positionHint")}
+                </p>
               </div>
             </div>
           )}
@@ -119,7 +123,7 @@ export function CanvasPreview({
 
         {/* Dimensions label */}
         <div className="text-center mt-2 text-xs text-muted-foreground">
-          {t('editor.canvas.dimensions')}
+          {t("editor.canvas.dimensions")}
         </div>
       </div>
     </div>

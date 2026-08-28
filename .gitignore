@@ -1,5 +1,6 @@
 # Rust
 /target
+/target-*/
 *.rs.bk
 *.pdb
 
@@ -12,6 +13,7 @@ dist/
 
 # Tauri
 src-tauri/target/
+src-tauri/target-*/
 src-tauri/WixTools/
 .tauri/
 
@@ -37,10 +39,13 @@ supabase/.temp/
 coverage/
 .nyc_output/
 test-results/
+# `--output=` 로 따로 뽑는 경우(시각 검증 등)도 산출물이다.
+test-results-*/
 playwright-report/
 .playwright-mcp/
 output/
 qa-evidence/
+field-qa/
 
 # Legacy Archive
 LEGACY-ARCHIVE/

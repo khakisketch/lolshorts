@@ -5,11 +5,22 @@
   },
   "nav": {
     "results": "Results",
+    "recording": "Record",
+    "library": "Library",
+    "studio": "Studio",
+    "quit": "Quit LoLShorts",
     "settings": "Settings",
     "sidebarLabel": "Application sidebar",
     "mainNavigation": "Main navigation",
     "userProfile": "User profile",
-    "home": "Home"
+    "home": "Home",
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar"
+  },
+  "studio": {
+    "modeNavigation": "Studio mode",
+    "autoEdit": "Auto edit",
+    "manualEdit": "Manual edit"
   },
   "auth": {
     "login": "Login",
@@ -24,11 +35,6 @@
     "noAccount": "Don't have an account?",
     "haveAccount": "Already have an account?",
     "createAccount": "Create Account",
-    "loginWithGoogle": "Login with Google",
-    "loginWithDiscord": "Login with Discord",
-    "googleLogin": "Continue with Google",
-    "googleSignup": "Sign up with Google",
-    "orContinueWith": "Or continue with",
     "authenticationRequired": "Authentication Required",
     "pleaseLoginToAccess": "Please login to access {{feature}}",
     "createAccountOrLogin": "Create an account or login to unlock all features",
@@ -39,6 +45,9 @@
     "loggingIn": "Logging in...",
     "signingUp": "Creating account...",
     "passwordMinLength": "Must be at least 8 characters long",
+    "confirmEmailTitle": "Check your email",
+    "confirmEmailDescription": "We sent a confirmation link to {{email}}. Confirm it, then return here and log in.",
+    "returnToLogin": "Return to login",
     "termsAgreement": "By signing up, you agree to our Terms of Service and Privacy Policy"
   },
   "dashboard": {
@@ -395,16 +404,15 @@
       "addClipsToExport": "Add clips to timeline to export"
     },
     "clip": {
-      "priority": "Priority {{id}}",
-      "clipNumber": "Clip #{{id}}",
       "preview": "Preview",
       "add": "Add"
     },
     "clipLibrary": {
       "title": "Clip Library",
       "noClipsAvailable": "No Clips Available",
-      "noClipsDescription": "Select a game from the Games page to load clips for editing.",
-      "clipsCount": "{{count}} clips available"
+      "noClipsDescription": "Select a game from the Library to load clips for editing.",
+      "clipsCount": "{{count}} clips available",
+      "rankedDescription": "Best highlights first"
     },
     "audioMixer": {
       "title": "Audio Mixer",
@@ -552,6 +560,7 @@
       "mixingAudio": "Mixing Audio"
     },
     "watermarkNotice": "Free tier videos include a watermark.",
+    "freeEditionNotice": "Free-account renders include a watermark. Paid upgrades are not offered in this public edition.",
     "templates": {
       "title": "Templates",
       "epicPentakill": "Epic Pentakill",
@@ -604,10 +613,66 @@
     "hookCaption": {
       "label": "Burn in scene captions",
       "description": "Opens each scene with what happened — \"Pentakill · Solo · 8% HP\". Captions render in Korean."
-    }
+    },
+    "pinnedClips": {
+      "title": "Using the {{count}} clips you picked",
+      "summary": "{{clips}} clips from {{games}} games · about {{duration}}",
+      "description": "Your picks replace auto-selection and lock the game list. Every clip you picked goes in.",
+      "rationale": "The {{count}} clips you picked, ordered by highlight score across all selected games.",
+      "useAutomatic": "Switch to auto-selection",
+      "overTargetWarning": "Your picks are about {{estimated}} for a {{target}} target. Every selected scene will be included, so the finished video will be longer.",
+      "overrunTitle": "Include every selected clip?",
+      "overrunDescription": "You selected {{clips}} clips (about {{estimated}}) for a {{target}} target. The finished video will be longer because none of your picks will be removed.",
+      "includeAll": "Include all clips"
+    },
+    "selectionRationaleTitle": "What goes in",
+    "rationaleDescription": "Highest-scoring moments from the games you picked, until the target length is filled.",
+    "shortsPlanning": "Upload details",
+    "shortsPlanningDescription": "Write the title, description and tags now and they carry through to upload.",
+    "metadataTitleLabel": "Title",
+    "metadataCaptionLabel": "Description",
+    "metadataTagsLabel": "Tags",
+    "titlePlaceholder": "e.g. Tryndamere 1v3 comeback",
+    "captionPlaceholder": "A line or two on what happened",
+    "tagsPlaceholder": "Comma separated — lol, highlights, tryndamere",
+    "quick": {
+      "title": "Quick Create",
+      "description": "Choose the matches and length, then review every scene before rendering.",
+      "framing": "LoL framing",
+      "preset": "Export preset",
+      "advanced": "Advanced settings",
+      "review": "Review clips"
+    },
+    "storyboard": {
+      "title": "Review your clips",
+      "summary": "{{clips}} clips · {{duration}} · {{parts}} output(s)",
+      "reset": "Reset recommendation",
+      "over180Title": "This selection is longer than one Short",
+      "over180Body": "Every selected scene will be kept. Choose a Shorts series or one general vertical video.",
+      "output": "Output",
+      "timeline": "Storyboard timeline",
+      "moveUp": "Move clip up",
+      "moveDown": "Move clip down",
+      "remove": "Exclude clip",
+      "start": "Start (seconds)",
+      "end": "End (seconds)",
+      "clipDuration": "Selected {{duration}} of {{source}}",
+      "generateSeries": "Generate series"
+    },
+    "output": {
+      "single": "Single Short",
+      "series": "Shorts series",
+      "vertical": "General vertical video"
+    },
+    "framing": {
+      "focus": "HUD + combat focus",
+      "safe": "Full frame",
+      "crop": "Center crop"
+    },
+    "cancelJob": "Cancel generation"
   },
   "results": {
-    "title": "Results",
+    "title": "Library",
     "refresh": "Refresh",
     "loading": "Loading results...",
     "confirmDelete": "Are you sure you want to delete this result? This action cannot be undone.",
@@ -635,18 +700,60 @@
     "withMusic": "With Music",
     "play": "Play",
     "delete": "Delete",
-    "pageDescription": "Every recorded game and every video made for you, in one place.",
+    "pageDescription": "Browse game clips, finished videos and replays in one place.",
     "thumbnailAlt": "Video thumbnail",
     "polish": "Polish",
     "share": "Share",
     "tabs": {
-      "highlights": "Highlights",
+      "highlights": "Finished videos",
+      "clips": "Game records",
       "games": "Recorded games",
       "replays": "Replays"
     },
     "highlights": {
-      "title": "My highlights",
-      "description": "Videos made for you automatically. Play, polish or share them."
+      "title": "Finished highlight videos",
+      "description": "Videos made from your clips. Play, polish or share them."
+    },
+    "clips": {
+      "title": "Recommended clips",
+      "description": "Original game clips, ranked by the moments most worth watching.",
+      "sortLabel": "Sort clips",
+      "sortRecommended": "Best highlights",
+      "sortNewest": "Newest",
+      "game": "Game",
+      "select": "Select clip",
+      "play": "Play clip",
+      "loading": "Loading recorded clips...",
+      "loadingMore": "Loading more...",
+      "loadMore": "Load more games",
+      "loadError": "Could not load recorded clips.",
+      "skippedItems": "{{count}} damaged clip items were skipped.",
+      "emptyTitle": "No recorded clips yet",
+      "emptyDescription": "Play a game and your strongest moments will appear here.",
+      "unknownDate": "Date unavailable",
+      "clipCount": "{{count}} clips",
+      "selectedCount": "{{count}} selected",
+      "selectGame": "Select all",
+      "clearGameSelection": "Clear game",
+      "gameRank": "This game #{{rank}}",
+      "gameCount": "{{count}} games",
+      "expandAll": "Expand all",
+      "collapseAll": "Collapse all",
+      "searchLabel": "Search games",
+      "searchPlaceholder": "Search by champion, mode or game ID",
+      "modeFilterLabel": "Game mode filter",
+      "allModes": "All game modes",
+      "noMatches": "No games match these filters",
+      "clearFilters": "Clear filters",
+      "storageStats": "Library storage summary",
+      "totalGames": "Total games",
+      "totalClips": "Total clips",
+      "storageUsed": "Storage used",
+      "selectionActions": "Selected clip actions",
+      "selectionSummary": "{{clips}} clips · {{games}} games · about {{duration}}",
+      "clearAll": "Clear all",
+      "createMontage": "Create montage",
+      "overTargetWarning": "Every selected scene will be included, so the finished video will be longer than the target."
     },
     "badge": {
       "autoEdit": "Auto-edit"
@@ -785,6 +892,9 @@
   },
   "statusDashboard": {
     "recordingStatus": "Recording Status",
+    "captureWarning": {
+      "title": "Desktop capture fallback"
+    },
     "autoCapture": {
       "active": "Auto-capture active - monitoring game events",
       "pressF8": "Press F8 to start auto-capture"
@@ -950,12 +1060,19 @@
         "autoCleanupDescription": "Deletes the oldest clips first to free space",
         "limitLabel": "Storage limit (GB)",
         "limitDescription": "Once total usage passes this, the oldest clips are deleted",
-        "limitDisabledHint": "Turn on automatic cleanup for this limit to apply"
+        "limitDisabledHint": "Turn on automatic cleanup for this limit to apply",
+        "currentMedia": "Current app media: {{size}}",
+        "freeSpace": "Free space: {{size}}",
+        "checking": "Checking…",
+        "recordingEstimate": "Recording estimate: about {{size}} GB/hour at {{bitrate}} Mbps",
+        "lowSpaceRisk": "Low-space risk: about {{hours}} hours of capture remain at the current quality.",
+        "retentionPeriod": "Retention period",
+        "retentionDescription": "Automatic deletion remains opt-in and never deletes exported clips by default."
       },
       "autoStart": {
-        "title": "Start with League",
-        "description": "LoLShorts starts automatically when League of Legends launches",
-        "label": "Start automatically"
+        "title": "Launch on Windows startup",
+        "description": "Start LoLShorts when you sign in to Windows so recording and scheduled uploads are ready",
+        "label": "Launch with Windows"
       },
       "recommendedBadge": "Recommended",
       "seconds": "{{count}}s"
@@ -1274,7 +1391,8 @@
             "r3840x2160": "3840x2160 (4K)"
           },
           "recommended": "Recommended",
-          "captureNotice": "Recording capture always uses the game window's native resolution; this setting only sets the export/processing quality target."
+          "captureNotice": "Recording capture always uses the game window's native resolution; this value is retained for compatibility.",
+          "nativeWindowSize": "Records at the game window's native size"
         },
         "frameRate": {
           "title": "Frame Rate",
@@ -1528,7 +1646,6 @@
     "sessionExpired": "Session expired. Please login again.",
     "loginFailed": "Login failed. Please check your email and password.",
     "signupFailed": "Signup failed. Please try again.",
-    "googleLoginFailed": "Google login failed. Please try again.",
     "invalidCredentials": "Invalid email or password",
     "emailAlreadyInUse": "This email is already registered",
     "weakPassword": "Password must be at least 8 characters",
@@ -1558,7 +1675,6 @@
     "noAudioDeviceWarning": "No audio device found. Check your audio device settings.",
     "fileSelectionFailed": "Failed to select file. Please try again.",
     "selectAtLeastOneGame": "Please select at least one game",
-    "todoFeature": "TODO: {{action}}",
     "diskFull": "Disk is full. Please free up space and try again.",
     "authExpired": "Your session has expired. Please log in again.",
     "processTimeout": "The operation timed out. Please try again.",
@@ -1709,7 +1825,15 @@
     "kda": "KDA",
     "duration": "Duration",
     "download": "Download",
+    "downloaded": "Downloaded",
     "watch": "Watch",
+    "status": {
+      "checking": "Checking",
+      "notDownloaded": "Not downloaded",
+      "downloading": "Downloading",
+      "ready": "Ready",
+      "unknown": "Status unknown"
+    },
     "toast": {
       "lcuDisconnected": "LCU Disconnected",
       "lcuDisconnectedDesc": "Please start League of Legends client to view match history.",
@@ -1764,6 +1888,42 @@
     "prev": "Previous",
     "next": "Next",
     "getStarted": "Get Started",
+    "readiness": {
+      "title": "Recording readiness",
+      "description": "Check this PC before your first recording. Recording and the clip library work without an account; editing, export, and YouTube use a free account.",
+      "labels": {
+        "ffmpeg": "FFmpeg",
+        "ffprobe": "ffprobe",
+        "nvenc": "NVIDIA NVENC support target",
+        "audio": "System audio",
+        "disk": "Storage space",
+        "lcu": "League Client / LCU",
+        "releaseConfig": "Release configuration",
+        "supabase": "Free account service",
+        "youtube": "YouTube",
+        "updater": "App updates",
+        "telemetry": "Anonymous error telemetry (optional)",
+        "autostart": "Windows startup",
+        "overlayExclusion": "Overlay capture exclusion"
+      },
+      "checking": "Checking…",
+      "notChecked": "Not checked",
+      "unavailable": "Not available in this app build",
+      "storagePlan": "Storage plan",
+      "storageEstimate": "20 Mbps recording uses about {{hours}} GB per hour.",
+      "currentLibrary": "Current library:",
+      "freeSpace": "Free space:",
+      "unknown": "Unknown",
+      "lowSpace": "Less than one estimated hour is free. Choose a larger recording drive before a long session.",
+      "diagnosticsNotice": "Diagnostics: {{status}}. Open Settings for the full repair guidance.",
+      "autostartUnavailable": "Windows startup is unavailable: {{reason}}.",
+      "warningAcknowledgement": "I understand recording is not ready yet and will fix these warnings in Settings before relying on capture.",
+      "retry": "Retry checks",
+      "checkingButton": "Checking…",
+      "settings": "Settings & diagnostics",
+      "finish": "Finish setup",
+      "finishWarnings": "Finish with warnings"
+    },
     "welcome": {
       "title": "Welcome to LoLShorts!",
       "description": "Create stunning League of Legends highlight videos automatically. Let's get you started in just a few steps."
@@ -1894,8 +2054,8 @@
   },
   "generalSettings": {
     "autoStart": {
-      "label": "Auto-start with League",
-      "description": "Automatically start LoLShorts when League of Legends launches"
+      "label": "Launch with Windows",
+      "description": "Automatically start LoLShorts when you sign in to Windows"
     },
     "minimizeToTray": {
       "label": "Minimize to Tray",
@@ -1915,7 +2075,7 @@
     },
     "overlay": {
       "label": "In-Game Overlay",
-      "description": "Show recording indicator and event feed during gameplay"
+      "description": "Show recording status and clip save results during gameplay"
     },
     "storage": {
       "title": "Storage Management",
@@ -2069,16 +2229,22 @@
       "stopFailed": "Could not stop automatic recording"
     },
     "clips": {
-      "title": "Fresh clips",
-      "seeAll": "See past games",
+      "title": "This game's highlights",
+      "seeAll": "Browse all clips",
       "seconds": "{{count}}s",
       "toggleLabel": "Select {{event}} clip, {{seconds}} seconds",
-      "playLabel": "Play {{event}} clip"
+      "playLabel": "Play {{event}} clip",
+      "topMoment": "Top moment"
     },
     "empty": {
       "title": "No clips yet",
       "description": "Play a game of League of Legends and your kills, multikills and objectives will show up here. Just leave the app running.",
-      "action": "Choose what to capture"
+      "action": "Choose what to capture",
+      "noClips": {
+        "title": "Nothing was captured this game",
+        "description": "Recording ran, but no moment met the bar. Widen what gets captured in settings, or lower the threshold.",
+        "action": "Capture settings"
+      }
     },
     "actions": {
       "selectHint": "Pick clips to turn into a video",
@@ -2086,6 +2252,96 @@
       "clear": "Clear",
       "trim": "Trim",
       "makeHighlight": "Make highlight video"
+    }
+  },
+  "game": {
+    "result": {
+      "win": "Victory",
+      "loss": "Defeat",
+      "remake": "Remake",
+      "unknown": "No result"
+    }
+  },
+  "mediaJobs": {
+    "title": "Media jobs",
+    "queued": "Queued",
+    "processing": "Processing",
+    "completed": "Completed",
+    "failed": "Failed",
+    "cancelled": "Cancelled",
+    "paused": "Paused",
+    "recoverable": "Can be resumed",
+    "resume": "Resume job",
+    "discard": "Discard job",
+    "cancel": "Cancel job",
+    "retry": "Retry job",
+    "empty": "No media jobs yet"
+  },
+  "outputValidation": {
+    "title": "Output checks",
+    "duration": "Duration",
+    "clipCount": "Clip count",
+    "outputFile": "Output file",
+    "fileSize": "File data",
+    "verified": "Verified",
+    "valid": "Valid",
+    "warning": "Warning",
+    "invalid": "Invalid",
+    "unknown": "Unknown",
+    "revalidate": "Check again",
+    "needsReview": "Needs review",
+    "missing": "Missing"
+  },
+  "resultSeries": {
+    "title": "Series outputs",
+    "part": "Part {{current}} of {{total}}",
+    "parts": "{{count}} parts",
+    "totalDuration": "Total duration: {{duration}}",
+    "totalSize": "Total size: {{size}}",
+    "deleteGroup": "Delete series",
+    "deletePart": "Delete part {{part}}",
+    "sharePart": "Share part"
+  },
+  "platformExport": {
+    "title": "Export for another platform",
+    "tiktok": "Export for TikTok",
+    "instagramReels": "Export for Instagram Reels",
+    "exporting": "Exporting…",
+    "passthrough": "Use original file",
+    "convert": "Convert for platform",
+    "cancel": "Cancel export",
+    "busy": "Another export is in progress",
+    "confirmWarning": "Export a separate platform copy?",
+    "success": "Platform copy exported",
+    "failed": "Could not export platform copy"
+  },
+  "appUpdater": {
+    "title": "LoLShorts update available",
+    "description": "Version {{available}} is ready. You are using {{current}}.",
+    "releaseNotes": "What's new",
+    "later": "Later",
+    "install": "Install update",
+    "retry": "Retry",
+    "working": "Please wait…",
+    "downloading": "Downloading update",
+    "installing": "Starting installer",
+    "progressLabel": "Update download progress",
+    "windowsExitNotice": "LoLShorts will close while Windows installs the update. Save any work before continuing.",
+    "settingsTitle": "Application updates",
+    "currentVersion": "Current version: {{version}}",
+    "upToDate": "Version {{version}} is up to date.",
+    "disabled": "Updates are disabled in this unsigned development build.",
+    "check": "Check for updates",
+    "checking": "Checking…",
+    "errors": {
+      "updater_disabled": "Updates are disabled for this build.",
+      "update_busy": "Stop recording and wait for media jobs to finish before installing.",
+      "update_check_failed": "LoLShorts could not check for updates. Try again.",
+      "update_check_timeout": "The update server did not respond within 30 seconds. Try again.",
+      "update_download_timeout": "The update download exceeded 15 minutes. Your current version was kept.",
+      "update_signature_invalid": "The update signature is invalid. Your current version was kept.",
+      "update_install_failed": "The update could not be installed. Your current version was kept.",
+      "unknown": "The update could not be completed. Try again."
     }
   }
 }

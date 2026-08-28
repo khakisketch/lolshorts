@@ -1,7 +1,7 @@
 # LoLShorts Production Deployment Guide
 
-**Version:** 1.0.0
-**Last Updated:** 2025-01-06
+**Version:** 1.2.0 public-preview track
+**Last Updated:** 2026-08-20
 **Status:** Historical automation snapshot only, not Field QA production-ready. The 87.5% gate result does not prove public readiness, signed installer readiness, or real Windows field validation.
 
 ---
@@ -9,6 +9,7 @@
 ## 🎯 Pre-Deployment Checklist
 
 ### Code Quality Gates
+
 - [x] **Functional Correctness**: Automated/spec-level checks passed for this historical wave. This is not a current claim that all features work in the field.
 - [x] **Code Quality**: Clean, maintainable, well-documented code
 - [x] **Testing**: 93 E2E tests, comprehensive test coverage
@@ -21,14 +22,16 @@
 ### System Requirements
 
 #### Development Environment
-- **Operating System**: Windows 10/11 (x64)
-- **Node.js**: v18+ or v20+ LTS
-- **Rust**: 1.70+ (stable toolchain)
-- **Package Managers**: pnpm 8+, cargo
+
+- **Operating System**: Windows 11 x64
+- **Node.js**: 24.2.0 with npm 11.6.3
+- **Rust**: 1.94.1 with rustfmt and clippy
+- **Package Managers**: npm 11.6.3, cargo
 - **Build Tools**: Visual Studio Build Tools 2019+ (for native modules)
 - **Git**: 2.30+
 
 #### Runtime Dependencies
+
 - **FFmpeg**: 6.0+ (bundled with installer)
 - **Visual C++ Redistributable**: 2019+ (included in installer)
 - **.NET Framework**: 4.8+ (Windows native)
@@ -36,16 +39,18 @@
 #### Hardware Requirements
 
 **Minimum**:
+
 - CPU: Intel Core i5-6600K or AMD Ryzen 5 1600
 - RAM: 8GB
-- GPU: NVIDIA GTX 1050 / AMD RX 560 / Intel UHD Graphics 630
+- GPU: NVIDIA GTX 1050 or newer with NVENC (AMD/Intel are experimental fallbacks)
 - Disk: 5GB free space
 - Network: Broadband internet connection
 
 **Recommended**:
+
 - CPU: Intel Core i7-8700K or AMD Ryzen 7 3700X
 - RAM: 16GB
-- GPU: NVIDIA RTX 2060 / AMD RX 5700 / Intel Iris Xe
+- GPU: NVIDIA RTX 2060 or newer with current drivers
 - Disk: SSD with 20GB free space
 - Network: Fiber/Cable internet (50+ Mbps)
 
@@ -56,77 +61,62 @@
 ### 1. Environment Setup
 
 #### Configure Production Environment
-```bash
-# Copy environment template
-cp .env.production.example .env
 
-# Edit .env with production values
-# At minimum, set:
-# - APP_ENV=production
-# - RUST_LOG=info
-# - HW_ACCEL=auto
-# - ENABLE_ANALYTICS=true (if using)
-```
+Production artifacts are built only by `.github/workflows/release.yml` in the
+protected `production-release` environment. Configure its Supabase public URL
+and anon key, YouTube desktop OAuth client, Tauri updater signing key/public
+key, and Windows Authenticode certificate. Sentry is optional: provide
+`SENTRY_DSN` (and the matching `VITE_SENTRY_DSN`) only when anonymous crash
+reporting is desired. A packaged app never reads a user-PC `.env`;
+`.env.production.example` is a maintainer reference.
 
 #### Install Dependencies
-```bash
-# Install Rust dependencies
-cd src-tauri
-cargo build --release
 
-# Install Node.js dependencies
-cd ..
-pnpm install
+```bash
+# Install locked frontend dependencies
+npm ci
+
+# Compile Rust locally (a signed release remains a CI-only operation)
+cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 
 # Verify installations
 cargo --version
 node --version
-pnpm --version
+npm --version
 ```
 
 ### 2. Pre-Build Validation
 
 #### Run All Tests
+
 ```bash
-# Run Rust tests
-cd src-tauri
-cargo test --release
-
-# Run Rust benchmarks
-cargo bench
-
-# Run E2E tests
-cd ..
-pnpm test:e2e
-
-# Verify all tests pass
+# Complete automated non-game release gate
+npm run verify:non-game-readiness
 ```
 
 #### Code Quality Checks
+
 ```bash
 # Run clippy for Rust code quality
-cd src-tauri
-cargo clippy --release -- -D warnings
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
 # Run ESLint for TypeScript/React
-cd ..
-pnpm lint
+npm run lint
 
 # Run type checking
-pnpm type-check
+npm run typecheck
 
 # Verify no warnings/errors
 ```
 
 #### Security Audit
+
 ```bash
 # Run cargo audit for vulnerability scanning
-cd src-tauri
-cargo audit
+cargo audit --file Cargo.lock
 
 # Check npm packages for vulnerabilities
-cd ..
-pnpm audit
+npm audit --omit=dev
 
 # Review and mitigate any critical vulnerabilities
 ```
@@ -134,18 +124,20 @@ pnpm audit
 ### 3. Production Build
 
 #### Build Frontend
+
 ```bash
 # Build optimized production frontend
-pnpm build
+npm run build
 
 # Verify dist/ directory created
 ls dist/
 ```
 
 #### Build Tauri Application
+
 ```bash
 # Build Windows installers (NSIS + MSI)
-cargo tauri build --release
+npx tauri build --bundles msi,nsis
 
 # Build output locations:
 # - NSIS installer: src-tauri/target/release/bundle/nsis/LoLShorts_1.0.0_x64-setup.exe
@@ -154,6 +146,7 @@ cargo tauri build --release
 ```
 
 #### Verify Build Artifacts
+
 ```bash
 # Check installer files exist
 ls src-tauri/target/release/bundle/nsis/
@@ -170,10 +163,12 @@ src-tauri/target/release/lolshorts.exe --version
 ### 4. Code Signing (Optional but Recommended)
 
 #### Prerequisites
+
 - **Code Signing Certificate**: From trusted CA (DigiCert, GlobalSign, etc.)
 - **Windows SDK**: signtool.exe installed
 
 #### Sign Executables
+
 ```powershell
 # Sign NSIS installer
 signtool sign /f "path\to\certificate.pfx" /p "password" /tr "http://timestamp.digicert.com" /td SHA256 /fd SHA256 "src-tauri\target\release\bundle\nsis\LoLShorts_1.0.0_x64-setup.exe"
@@ -189,6 +184,7 @@ signtool verify /pa "src-tauri\target\release\bundle\msi\LoLShorts_1.0.0_x64_en-
 ### 5. Installer Testing
 
 #### Test NSIS Installer
+
 ```bash
 # Install via NSIS installer
 # - Run: LoLShorts_1.0.0_x64-setup.exe
@@ -200,6 +196,7 @@ signtool verify /pa "src-tauri\target\release\bundle\msi\LoLShorts_1.0.0_x64_en-
 ```
 
 #### Test MSI Installer
+
 ```bash
 # Install via MSI installer
 # - Run: LoLShorts_1.0.0_x64_en-US.msi
@@ -211,6 +208,7 @@ signtool verify /pa "src-tauri\target\release\bundle\msi\LoLShorts_1.0.0_x64_en-
 ```
 
 #### Smoke Tests
+
 - [ ] Application launches without errors
 - [ ] LCU connection establishes successfully
 - [ ] Recording starts/stops correctly
@@ -228,6 +226,7 @@ signtool verify /pa "src-tauri\target\release\bundle\msi\LoLShorts_1.0.0_x64_en-
 ### Build Artifacts
 
 #### Files Generated
+
 ```
 src-tauri/target/release/bundle/
 ├── nsis/
@@ -240,6 +239,7 @@ src-tauri/target/release/bundle/
 ```
 
 #### Recommended Distribution Method
+
 - **Primary**: NSIS installer (supports auto-updates, better UX)
 - **Enterprise**: MSI installer (for IT admins via Group Policy)
 - **Portable**: Not recommended for production (use NSIS "currentUser" mode instead)
@@ -247,6 +247,7 @@ src-tauri/target/release/bundle/
 ### Release Preparation
 
 #### Generate Checksums
+
 ```bash
 cd src-tauri/target/release/bundle
 
@@ -259,6 +260,7 @@ echo "Version 1.0.0 - Production Release" > RELEASE_NOTES.txt
 ```
 
 #### Create Release Archive
+
 ```bash
 # Create distribution package
 7z a -tzip LoLShorts_1.0.0_Release.zip ^
@@ -279,12 +281,14 @@ echo "Version 1.0.0 - Production Release" > RELEASE_NOTES.txt
 ### Option 1: Direct Distribution (Recommended for v1.0)
 
 #### Website Download
+
 1. Upload installers to secure file hosting (AWS S3, Cloudflare R2, etc.)
 2. Configure HTTPS with valid SSL certificate
 3. Provide SHA256 checksums on download page
 4. Implement download tracking (optional)
 
 #### Example Download Links
+
 ```
 https://downloads.lolshorts.com/v1.0.0/LoLShorts_1.0.0_x64-setup.exe
 https://downloads.lolshorts.com/v1.0.0/LoLShorts_1.0.0_x64-setup.exe.sha256
@@ -295,6 +299,7 @@ https://downloads.lolshorts.com/v1.0.0/LoLShorts_1.0.0_x64_en-US.msi.sha256
 ### Option 2: Auto-Update Server
 
 #### Tauri Updater Setup
+
 ```json
 // updater.json
 {
@@ -311,6 +316,7 @@ https://downloads.lolshorts.com/v1.0.0/LoLShorts_1.0.0_x64_en-US.msi.sha256
 ```
 
 #### Update Workflow
+
 1. User launches LoLShorts
 2. Application checks for updates (via updater.json)
 3. If new version available, prompt user to download
@@ -323,6 +329,7 @@ https://downloads.lolshorts.com/v1.0.0/LoLShorts_1.0.0_x64_en-US.msi.sha256
 ### Option 3: Enterprise Deployment (MSI via Group Policy)
 
 #### Active Directory GPO Deployment
+
 1. Copy MSI to network share: `\\fileserver\software\LoLShorts\`
 2. Create GPO: Computer Configuration > Software Settings > Software Installation
 3. Add MSI package, configure installation options
@@ -337,6 +344,7 @@ https://downloads.lolshorts.com/v1.0.0/LoLShorts_1.0.0_x64_en-US.msi.sha256
 ### Production Logging
 
 #### Log Locations
+
 ```
 Windows: C:\Users\<username>\AppData\Roaming\LoLShorts\logs\
   ├── lolshorts-YYYY-MM-DD.log          # Daily log files
@@ -345,6 +353,7 @@ Windows: C:\Users\<username>\AppData\Roaming\LoLShorts\logs\
 ```
 
 #### Log Levels
+
 - **error**: Critical failures requiring immediate attention
 - **warn**: Recoverable errors, degraded functionality
 - **info**: Normal operation, key events (default in production)
@@ -352,11 +361,13 @@ Windows: C:\Users\<username>\AppData\Roaming\LoLShorts\logs\
 - **trace**: Fine-grained tracing (development only)
 
 #### Log Rotation
+
 - **Max Size**: 100 MB per file
 - **Retention**: 10 archived files (1 GB total)
 - **Format**: JSON (machine-readable) or Pretty (human-readable)
 
 #### Monitoring Errors
+
 ```bash
 # Tail production logs
 Get-Content -Path "C:\Users\<username>\AppData\Roaming\LoLShorts\logs\lolshorts-2025-01-06.log" -Wait
@@ -371,6 +382,7 @@ Get-Content -Path "C:\Users\<username>\AppData\Roaming\LoLShorts\logs\lolshorts-
 ### Performance Monitoring
 
 #### Key Metrics
+
 - **Recording Latency**: Event detection to clip save (<5s)
 - **Processing Time**: <30s per minute of output video
 - **Memory Usage**: <500MB idle, <2GB during processing
@@ -378,6 +390,7 @@ Get-Content -Path "C:\Users\<username>\AppData\Roaming\LoLShorts\logs\lolshorts-
 - **Disk I/O**: Monitor for bottlenecks during recording
 
 #### Performance Profiling
+
 ```bash
 # Enable profiling in production
 set ENABLE_PROFILING=true
@@ -396,19 +409,22 @@ set ENABLE_PROFILING=true
 ### Common Deployment Issues
 
 #### Issue: "FFmpeg not found"
-**Solution**: Verify FFmpeg bundled correctly
-```bash
-# Check bundle includes FFmpeg
-ls src-tauri/target/release/bundle/nsis/
-# Should contain ffmpeg.exe in resources
 
-# Manual bundling if needed
-cp path/to/ffmpeg.exe src-tauri/resources/binaries/
-cargo tauri build --release
+**Solution**: Verify FFmpeg bundled correctly
+
+```powershell
+# Recreate validated sidecars; release builds use the immutable checksum pin.
+.\src-tauri\build_scripts\prepare_ffmpeg.ps1 -Source Download
+
+# Validate the sidecars and release configuration before building.
+npm run verify:release-contract
+npm run tauri:build
 ```
 
 #### Issue: "Application won't start"
+
 **Solution**: Check for missing Visual C++ Redistributable
+
 ```bash
 # Download and install:
 # https://aka.ms/vs/17/release/vc_redist.x64.exe
@@ -418,7 +434,9 @@ reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
 ```
 
 #### Issue: "High memory usage"
+
 **Solution**: Configure memory limits in `.env`
+
 ```bash
 # Set memory limit in MB
 MEMORY_LIMIT_MB=1024
@@ -428,7 +446,9 @@ AUTO_CLEANUP_DAYS=7
 ```
 
 #### Issue: "Recording lags gameplay"
+
 **Solution**: Optimize recording settings
+
 ```bash
 # Use hardware acceleration
 HW_ACCEL=nvenc  # For NVIDIA GPUs
@@ -447,19 +467,22 @@ RECORDING_RESOLUTION=1920x1080
 ### User Support
 
 #### Documentation Links
+
 - **User Guide**: https://docs.lolshorts.com/user-guide
 - **Video Tutorials**: https://youtube.com/@lolshorts
 - **FAQ**: https://lolshorts.com/faq
 - **Troubleshooting**: See `TROUBLESHOOTING.md` in installation directory
 
 #### Support Channels
+
 - **Discord**: https://discord.gg/lolshorts
 - **Email**: support@lolshorts.com
-- **GitHub Issues**: https://github.com/lolshorts/lolshorts/issues
+- **GitHub Issues**: https://github.com/khakisketch/lolshorts/issues
 
 ### Feedback Collection
 
 #### Analytics (Optional)
+
 ```bash
 # Enable anonymous usage analytics
 ENABLE_ANALYTICS=true
@@ -483,11 +506,13 @@ ENABLE_TELEMETRY=true
 ## 🔄 Update Process
 
 ### Semantic Versioning
+
 - **Major (X.0.0)**: Breaking changes, major features
 - **Minor (1.X.0)**: New features, backward compatible
 - **Patch (1.0.X)**: Bug fixes, minor improvements
 
 ### Release Workflow
+
 1. Bump version in `Cargo.toml`, `package.json`, `tauri.conf.json`
 2. Update `CHANGELOG.md` with release notes
 3. Run full test suite and quality checks
@@ -505,18 +530,19 @@ ENABLE_TELEMETRY=true
 
 ### Performance Benchmarks (Reference)
 
-| Operation | Target | Actual (Dev) | Status |
-|-----------|--------|--------------|--------|
-| 60s video processing | <30s | ~25s | ✅ Excellent |
-| 120s video processing | <60s | ~48s | ✅ Excellent |
-| 180s video processing | <90s | ~72s | ✅ Excellent |
-| Event detection latency | <500ms | ~300ms | ✅ Good |
-| Canvas render time | <1s | ~800ms | ✅ Good |
-| Audio mix processing | <5s | ~3s | ✅ Excellent |
+| Operation               | Target | Actual (Dev) | Status       |
+| ----------------------- | ------ | ------------ | ------------ |
+| 60s video processing    | <30s   | ~25s         | ✅ Excellent |
+| 120s video processing   | <60s   | ~48s         | ✅ Excellent |
+| 180s video processing   | <90s   | ~72s         | ✅ Excellent |
+| Event detection latency | <500ms | ~300ms       | ✅ Good      |
+| Canvas render time      | <1s    | ~800ms       | ✅ Good      |
+| Audio mix processing    | <5s    | ~3s          | ✅ Excellent |
 
 ### Security Hardening Applied
 
 ✅ **Input Validation**:
+
 - Path traversal prevention
 - SQL injection prevention
 - Command injection prevention
@@ -524,14 +550,17 @@ ENABLE_TELEMETRY=true
 - File extension whitelisting
 
 ✅ **Code Signing**:
+
 - Historical deployment target only. Signed installers and update signatures still require current Field QA evidence before public claims.
 - Signature verification on updates must be validated against the active signed release channel.
 
 ✅ **Sandboxing**:
+
 - Tauri default security model (CSP, webview isolation)
 - No arbitrary code execution
 
 ✅ **Dependency Scanning**:
+
 - 20 warnings (unmaintained packages from Tauri framework)
 - No exploitable vulnerabilities were reported in this historical scan. Treat as automation evidence only, not a current security-status guarantee.
 

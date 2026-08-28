@@ -1,7 +1,7 @@
-import { invoke } from '@tauri-apps/api/core';
-import { useState, useCallback, useEffect } from 'react';
-import { AutoEditQuotaInfo } from '@/types/autoEdit';
-import { getErrorMessage } from '@/lib/utils';
+import { invoke } from "@tauri-apps/api/core";
+import { useState, useCallback, useEffect } from "react";
+import { AutoEditQuotaInfo } from "@/types/autoEdit";
+import { getErrorMessage } from "@/lib/utils";
 
 /**
  * Hook for managing auto-edit quota
@@ -23,7 +23,7 @@ export function useAutoEditQuota() {
     setError(null);
 
     try {
-      const quotaInfo = await invoke<AutoEditQuotaInfo>('get_auto_edit_quota');
+      const quotaInfo = await invoke<AutoEditQuotaInfo>("get_auto_edit_quota");
       setQuota(quotaInfo);
       return quotaInfo;
     } catch (err) {
@@ -50,12 +50,12 @@ export function useAutoEditQuota() {
    * - 'low': Low quota (1-2 remaining)
    * - 'exhausted': No quota remaining
    */
-  const getQuotaWarningLevel = useCallback((): 'none' | 'low' | 'exhausted' => {
-    if (!quota) return 'none';
-    if (quota.is_pro) return 'none';
-    if (quota.remaining === 0) return 'exhausted';
-    if (quota.remaining <= 2) return 'low';
-    return 'none';
+  const getQuotaWarningLevel = useCallback((): "none" | "low" | "exhausted" => {
+    if (!quota) return "none";
+    if (quota.is_pro) return "none";
+    if (quota.remaining === 0) return "exhausted";
+    if (quota.remaining <= 2) return "low";
+    return "none";
   }, [quota]);
 
   // Fetch quota on mount

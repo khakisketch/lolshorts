@@ -11,18 +11,17 @@ pub struct SystemRequirements {
 }
 
 pub fn check_system_requirements() -> SystemRequirements {
-    use sysinfo::{Disks, System};
+    use sysinfo::System;
 
     let sys = System::new_all();
 
     let ram_gb = sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
     let ram_sufficient = ram_gb >= 4.0;
 
-    let disks = Disks::new_with_refreshed_list();
-    let disk_free_gb = disks.iter().map(|d| d.available_space()).max().unwrap_or(0) as f64
-        / 1024.0
-        / 1024.0
-        / 1024.0;
+    let disk_path = dirs::data_dir().unwrap_or_else(std::env::temp_dir);
+    let disk_free_gb = crate::utils::disk::query_disk_space(&disk_path)
+        .map(|snapshot| snapshot.available_bytes as f64 / 1024.0 / 1024.0 / 1024.0)
+        .unwrap_or(0.0);
     let disk_sufficient = disk_free_gb >= 2.0;
 
     let os_version = System::long_os_version().unwrap_or_default();

@@ -38,6 +38,15 @@ pub struct ComposeOptions {
     /// 각 입력에 걸면 `t` 가 그 클립 안에서의 시각이라 어긋날 여지가 없다.
     #[allow(clippy::type_complexity)]
     pub captions: Option<Vec<Option<CaptionSpec>>>,
+    /// Deterministic presentation used for vertical game footage.
+    pub framing: VerticalFraming,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalFraming {
+    LolFocusStack,
+    SafeFullFrame,
+    CenterCrop,
 }
 
 /// 한 클립 위에 띄울 훅 자막.

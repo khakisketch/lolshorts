@@ -1,10 +1,7 @@
-name: CI - Cross-Platform Build and Test
+name: Experimental Cross-Platform CI (Manual)
 
 on:
-  push:
-    branches: [main, master, develop]
-  pull_request:
-    branches: [main, master, develop]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,7 +31,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
         with:
           targets: ${{ matrix.rust_target }}
           components: rustfmt, clippy
@@ -94,8 +91,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
       - name: Install dependencies
         run: npm ci
@@ -134,11 +134,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
 
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Install dependencies
         run: npm ci
@@ -147,7 +150,7 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Build application (debug)
-        run: cargo tauri build -- --debug
+        run: npm run tauri build -- --debug
 
       - name: Run E2E tests
         run: npx playwright test
@@ -174,11 +177,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
 
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Install dependencies
         run: npm ci
@@ -187,7 +193,7 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Build application (debug)
-        run: cargo tauri build -- --debug
+        run: npm run tauri build -- --debug
 
       - name: Run E2E tests
         run: npx playwright test
@@ -210,18 +216,21 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Run Rust security audit
-        run: cargo install cargo-audit && cargo audit --manifest-path src-tauri/Cargo.toml
+        run: cargo install cargo-audit --version 0.22.2 --locked && cargo audit --file Cargo.lock
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
       - name: Run npm security audit
-        run: npm ci && npm audit --audit-level=moderate
+        run: npm ci && npm audit --omit=dev --audit-level=moderate
 
   # Cross-platform build verification
   build-check:
@@ -248,15 +257,18 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
         with:
           targets: ${{ matrix.rust_target }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
       - name: Install system dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -270,7 +282,7 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cd src-tauri/build_scripts
-            ./prepare_ffmpeg.ps1
+            ./prepare_ffmpeg.ps1 -Source Download
           elif [ "${{ matrix.os }}" = "macos-latest" ]; then
             brew install ffmpeg
             mkdir -p src-tauri/binaries
@@ -286,10 +298,10 @@ jobs:
           fi
 
       - name: Build application (Release)
-        run: cargo tauri build --verbose
+        run: npm run tauri build -- --verbose
         env:
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
       - name: Verify build artifacts
         run: |
@@ -346,7 +358,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4

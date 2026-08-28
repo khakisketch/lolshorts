@@ -4,10 +4,10 @@
  * Handles video playback with controls, keyboard shortcuts, and accessibility
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
-import { Button } from '@/components/ui/button';
-import { Slider } from '@/components/ui/slider';
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 import {
   Play,
   Pause,
@@ -18,10 +18,10 @@ import {
   Maximize2,
   Minimize2,
   RotateCcw,
-} from 'lucide-react';
-import { toast } from '@/components/ui/use-toast';
-import { logger } from '@/lib/logger';
-import { getErrorMessage } from '@/lib/utils';
+} from "lucide-react";
+import { toast } from "@/components/ui/use-toast";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/utils";
 
 interface VideoPlayerProps {
   src: string;
@@ -36,7 +36,7 @@ export function VideoPlayer({
   title,
   autoPlay = false,
   onClose,
-  className = ''
+  className = "",
 }: VideoPlayerProps) {
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -55,7 +55,7 @@ export function VideoPlayer({
   const formatTime = useCallback((seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
   }, []);
 
   // Handle play/pause
@@ -71,11 +71,11 @@ export function VideoPlayer({
         setIsPlaying(true);
       }
     } catch (error) {
-      logger.error('Failed to toggle playback:', error);
+      logger.error("Failed to toggle playback:", error);
       toast({
-        title: t('video.errors.playbackFailed'),
+        title: t("video.errors.playbackFailed"),
         description: getErrorMessage(error),
-        variant: 'destructive',
+        variant: "destructive",
       });
     }
   }, [isPlaying, t]);
@@ -111,11 +111,17 @@ export function VideoPlayer({
   }, [isMuted]);
 
   // Skip forward/backward
-  const skip = useCallback((seconds: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = Math.max(0, Math.min(duration, currentTime + seconds));
-    }
-  }, [currentTime, duration]);
+  const skip = useCallback(
+    (seconds: number) => {
+      if (videoRef.current) {
+        videoRef.current.currentTime = Math.max(
+          0,
+          Math.min(duration, currentTime + seconds),
+        );
+      }
+    },
+    [currentTime, duration],
+  );
 
   // Toggle fullscreen
   const toggleFullscreen = useCallback(() => {
@@ -157,22 +163,22 @@ export function VideoPlayer({
     const handleError = () => {
       setIsLoading(false);
       toast({
-        title: t('video.errors.loadFailed'),
-        description: t('video.errors.loadFailedDesc'),
-        variant: 'destructive',
+        title: t("video.errors.loadFailed"),
+        description: t("video.errors.loadFailedDesc"),
+        variant: "destructive",
       });
     };
 
-    video.addEventListener('loadedmetadata', handleLoadedMetadata);
-    video.addEventListener('timeupdate', handleTimeUpdate);
-    video.addEventListener('ended', handleEnded);
-    video.addEventListener('error', handleError);
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    video.addEventListener("timeupdate", handleTimeUpdate);
+    video.addEventListener("ended", handleEnded);
+    video.addEventListener("error", handleError);
 
     return () => {
-      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      video.removeEventListener('timeupdate', handleTimeUpdate);
-      video.removeEventListener('ended', handleEnded);
-      video.removeEventListener('error', handleError);
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      video.removeEventListener("timeupdate", handleTimeUpdate);
+      video.removeEventListener("ended", handleEnded);
+      video.removeEventListener("error", handleError);
     };
   }, [t]);
 
@@ -180,69 +186,71 @@ export function VideoPlayer({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle shortcuts when video player is focused
-      if (document.activeElement !== videoRef.current &&
-          !containerRef.current?.contains(document.activeElement)) {
+      if (
+        document.activeElement !== videoRef.current &&
+        !containerRef.current?.contains(document.activeElement)
+      ) {
         return;
       }
 
       switch (e.key) {
-        case ' ':
-        case 'k':
+        case " ":
+        case "k":
           e.preventDefault();
           togglePlay();
           break;
-        case 'ArrowLeft':
+        case "ArrowLeft":
           e.preventDefault();
           skip(-5);
           break;
-        case 'ArrowRight':
+        case "ArrowRight":
           e.preventDefault();
           skip(5);
           break;
-        case 'j':
+        case "j":
           e.preventDefault();
           skip(-10);
           break;
-        case 'l':
+        case "l":
           e.preventDefault();
           skip(10);
           break;
-        case 'm':
+        case "m":
           e.preventDefault();
           toggleMute();
           break;
-        case 'ArrowUp':
+        case "ArrowUp":
           e.preventDefault();
           handleVolumeChange([Math.min(1, volume + 0.05)]);
           break;
-        case 'ArrowDown':
+        case "ArrowDown":
           e.preventDefault();
           handleVolumeChange([Math.max(0, volume - 0.05)]);
           break;
-        case 'f':
+        case "f":
           e.preventDefault();
           toggleFullscreen();
           break;
-        case 'r':
+        case "r":
           e.preventDefault();
           resetPlaybackRate();
           break;
-        case '1':
+        case "1":
           e.preventDefault();
           setPlaybackRate(0.5);
           if (videoRef.current) videoRef.current.playbackRate = 0.5;
           break;
-        case '2':
+        case "2":
           e.preventDefault();
           setPlaybackRate(1);
           if (videoRef.current) videoRef.current.playbackRate = 1;
           break;
-        case '3':
+        case "3":
           e.preventDefault();
           setPlaybackRate(2);
           if (videoRef.current) videoRef.current.playbackRate = 2;
           break;
-        case 'Escape':
+        case "Escape":
           if (onClose) {
             e.preventDefault();
             onClose();
@@ -251,26 +259,35 @@ export function VideoPlayer({
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, skip, toggleMute, toggleFullscreen, resetPlaybackRate, onClose, volume, handleVolumeChange]);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    togglePlay,
+    skip,
+    toggleMute,
+    toggleFullscreen,
+    resetPlaybackRate,
+    onClose,
+    volume,
+    handleVolumeChange,
+  ]);
 
   return (
     <div
       ref={containerRef}
-      className={`relative bg-black rounded-lg overflow-hidden ${className}`}
+      className={`relative min-h-0 overflow-hidden rounded-lg bg-black ${className}`}
       role="application"
-      aria-label={t('video.playerLabel')}
+      aria-label={t("video.playerLabel")}
     >
       {/* Video Element */}
       <video
         ref={videoRef}
         src={src}
-        className="w-full aspect-video"
+        className="h-full w-full object-contain"
         autoPlay={autoPlay}
         playsInline
         tabIndex={0}
-        aria-label={title || t('video.videoLabel')}
+        aria-label={title || t("video.videoLabel")}
         title={title}
       >
         <track kind="captions" label="No captions available" />
@@ -281,7 +298,7 @@ export function VideoPlayer({
         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
           <div className="text-white text-center">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto mb-2" />
-            <div className="text-sm">{t('video.loading')}</div>
+            <div className="text-sm">{t("video.loading")}</div>
           </div>
         </div>
       )}
@@ -297,7 +314,7 @@ export function VideoPlayer({
               step={1}
               onValueChange={handleSeek}
               className="w-full"
-              aria-label={t('video.seekLabel')}
+              aria-label={t("video.seekLabel")}
             />
             <div className="flex justify-between text-xs text-white/80">
               <span>{formatTime(currentTime)}</span>
@@ -314,7 +331,7 @@ export function VideoPlayer({
                 size="sm"
                 onClick={() => skip(-5)}
                 className="text-white hover:text-white/80"
-                aria-label={t('video.skipBackward')}
+                aria-label={t("video.skipBackward")}
               >
                 <SkipBack className="h-4 w-4" />
               </Button>
@@ -325,7 +342,7 @@ export function VideoPlayer({
                 size="sm"
                 onClick={togglePlay}
                 className="text-white hover:text-white/80"
-                aria-label={isPlaying ? t('video.pause') : t('video.play')}
+                aria-label={isPlaying ? t("video.pause") : t("video.play")}
               >
                 {isPlaying ? (
                   <Pause className="h-4 w-4" />
@@ -340,7 +357,7 @@ export function VideoPlayer({
                 size="sm"
                 onClick={() => skip(5)}
                 className="text-white hover:text-white/80"
-                aria-label={t('video.skipForward')}
+                aria-label={t("video.skipForward")}
               >
                 <SkipForward className="h-4 w-4" />
               </Button>
@@ -352,7 +369,7 @@ export function VideoPlayer({
                   size="sm"
                   onClick={toggleMute}
                   className="text-white hover:text-white/80"
-                  aria-label={isMuted ? t('video.unmute') : t('video.mute')}
+                  aria-label={isMuted ? t("video.unmute") : t("video.mute")}
                 >
                   {isMuted ? (
                     <VolumeX className="h-4 w-4" />
@@ -364,9 +381,11 @@ export function VideoPlayer({
                   value={[isMuted ? 0 : volume * 100]}
                   max={100}
                   step={1}
-                  onValueChange={(value) => handleVolumeChange([value[0] / 100])}
+                  onValueChange={(value) =>
+                    handleVolumeChange([value[0] / 100])
+                  }
                   className="w-20"
-                  aria-label={t('video.volumeLabel')}
+                  aria-label={t("video.volumeLabel")}
                 />
               </div>
 
@@ -386,7 +405,7 @@ export function VideoPlayer({
                 size="sm"
                 onClick={resetPlaybackRate}
                 className="text-white hover:text-white/80"
-                aria-label={t('video.resetSpeed')}
+                aria-label={t("video.resetSpeed")}
               >
                 <RotateCcw className="h-4 w-4" />
               </Button>
@@ -397,7 +416,11 @@ export function VideoPlayer({
                 size="sm"
                 onClick={toggleFullscreen}
                 className="text-white hover:text-white/80"
-                aria-label={isFullscreen ? t('video.exitFullscreen') : t('video.enterFullscreen')}
+                aria-label={
+                  isFullscreen
+                    ? t("video.exitFullscreen")
+                    : t("video.enterFullscreen")
+                }
               >
                 {isFullscreen ? (
                   <Minimize2 className="h-4 w-4" />
@@ -426,7 +449,7 @@ export function VideoPlayer({
           size="sm"
           onClick={onClose}
           className="absolute top-4 right-4 text-white hover:text-white/80"
-          aria-label={t('common.close')}
+          aria-label={t("common.close")}
         >
           ×
         </Button>

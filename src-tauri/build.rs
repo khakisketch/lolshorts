@@ -2,6 +2,18 @@
 // Simple build configuration - no external dependencies required
 
 fn main() {
+    for name in [
+        "SUPABASE_URL",
+        "SUPABASE_ANON_KEY",
+        "YOUTUBE_CLIENT_ID",
+        "YOUTUBE_CLIENT_SECRET",
+        "YOUTUBE_REDIRECT_URI",
+        "TAURI_UPDATER_PUBKEY",
+        "SENTRY_DSN",
+    ] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+
     embed_comctl32_v6_manifest_in_test_binaries();
 
     // Run Tauri build

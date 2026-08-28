@@ -53,6 +53,8 @@ import {
   type SceneFlag,
 } from "./settingSpecs";
 import { evaluateCoverage } from "./captureCoverage";
+import { storageApi } from "@/api/storage";
+import { utilsApi } from "@/api/utils";
 
 /** 프리셋별 아이콘. 카드가 셋 나란히 놓이면 글자만으로는 구분이 느리다. */
 const ICON_CLASS = "h-6 w-6";
@@ -119,10 +121,8 @@ interface BasicSettingsProps {
 }
 
 type QualityLevel = "high" | "medium" | "low";
-type VideoQualityFields = Pick<
-  VideoSettings,
-  "resolution" | "frame_rate" | "bitrate_preset"
->;
+type VideoQualityFields = Pick<VideoSettings, "frame_rate" | "bitrate_preset"> &
+  Partial<Pick<VideoSettings, "resolution">>;
 
 /**
  * 화질 3단. 코덱·인코더는 일부러 묶지 않는다 — 사용자가 판단할 수 있는 축이 아니고
@@ -155,13 +155,27 @@ const QUALITY_LEVELS: readonly QualityLevel[] = ["high", "medium", "low"];
  * `QUALITY_LEVELS`(판정용)와 분리해 둔다. 판정은 순서와 무관하고, 화면 순서는
  * "성능을 지킬수록 왼쪽" 이라는 사용자 멘탈 모델을 따라야 한다.
  */
-const QUALITY_DISPLAY_ORDER: readonly QualityLevel[] = ["low", "medium", "high"];
+const QUALITY_DISPLAY_ORDER: readonly QualityLevel[] = [
+  "low",
+  "medium",
+  "high",
+];
 
 /** 드롭다운에 노출할 프레임. 120/144 는 롤에서 흔치 않지만 고사양 사용자가 있다. */
-const FRAME_RATE_OPTIONS: readonly FrameRate[] = ["fps30", "fps60", "fps120", "fps144"];
+const FRAME_RATE_OPTIONS: readonly FrameRate[] = [
+  "fps30",
+  "fps60",
+  "fps120",
+  "fps144",
+];
 
 /** 화질(비트레이트). 숫자를 그대로 보여준다 — "높음" 보다 "40 Mbps" 가 판단에 낫다. */
-const BITRATE_OPTIONS: readonly BitratePreset[] = ["low", "medium", "high", "very_high"];
+const BITRATE_OPTIONS: readonly BitratePreset[] = [
+  "low",
+  "medium",
+  "high",
+  "very_high",
+];
 
 /** `VideoSettings::default()` 가 만드는 조합(60fps + medium)에 대응. */
 const RECOMMENDED_QUALITY: QualityLevel = "medium";
@@ -192,7 +206,6 @@ export function detectQualityLevel(
   const match = QUALITY_LEVELS.find((level) => {
     const preset = QUALITY_PRESETS[level];
     return (
-      preset.resolution === video.resolution &&
       preset.frame_rate === video.frame_rate &&
       preset.bitrate_preset === video.bitrate_preset
     );
@@ -287,7 +300,9 @@ function OptionCards({
             {option.icon && (
               <span
                 aria-hidden="true"
-                className={selected ? "text-gaming-cyan" : "text-muted-foreground"}
+                className={
+                  selected ? "text-gaming-cyan" : "text-muted-foreground"
+                }
               >
                 {option.icon}
               </span>
@@ -340,7 +355,10 @@ function SettingRow({
       <div className="min-w-0">
         <p className="text-sm">{label}</p>
         {hint && (
-          <p className="text-xs text-muted-foreground" style={{ wordBreak: "keep-all" }}>
+          <p
+            className="text-xs text-muted-foreground"
+            style={{ wordBreak: "keep-all" }}
+          >
             {hint}
           </p>
         )}
@@ -418,6 +436,12 @@ export function BasicSettings({
   const { t } = useTranslation();
   const { toast } = useToast();
   const [recordingsPath, setRecordingsPath] = useState<string | null>(null);
+  const [storageUsageBytes, setStorageUsageBytes] = useState<number | null>(
+    null,
+  );
+  const [availableStorageGb, setAvailableStorageGb] = useState<number | null>(
+    null,
+  );
 
   // 저장 위치는 백엔드가 IPC 로 돌려주지 않는다(고정 경로). 같은 규칙으로
   // 프론트에서 조립해 보여주되, 실패하면 경로 대신 안내 문구를 보여준다.
@@ -430,11 +454,39 @@ export function BasicSettings({
         const dir = await join(base, ...RECORDINGS_DIR_SEGMENTS);
         if (alive) setRecordingsPath(dir);
       } catch (error) {
-        logger.error("[BasicSettings] Failed to resolve recordings path:", error);
+        logger.error(
+          "[BasicSettings] Failed to resolve recordings path:",
+          error,
+        );
       }
     };
 
     resolvePath();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.allSettled([
+      storageApi.getStorageStats(),
+      utilsApi.getDiskSpaceInfo(),
+    ]).then(([usage, disk]) => {
+      if (!alive) return;
+      if (usage.status === "fulfilled" && usage.value) {
+        setStorageUsageBytes(
+          usage.value.total_disk_usage_bytes ?? usage.value.total_size_bytes,
+        );
+      }
+      if (
+        disk.status === "fulfilled" &&
+        disk.value &&
+        disk.value.known !== false
+      ) {
+        setAvailableStorageGb(disk.value.available_gb);
+      }
+    });
     return () => {
       alive = false;
     };
@@ -451,6 +503,12 @@ export function BasicSettings({
   const coverage = evaluateCoverage(
     settings.event_filter as unknown as Record<string, boolean | number>,
   );
+  const bitrateMbps = BITRATE_MBPS[settings.video.bitrate_preset];
+  const estimatedGbPerHour = (bitrateMbps * 3600) / (8 * 1000);
+  const estimatedHoursRemaining =
+    availableStorageGb === null || estimatedGbPerHour <= 0
+      ? null
+      : availableStorageGb / estimatedGbPerHour;
 
   const handlePresetChange = (value: string) => {
     onChange({
@@ -463,10 +521,17 @@ export function BasicSettings({
   };
 
   const handleQualityChange = (value: string) => {
-    // 코덱·인코더·모니터 인덱스는 건드리지 않는다.
+    const preset = QUALITY_PRESETS[value as QualityLevel];
+    // Windows gdigrab records the native game-window rectangle. Keep the
+    // serialized resolution for compatibility, but do not mutate or judge a
+    // field that Windows never applies.
     onChange({
       ...settings,
-      video: { ...settings.video, ...QUALITY_PRESETS[value as QualityLevel] },
+      video: {
+        ...settings.video,
+        frame_rate: preset.frame_rate,
+        bitrate_preset: preset.bitrate_preset,
+      },
     });
   };
 
@@ -478,7 +543,7 @@ export function BasicSettings({
   };
 
   const handleStorageChange = (
-    key: "auto_delete_enabled" | "max_storage_gb",
+    key: "auto_delete_enabled" | "auto_delete_days" | "max_storage_gb",
     value: boolean | number,
   ) => {
     onChange({
@@ -504,107 +569,111 @@ export function BasicSettings({
     <div data-testid="basic-settings" className="space-y-4">
       {/* 1. 어떤 장면을 담을까 */}
       {shows("highlights") && (
-      <BasicCard
-        testId="basic-highlights"
-        icon={<Film className="h-5 w-5" aria-hidden="true" />}
-        title={t("settings.basic.highlights.title")}
-        description={t("settings.basic.highlights.description")}
-        badge={
-          highlightPreset === "custom"
-            ? t("settings.basic.customLabel")
-            : undefined
-        }
-      >
-        {highlightPreset === "custom" && (
-          <p
-            data-testid="highlights-custom-hint"
-            className="mb-3 text-xs text-muted-foreground"
-            style={{ wordBreak: "keep-all" }}
-          >
-            {t("settings.basic.highlights.customHint")}
-          </p>
-        )}
-        <OptionCards
-          name="highlight-preset"
-          value={highlightPreset === "custom" ? "" : highlightPreset}
-          onValueChange={handlePresetChange}
-          disabled={disabled}
-          recommendedLabel={t("settings.basic.recommendedBadge")}
-          options={SELECTABLE_HIGHLIGHT_PRESETS.map((preset) => ({
-            value: preset,
-            label: t(`settings.basic.highlights.options.${preset}.label`),
-            description: t(
-              `settings.basic.highlights.options.${preset}.description`,
-            ),
-            icon: HIGHLIGHT_ICONS[preset],
-            recommended: preset === DEFAULT_HIGHLIGHT_PRESET,
-          }))}
-        />
-
-        {/* 고른 묶음이 실제로 무엇을 담는지. 프리셋 이름만으로는 "확실한 것만" 이
-            무엇을 버리는지 알 수 없다. */}
-        <div className="mt-4 border-t border-white/5 pt-3">
-          <p className="text-sm text-muted-foreground">
-            {t("settings.basic.highlights.scenesLabel")}
-          </p>
-          <p
-            data-testid="highlights-scenes"
-            className="mt-1 text-sm"
-            style={{ wordBreak: "keep-all" }}
-          >
-            {scenes.length > 0
-              ? scenes
-                  .map((flag) => t(`settings.basic.highlights.scenes.${flag}`))
-                  .join(" · ")
-              : t("settings.basic.highlights.scenesEmpty")}
-          </p>
-        </div>
-
-        {/* 아무것도 안 담기거나 아주 좁으면 반드시 말한다.
-            녹화는 정상으로 보이는데 결과물이 0개인 상태를 화면이 구분해 주지
-            못해서, 실기기에서 두 판을 통째로 잃었다. */}
-        {coverage.level !== "normal" && (
-          <div
-            data-testid="highlights-coverage-warning"
-            className={[
-              "mt-3 rounded-lg border p-3 text-sm",
-              coverage.level === "none"
-                ? "border-red-500/40 bg-red-500/10"
-                : "border-amber-500/40 bg-amber-500/10",
-            ].join(" ")}
-            role="status"
-          >
-            <p className="font-medium" style={{ wordBreak: "keep-all" }}>
-              {t(`settings.basic.highlights.coverage.${coverage.level}.title`)}
-            </p>
+        <BasicCard
+          testId="basic-highlights"
+          icon={<Film className="h-5 w-5" aria-hidden="true" />}
+          title={t("settings.basic.highlights.title")}
+          description={t("settings.basic.highlights.description")}
+          badge={
+            highlightPreset === "custom"
+              ? t("settings.basic.customLabel")
+              : undefined
+          }
+        >
+          {highlightPreset === "custom" && (
             <p
-              className="mt-1 text-xs text-muted-foreground"
+              data-testid="highlights-custom-hint"
+              className="mb-3 text-xs text-muted-foreground"
               style={{ wordBreak: "keep-all" }}
             >
-              {t(
-                `settings.basic.highlights.coverage.${coverage.level}.description`,
-              )}
+              {t("settings.basic.highlights.customHint")}
             </p>
-            {coverage.blockedByPriority.length > 0 && (
+          )}
+          <OptionCards
+            name="highlight-preset"
+            value={highlightPreset === "custom" ? "" : highlightPreset}
+            onValueChange={handlePresetChange}
+            disabled={disabled}
+            recommendedLabel={t("settings.basic.recommendedBadge")}
+            options={SELECTABLE_HIGHLIGHT_PRESETS.map((preset) => ({
+              value: preset,
+              label: t(`settings.basic.highlights.options.${preset}.label`),
+              description: t(
+                `settings.basic.highlights.options.${preset}.description`,
+              ),
+              icon: HIGHLIGHT_ICONS[preset],
+              recommended: preset === DEFAULT_HIGHLIGHT_PRESET,
+            }))}
+          />
+
+          {/* 고른 묶음이 실제로 무엇을 담는지. 프리셋 이름만으로는 "확실한 것만" 이
+            무엇을 버리는지 알 수 없다. */}
+          <div className="mt-4 border-t border-white/5 pt-3">
+            <p className="text-sm text-muted-foreground">
+              {t("settings.basic.highlights.scenesLabel")}
+            </p>
+            <p
+              data-testid="highlights-scenes"
+              className="mt-1 text-sm"
+              style={{ wordBreak: "keep-all" }}
+            >
+              {scenes.length > 0
+                ? scenes
+                    .map((flag) =>
+                      t(`settings.basic.highlights.scenes.${flag}`),
+                    )
+                    .join(" · ")
+                : t("settings.basic.highlights.scenesEmpty")}
+            </p>
+          </div>
+
+          {/* 아무것도 안 담기거나 아주 좁으면 반드시 말한다.
+            녹화는 정상으로 보이는데 결과물이 0개인 상태를 화면이 구분해 주지
+            못해서, 실기기에서 두 판을 통째로 잃었다. */}
+          {coverage.level !== "normal" && (
+            <div
+              data-testid="highlights-coverage-warning"
+              className={[
+                "mt-3 rounded-lg border p-3 text-sm",
+                coverage.level === "none"
+                  ? "border-red-500/40 bg-red-500/10"
+                  : "border-amber-500/40 bg-amber-500/10",
+              ].join(" ")}
+              role="status"
+            >
+              <p className="font-medium" style={{ wordBreak: "keep-all" }}>
+                {t(
+                  `settings.basic.highlights.coverage.${coverage.level}.title`,
+                )}
+              </p>
               <p
-                data-testid="highlights-coverage-blocked"
-                className="mt-2 text-xs"
+                className="mt-1 text-xs text-muted-foreground"
                 style={{ wordBreak: "keep-all" }}
               >
-                {t("settings.basic.highlights.coverage.blocked", {
-                  scenes: coverage.blockedByPriority
-                    .slice(0, 5)
-                    .map((s) =>
-                      t(`settings.basic.highlights.scenes.${s.labelKey}`),
-                    )
-                    .join(" · "),
-                })}
+                {t(
+                  `settings.basic.highlights.coverage.${coverage.level}.description`,
+                )}
               </p>
-            )}
-          </div>
-        )}
+              {coverage.blockedByPriority.length > 0 && (
+                <p
+                  data-testid="highlights-coverage-blocked"
+                  className="mt-2 text-xs"
+                  style={{ wordBreak: "keep-all" }}
+                >
+                  {t("settings.basic.highlights.coverage.blocked", {
+                    scenes: coverage.blockedByPriority
+                      .slice(0, 5)
+                      .map((s) =>
+                        t(`settings.basic.highlights.scenes.${s.labelKey}`),
+                      )
+                      .join(" · "),
+                  })}
+                </p>
+              )}
+            </div>
+          )}
 
-        {/*
+          {/*
           장면 길이 표를 **일부러 두지 않는다.**
 
           예전에는 다섯 줄(킬·멀티킬·스틸·죽는 장면·게임 끝)의 초 단위 숫자를
@@ -614,238 +683,319 @@ export function BasicSettings({
 
           길이가 궁금하거나 바꾸고 싶으면 고급 설정 안의 슬라이더에서 다룬다.
         */}
-      </BasicCard>)}
+        </BasicCard>
+      )}
 
       {/* 2. 화질 */}
       {shows("quality") && (
-      <BasicCard
-        testId="basic-quality"
-        icon={<Monitor className="h-5 w-5" aria-hidden="true" />}
-        title={t("settings.basic.quality.title")}
-        description={t("settings.basic.quality.description")}
-        badge={
-          qualityLevel === "custom" ? t("settings.basic.customLabel") : undefined
-        }
-      >
-        <OptionCards
-          name="quality-level"
-          value={qualityLevel === "custom" ? "" : qualityLevel}
-          onValueChange={handleQualityChange}
-          disabled={disabled}
-          recommendedLabel={t("settings.basic.recommendedBadge")}
-          options={QUALITY_DISPLAY_ORDER.map((level) => ({
-            value: level,
-            label: t(`settings.basic.quality.options.${level}.label`),
-            description: t(`settings.basic.quality.options.${level}.description`),
-            icon: QUALITY_ICONS[level],
-            recommended: level === RECOMMENDED_QUALITY,
-          }))}
-        />
+        <BasicCard
+          testId="basic-quality"
+          icon={<Monitor className="h-5 w-5" aria-hidden="true" />}
+          title={t("settings.basic.quality.title")}
+          description={t("settings.basic.quality.description")}
+          badge={
+            qualityLevel === "custom"
+              ? t("settings.basic.customLabel")
+              : undefined
+          }
+        >
+          <OptionCards
+            name="quality-level"
+            value={qualityLevel === "custom" ? "" : qualityLevel}
+            onValueChange={handleQualityChange}
+            disabled={disabled}
+            recommendedLabel={t("settings.basic.recommendedBadge")}
+            options={QUALITY_DISPLAY_ORDER.map((level) => ({
+              value: level,
+              label: t(`settings.basic.quality.options.${level}.label`),
+              description: t(
+                `settings.basic.quality.options.${level}.description`,
+              ),
+              icon: QUALITY_ICONS[level],
+              recommended: level === RECOMMENDED_QUALITY,
+            }))}
+          />
 
-        {/* 프리셋으로 큰 틀을 잡고, 세부는 여기서 바로. 하나라도 바꾸면 위
+          {/* 프리셋으로 큰 틀을 잡고, 세부는 여기서 바로. 하나라도 바꾸면 위
             배지가 "직접 설정" 이 된다(`detectQualityLevel`). */}
-        <div className="mt-4 border-t border-white/5">
-          <SettingRow
-            testId="quality-fps"
-            label={t("settings.basic.quality.specs.frameRate")}
-            value={settings.video.frame_rate}
-            options={FRAME_RATE_OPTIONS.map((v) => ({
-              value: v,
-              label: t("settings.basic.quality.specs.frameRateValue", {
-                fps: FRAME_RATE_FPS[v],
-              }),
-            }))}
-            onChange={(frame_rate) =>
-              onChange({
-                ...settings,
-                video: { ...settings.video, frame_rate: frame_rate as FrameRate },
-              })
-            }
-            disabled={disabled}
-          />
-          <SettingRow
-            testId="quality-bitrate"
-            label={t("settings.basic.quality.specs.bitrate")}
-            hint={t("settings.basic.quality.specs.sizePerMinuteHint", {
-              size: megabytesPerMinute(BITRATE_MBPS[settings.video.bitrate_preset]),
-            })}
-            value={settings.video.bitrate_preset}
-            options={BITRATE_OPTIONS.map((v) => ({
-              value: v,
-              label: `${BITRATE_MBPS[v]} Mbps`,
-            }))}
-            onChange={(bitrate_preset) =>
-              onChange({
-                ...settings,
-                video: {
-                  ...settings.video,
-                  bitrate_preset: bitrate_preset as BitratePreset,
-                },
-              })
-            }
-            disabled={disabled}
-          />
-          {/* 녹화 크기는 고를 수 있는 값이 아니다 — Windows 캡처는 게임 창 크기를
+          <div className="mt-4 border-t border-white/5">
+            <SettingRow
+              testId="quality-fps"
+              label={t("settings.basic.quality.specs.frameRate")}
+              value={settings.video.frame_rate}
+              options={FRAME_RATE_OPTIONS.map((v) => ({
+                value: v,
+                label: t("settings.basic.quality.specs.frameRateValue", {
+                  fps: FRAME_RATE_FPS[v],
+                }),
+              }))}
+              onChange={(frame_rate) =>
+                onChange({
+                  ...settings,
+                  video: {
+                    ...settings.video,
+                    frame_rate: frame_rate as FrameRate,
+                  },
+                })
+              }
+              disabled={disabled}
+            />
+            <SettingRow
+              testId="quality-bitrate"
+              label={t("settings.basic.quality.specs.bitrate")}
+              hint={t("settings.basic.quality.specs.sizePerMinuteHint", {
+                size: megabytesPerMinute(
+                  BITRATE_MBPS[settings.video.bitrate_preset],
+                ),
+              })}
+              value={settings.video.bitrate_preset}
+              options={BITRATE_OPTIONS.map((v) => ({
+                value: v,
+                label: `${BITRATE_MBPS[v]} Mbps`,
+              }))}
+              onChange={(bitrate_preset) =>
+                onChange({
+                  ...settings,
+                  video: {
+                    ...settings.video,
+                    bitrate_preset: bitrate_preset as BitratePreset,
+                  },
+                })
+              }
+              disabled={disabled}
+            />
+            {/* 녹화 크기는 고를 수 있는 값이 아니다 — Windows 캡처는 게임 창 크기를
               그대로 쓴다(`commands.rs` 의 `recording_quality_resolution_label`).
               드롭다운으로 만들면 눌러도 아무 일이 없는 가짜 컨트롤이 된다. */}
-          <div className="flex items-center justify-between gap-3 py-2.5 text-sm">
-            <span>{t("settings.basic.quality.specs.captureSize")}</span>
-            <span className="text-muted-foreground">
-              {t("settings.basic.quality.specs.captureSizeValue")}
-            </span>
+            <div className="flex items-center justify-between gap-3 py-2.5 text-sm">
+              <span>{t("settings.basic.quality.specs.captureSize")}</span>
+              <span className="text-muted-foreground">
+                {t("settings.basic.quality.specs.captureSizeValue")}
+              </span>
+            </div>
           </div>
-        </div>
-        <p
-          className="mt-3 text-xs text-muted-foreground"
-          style={{ wordBreak: "keep-all" }}
-        >
-          {t("settings.basic.quality.note")}
-        </p>
-      </BasicCard>)}
-
-      {/* 3. 소리 */}
-      {shows("sound") && (
-      <BasicCard
-        testId="basic-sound"
-        icon={<Volume2 className="h-5 w-5" aria-hidden="true" />}
-        title={t("settings.basic.sound.title")}
-        description={t("settings.basic.sound.description")}
-        badge={
-          soundMode === "custom" ? t("settings.basic.customLabel") : undefined
-        }
-      >
-        <OptionCards
-          name="sound-mode"
-          value={soundMode === "custom" ? "" : soundMode}
-          onValueChange={handleSoundChange}
-          disabled={disabled}
-          recommendedLabel={t("settings.basic.recommendedBadge")}
-          options={SOUND_ORDER.map((mode) => ({
-            value: mode,
-            label: t(`settings.basic.sound.options.${mode}.label`),
-            description: t(`settings.basic.sound.options.${mode}.description`),
-            icon: SOUND_ICONS[mode],
-            recommended: mode === RECOMMENDED_SOUND,
-          }))}
-        />
-        {/* 시스템 소리 전체가 섞여 들어간다는 사실은 업로드 사고로 이어지므로
-            (디스코드 통화·음악이 그대로 클립에 남는다) 고른 순간 밝힌다. */}
-        {settings.audio.record_system_audio && (
           <p
-            data-testid="sound-system-warning"
             className="mt-3 text-xs text-muted-foreground"
             style={{ wordBreak: "keep-all" }}
           >
-            {t("settings.basic.sound.systemAudioNote")}
+            {t("settings.basic.quality.note")}
           </p>
-        )}
-      </BasicCard>)}
+        </BasicCard>
+      )}
+
+      {/* 3. 소리 */}
+      {shows("sound") && (
+        <BasicCard
+          testId="basic-sound"
+          icon={<Volume2 className="h-5 w-5" aria-hidden="true" />}
+          title={t("settings.basic.sound.title")}
+          description={t("settings.basic.sound.description")}
+          badge={
+            soundMode === "custom" ? t("settings.basic.customLabel") : undefined
+          }
+        >
+          <OptionCards
+            name="sound-mode"
+            value={soundMode === "custom" ? "" : soundMode}
+            onValueChange={handleSoundChange}
+            disabled={disabled}
+            recommendedLabel={t("settings.basic.recommendedBadge")}
+            options={SOUND_ORDER.map((mode) => ({
+              value: mode,
+              label: t(`settings.basic.sound.options.${mode}.label`),
+              description: t(
+                `settings.basic.sound.options.${mode}.description`,
+              ),
+              icon: SOUND_ICONS[mode],
+              recommended: mode === RECOMMENDED_SOUND,
+            }))}
+          />
+          {/* 시스템 소리 전체가 섞여 들어간다는 사실은 업로드 사고로 이어지므로
+            (디스코드 통화·음악이 그대로 클립에 남는다) 고른 순간 밝힌다. */}
+          {settings.audio.record_system_audio && (
+            <p
+              data-testid="sound-system-warning"
+              className="mt-3 text-xs text-muted-foreground"
+              style={{ wordBreak: "keep-all" }}
+            >
+              {t("settings.basic.sound.systemAudioNote")}
+            </p>
+          )}
+        </BasicCard>
+      )}
 
       {/* 4. 저장 위치 */}
       {shows("storage") && (
-      <BasicCard
-        testId="basic-storage"
-        icon={<HardDrive className="h-5 w-5" aria-hidden="true" />}
-        title={t("settings.basic.storage.title")}
-        description={t("settings.basic.storage.description")}
-      >
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/5 bg-white/[0.02] p-3">
-            <code
-              data-testid="storage-path"
-              className="min-w-0 flex-1 break-all text-xs text-muted-foreground"
-            >
-              {recordingsPath ?? t("settings.basic.storage.pathUnknown")}
-            </code>
-            <Button
-              variant="outline"
-              size="sm"
-              className="min-h-[44px] shrink-0"
-              onClick={handleOpenFolder}
-              disabled={!recordingsPath}
-              data-testid="storage-open-folder"
-            >
-              {t("settings.basic.storage.openFolder")}
-            </Button>
-          </div>
-
-          <div className="flex items-center justify-between gap-4">
-            <div className="space-y-0.5">
-              <Label htmlFor="basic-auto-cleanup">
-                {t("settings.basic.storage.autoCleanupLabel")}
-              </Label>
-              <p
-                className="text-sm text-muted-foreground"
-                style={{ wordBreak: "keep-all" }}
+        <BasicCard
+          testId="basic-storage"
+          icon={<HardDrive className="h-5 w-5" aria-hidden="true" />}
+          title={t("settings.basic.storage.title")}
+          description={t("settings.basic.storage.description")}
+        >
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+              <code
+                data-testid="storage-path"
+                className="min-w-0 flex-1 break-all text-xs text-muted-foreground"
               >
-                {t("settings.basic.storage.autoCleanupDescription")}
-              </p>
-            </div>
-            <Switch
-              id="basic-auto-cleanup"
-              checked={settings.storage.auto_delete_enabled}
-              disabled={disabled}
-              onCheckedChange={(checked: boolean) =>
-                handleStorageChange("auto_delete_enabled", checked)
-              }
-            />
-          </div>
-
-          <div className="flex items-center justify-between gap-4">
-            <div className="space-y-0.5">
-              <Label htmlFor="basic-max-storage-gb">
-                {t("settings.basic.storage.limitLabel")}
-              </Label>
-              <p
-                className="text-sm text-muted-foreground"
-                style={{ wordBreak: "keep-all" }}
+                {recordingsPath ?? t("settings.basic.storage.pathUnknown")}
+              </code>
+              <Button
+                variant="outline"
+                size="sm"
+                className="min-h-[44px] shrink-0"
+                onClick={handleOpenFolder}
+                disabled={!recordingsPath}
+                data-testid="storage-open-folder"
               >
-                {settings.storage.auto_delete_enabled
-                  ? t("settings.basic.storage.limitDescription")
-                  : t("settings.basic.storage.limitDisabledHint")}
-              </p>
+                {t("settings.basic.storage.openFolder")}
+              </Button>
             </div>
-            <Input
-              id="basic-max-storage-gb"
-              type="number"
-              min={1}
-              max={10000}
-              className="w-24 text-right"
-              value={settings.storage.max_storage_gb}
-              disabled={disabled || !settings.storage.auto_delete_enabled}
-              onChange={(event) =>
-                handleStorageChange(
-                  "max_storage_gb",
-                  clampStorageGb(event.target.value),
-                )
-              }
-            />
+
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <Label htmlFor="basic-auto-cleanup">
+                  {t("settings.basic.storage.autoCleanupLabel")}
+                </Label>
+                <p
+                  className="text-sm text-muted-foreground"
+                  style={{ wordBreak: "keep-all" }}
+                >
+                  {t("settings.basic.storage.autoCleanupDescription")}
+                </p>
+              </div>
+              <Switch
+                id="basic-auto-cleanup"
+                checked={settings.storage.auto_delete_enabled}
+                disabled={disabled}
+                onCheckedChange={(checked: boolean) =>
+                  handleStorageChange("auto_delete_enabled", checked)
+                }
+              />
+            </div>
+
+            <div
+              className="grid gap-2 rounded-lg border border-white/5 bg-white/[0.02] p-3 text-xs text-muted-foreground sm:grid-cols-3"
+              data-testid="storage-estimate"
+            >
+              <span>
+                {t("settings.basic.storage.currentMedia", {
+                  size: formatBytes(
+                    storageUsageBytes,
+                    t("settings.basic.storage.checking", "Checking…"),
+                  ),
+                })}
+              </span>
+              <span>
+                {t("settings.basic.storage.freeSpace", {
+                  size:
+                    availableStorageGb === null
+                      ? t("settings.basic.storage.checking", "Checking…")
+                      : `${availableStorageGb.toFixed(1)} GB`,
+                })}
+              </span>
+              <span>
+                {t("settings.basic.storage.recordingEstimate", {
+                  size: estimatedGbPerHour.toFixed(1),
+                  bitrate: bitrateMbps,
+                })}
+              </span>
+              {estimatedHoursRemaining !== null &&
+                estimatedHoursRemaining < 2 && (
+                  <strong className="text-amber-300 sm:col-span-3">
+                    {t("settings.basic.storage.lowSpaceRisk", {
+                      hours: estimatedHoursRemaining.toFixed(1),
+                    })}
+                  </strong>
+                )}
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <Label htmlFor="basic-max-storage-gb">
+                  {t("settings.basic.storage.limitLabel")}
+                </Label>
+                <p
+                  className="text-sm text-muted-foreground"
+                  style={{ wordBreak: "keep-all" }}
+                >
+                  {settings.storage.auto_delete_enabled
+                    ? t("settings.basic.storage.limitDescription")
+                    : t("settings.basic.storage.limitDisabledHint")}
+                </p>
+              </div>
+              <Input
+                id="basic-max-storage-gb"
+                type="number"
+                min={1}
+                max={10000}
+                className="w-24 text-right"
+                value={settings.storage.max_storage_gb}
+                disabled={disabled || !settings.storage.auto_delete_enabled}
+                onChange={(event) =>
+                  handleStorageChange(
+                    "max_storage_gb",
+                    clampStorageGb(event.target.value),
+                  )
+                }
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <Label htmlFor="basic-auto-delete-days">
+                  {t("settings.basic.storage.retentionPeriod")}
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.basic.storage.retentionDescription")}
+                </p>
+              </div>
+              <Input
+                id="basic-auto-delete-days"
+                type="number"
+                min={1}
+                max={3650}
+                className="w-24 text-right"
+                value={settings.storage.auto_delete_days}
+                disabled={disabled || !settings.storage.auto_delete_enabled}
+                onChange={(event) =>
+                  handleStorageChange(
+                    "auto_delete_days",
+                    clampRetentionDays(event.target.value),
+                  )
+                }
+              />
+            </div>
           </div>
-        </div>
-      </BasicCard>)}
+        </BasicCard>
+      )}
 
       {/* 5. 리그 켜면 자동 실행 */}
       {shows("autoStart") && (
-      <BasicCard
-        testId="basic-auto-start"
-        icon={<Zap className="h-5 w-5" aria-hidden="true" />}
-        title={t("settings.basic.autoStart.title")}
-        description={t("settings.basic.autoStart.description")}
-      >
-        <div className="flex items-center justify-between gap-4">
-          <Label htmlFor="basic-auto-start-switch" className="flex-1 cursor-pointer">
-            {t("settings.basic.autoStart.label")}
-          </Label>
-          <Switch
-            id="basic-auto-start-switch"
-            checked={settings.auto_start_with_league}
-            disabled={disabled}
-            onCheckedChange={(checked: boolean) =>
-              onChange({ ...settings, auto_start_with_league: checked })
-            }
-          />
-        </div>
-      </BasicCard>)}
+        <BasicCard
+          testId="basic-auto-start"
+          icon={<Zap className="h-5 w-5" aria-hidden="true" />}
+          title={t("settings.basic.autoStart.title")}
+          description={t("settings.basic.autoStart.description")}
+        >
+          <div className="flex items-center justify-between gap-4">
+            <Label
+              htmlFor="basic-auto-start-switch"
+              className="flex-1 cursor-pointer"
+            >
+              {t("settings.basic.autoStart.label")}
+            </Label>
+            <Switch
+              id="basic-auto-start-switch"
+              checked={settings.launch_on_windows_startup}
+              disabled={disabled}
+              onCheckedChange={(checked: boolean) =>
+                onChange({ ...settings, launch_on_windows_startup: checked })
+              }
+            />
+          </div>
+        </BasicCard>
+      )}
     </div>
   );
 }
@@ -855,4 +1005,17 @@ function clampStorageGb(raw: string): number {
   const parsed = parseInt(raw, 10);
   if (Number.isNaN(parsed)) return 1;
   return Math.min(10000, Math.max(1, parsed));
+}
+
+function clampRetentionDays(raw: string): number {
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed)) return 1;
+  return Math.min(3650, Math.max(1, parsed));
+}
+
+function formatBytes(bytes: number | null, unknownLabel = "Checking…"): string {
+  if (bytes === null) return unknownLabel;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }

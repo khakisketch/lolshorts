@@ -1,9 +1,5 @@
-use super::{
-    License, RefreshTokenRequest, Result, Session, SignInRequest, SignUpRequest, SupabaseError,
-    SupabaseErrorResponse, SupabaseUser,
-};
+use super::{License, Result, SupabaseError, SupabaseUser};
 use reqwest::Client;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
 
 #[derive(Debug, Clone)]
@@ -55,152 +51,6 @@ impl SupabaseClient {
     pub fn from_env() -> Result<Self> {
         let config = SupabaseConfig::from_env()?;
         Self::new(config)
-    }
-
-    /// Sign up a new user with email and password
-    pub async fn sign_up(&self, email: &str, password: &str) -> Result<Session> {
-        info!("Attempting to sign up user: {}", email);
-
-        // Check if email confirmation should be disabled (for development)
-        let disable_email_confirm = cfg!(debug_assertions)
-            && std::env::var("SUPABASE_DISABLE_EMAIL_CONFIRM")
-                .unwrap_or_else(|_| "false".to_string())
-                .to_lowercase()
-                == "true";
-
-        let mut url = format!("{}/auth/v1/signup", self.config.project_url);
-
-        // Add autoconfirm parameter if email confirmation is disabled
-        if disable_email_confirm {
-            url.push_str("?autoconfirm=true");
-            info!("Email confirmation disabled for development");
-        }
-
-        let response = self
-            .client
-            .post(&url)
-            .header("apikey", &self.config.anon_key)
-            .header("Content-Type", "application/json")
-            .json(&SignUpRequest {
-                email: email.to_string(),
-                password: password.to_string(),
-            })
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let session: Session = response.json().await.map_err(|e| {
-                error!("Failed to parse sign up response: {}", e);
-                SupabaseError::InvalidResponse(e.to_string())
-            })?;
-
-            info!("Sign up successful for user: {}", email);
-            Ok(session)
-        } else {
-            let error_response: SupabaseErrorResponse = response.json().await.map_err(|e| {
-                error!("Failed to parse error response: {}", e);
-                SupabaseError::InvalidResponse(e.to_string())
-            })?;
-
-            error!("Sign up failed for {}: {}", email, error_response.error);
-            Err(SupabaseError::AuthFailed(format!(
-                "{}: {}",
-                error_response.error,
-                error_response.error_description.unwrap_or_default()
-            )))
-        }
-    }
-
-    /// Sign in an existing user with email and password
-    pub async fn sign_in(&self, email: &str, password: &str) -> Result<Session> {
-        info!("Attempting to sign in user: {}", email);
-
-        let url = format!(
-            "{}/auth/v1/token?grant_type=password",
-            self.config.project_url
-        );
-
-        let response = self
-            .client
-            .post(&url)
-            .header("apikey", &self.config.anon_key)
-            .header("Content-Type", "application/json")
-            .json(&SignInRequest {
-                email: email.to_string(),
-                password: password.to_string(),
-            })
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let session: Session = response.json().await.map_err(|e| {
-                error!("Failed to parse sign in response: {}", e);
-                SupabaseError::InvalidResponse(e.to_string())
-            })?;
-
-            info!("Sign in successful for user: {}", email);
-            Ok(session)
-        } else {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-
-            error!("Sign in failed for {}: {} - {}", email, status, error_text);
-
-            if status == reqwest::StatusCode::BAD_REQUEST {
-                Err(SupabaseError::AuthFailed(
-                    "Invalid email or password".to_string(),
-                ))
-            } else if status == reqwest::StatusCode::UNAUTHORIZED {
-                Err(SupabaseError::Unauthorized(
-                    "Unauthorized access".to_string(),
-                ))
-            } else {
-                Err(SupabaseError::ApiError(error_text))
-            }
-        }
-    }
-
-    /// Refresh an existing session using a refresh token
-    pub async fn refresh_token(&self, refresh_token: &str) -> Result<Session> {
-        debug!("Attempting to refresh session token");
-
-        let url = format!(
-            "{}/auth/v1/token?grant_type=refresh_token",
-            self.config.project_url
-        );
-
-        let response = self
-            .client
-            .post(&url)
-            .header("apikey", &self.config.anon_key)
-            .header("Content-Type", "application/json")
-            .json(&RefreshTokenRequest {
-                refresh_token: refresh_token.to_string(),
-            })
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let session: Session = response.json().await.map_err(|e| {
-                error!("Failed to parse refresh token response: {}", e);
-                SupabaseError::InvalidResponse(e.to_string())
-            })?;
-
-            info!("Token refresh successful");
-            Ok(session)
-        } else {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-
-            error!("Token refresh failed: {} - {}", status, error_text);
-            Err(SupabaseError::AuthFailed(error_text))
-        }
     }
 
     /// Get user details using an access token
@@ -270,16 +120,6 @@ impl SupabaseClient {
             error!("Sign out failed: {}", error_text);
             Err(SupabaseError::ApiError(error_text))
         }
-    }
-
-    /// Check if an access token is expired
-    pub fn is_token_expired(&self, session: &Session) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        session.expires_at <= now
     }
 
     /// Get the Supabase configuration
@@ -655,52 +495,6 @@ mod tests {
 
         assert_eq!(config.project_url, "https://example.supabase.co");
         assert_eq!(config.anon_key, "test-anon-key");
-    }
-
-    #[test]
-    fn test_is_token_expired() {
-        let config = SupabaseConfig::new(
-            "https://example.supabase.co".to_string(),
-            "test-key".to_string(),
-        );
-        let client = SupabaseClient::new(config).expect("Test client should be created");
-
-        let user = SupabaseUser {
-            id: "test-id".to_string(),
-            email: "test@example.com".to_string(),
-            email_confirmed_at: None,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
-            app_metadata: serde_json::json!({}),
-            user_metadata: serde_json::json!({}),
-        };
-
-        // Token expired 1 hour ago
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        let expired_session = Session {
-            access_token: "test-token".to_string(),
-            refresh_token: "refresh-token".to_string(),
-            expires_in: 3600,
-            expires_at: now - 3600,
-            user: user.clone(),
-        };
-
-        assert!(client.is_token_expired(&expired_session));
-
-        // Token expires 1 hour from now
-        let valid_session = Session {
-            access_token: "test-token".to_string(),
-            refresh_token: "refresh-token".to_string(),
-            expires_in: 3600,
-            expires_at: now + 3600,
-            user,
-        };
-
-        assert!(!client.is_token_expired(&valid_session));
     }
 
     #[test]

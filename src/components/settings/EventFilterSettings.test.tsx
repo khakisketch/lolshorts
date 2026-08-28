@@ -164,7 +164,9 @@ describe("EventFilterSettings 위계 (백엔드 미러)", () => {
 
 describe("isSubSituationVisible", () => {
   it("부모가 켜져 있으면 감춘다 — 그 스위치는 결과를 바꾸지 못한다", () => {
-    const filter = { record_kills: true } as Partial<Record<EventFlag, boolean>>;
+    const filter = { record_kills: true } as Partial<
+      Record<EventFlag, boolean>
+    >;
     expect(isSubSituationVisible("record_shutdown", filter)).toBe(false);
   });
 
@@ -205,7 +207,9 @@ describe("EventFilterSettings 렌더", () => {
     );
 
     expect(screen.queryByTestId("event-group-kills-exceptions")).toBeNull();
-    expect(screen.getByTestId("event-group-kills-included")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("event-group-kills-included"),
+    ).toBeInTheDocument();
   });
 
   it("부모를 끄면 예외를 고를 수 있게 펼친다", () => {
@@ -219,7 +223,9 @@ describe("EventFilterSettings 렌더", () => {
     const exceptions = screen.getByTestId("event-group-deaths-exceptions");
     expect(exceptions).toBeInTheDocument();
     // "죽는 장면은 됐고 퍼블 당한 것만" — 사용자가 원한 조합이 여기서 가능해진다.
-    expect(screen.getByLabelText(/record_first_blood_victim/)).toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/record_first_blood_victim/),
+    ).toBeInTheDocument();
   });
 
   it("예외를 켜면 그 플래그만 바뀐다", () => {
@@ -276,7 +282,10 @@ describe("EventFilterSettings 렌더", () => {
       "record_steal",
     ];
     for (const flag of expected) {
-      expect({ flag, placed: placed.has(flag) }).toEqual({ flag, placed: true });
+      expect({ flag, placed: placed.has(flag) }).toEqual({
+        flag,
+        placed: true,
+      });
     }
   });
 });

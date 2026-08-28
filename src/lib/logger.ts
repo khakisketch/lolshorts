@@ -2,7 +2,7 @@ const isDev = (): boolean => {
   try {
     return import.meta.env?.DEV ?? false;
   } catch {
-    return process.env.NODE_ENV !== 'production';
+    return process.env.NODE_ENV !== "production";
   }
 };
 

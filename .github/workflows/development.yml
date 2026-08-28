@@ -2,9 +2,9 @@ name: Development Tools
 
 on:
   push:
-    branches: [ develop, feature/* ]
+    branches: [develop, feature/*]
   pull_request:
-    branches: [ develop ]
+    branches: [develop]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,67 +15,70 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: rustfmt, clippy
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          components: rustfmt, clippy
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y pkg-config libssl-dev
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
 
-    - name: Check formatting
-      working-directory: ./src-tauri
-      run: cargo fmt -- --check
+      - name: Check formatting
+        working-directory: ./src-tauri
+        run: cargo fmt -- --check
 
-    - name: Run Clippy
-      working-directory: ./src-tauri
-      run: cargo clippy -- -D warnings -W clippy::all
+      - name: Run Clippy
+        working-directory: ./src-tauri
+        run: cargo clippy -- -D warnings -W clippy::all
 
-    - name: Check for documentation
-      working-directory: ./src-tauri
-      run: cargo doc --no-deps
+      - name: Check for documentation
+        working-directory: ./src-tauri
+        run: cargo doc --no-deps
 
-    - name: Install cargo-deny
-      run: cargo install cargo-deny
+      - name: Install cargo-deny
+        run: cargo install cargo-deny
 
-    - name: Run cargo-deny
-      working-directory: ./src-tauri
-      run: cargo deny check
+      - name: Run cargo-deny
+        working-directory: ./src-tauri
+        run: cargo deny check
 
   # Frontend checks
   frontend-quality:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
-        cache-dependency-path: package-lock.json
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.2.0"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
 
-    - name: Install dependencies
-      run: npm ci
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
-    - name: Run TypeScript checks
-      run: npm run typecheck
+      - name: Install dependencies
+        run: npm ci
 
-    - name: Run ESLint
-      run: npm run lint
+      - name: Run TypeScript checks
+        run: npm run typecheck
 
-    - name: Run Prettier check
-      run: npx prettier --check "src/**/*.{ts,tsx,css}"
+      - name: Run ESLint
+        run: npm run lint
 
-    - name: Build frontend
-      run: npm run build
+      - name: Run Prettier check
+        run: npx prettier --check "src/**/*.{ts,tsx,css}"
+
+      - name: Build frontend
+        run: npm run build
 
   # Unit tests
   unit-tests:
@@ -86,40 +89,40 @@ jobs:
         rust: [stable, beta]
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: ${{ matrix.rust }}
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          toolchain: ${{ matrix.rust }}
 
-    - name: Cache Rust dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          src-tauri/target
-        key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Install system dependencies
-      run: |
-        if [ "$RUNNER_OS" == "Linux" ]; then
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
-        elif [ "$RUNNER_OS" == "macOS" ]; then
-          brew install pkg-config
-        fi
-      shell: bash
+      - name: Install system dependencies
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y pkg-config libssl-dev
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install pkg-config
+          fi
+        shell: bash
 
-    - name: Run unit tests
-      working-directory: ./src-tauri
-      run: cargo test --verbose
+      - name: Run unit tests
+        working-directory: ./src-tauri
+        run: cargo test --verbose
 
-    - name: Run doc tests
-      working-directory: ./src-tauri
-      run: cargo test --doc
+      - name: Run doc tests
+        working-directory: ./src-tauri
+        run: cargo test --doc
 
   # Coverage report
   coverage:
@@ -127,54 +130,54 @@ jobs:
     if: github.ref == 'refs/heads/develop'
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: llvm-tools-preview
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          components: llvm-tools-preview
 
-    - name: Install cargo-llvm-cov
-      run: cargo install cargo-llvm-cov
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y pkg-config libssl-dev
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
 
-    - name: Generate coverage report
-      working-directory: ./src-tauri
-      run: cargo llvm-cov --html --lcov
+      - name: Generate coverage report
+        working-directory: ./src-tauri
+        run: cargo llvm-cov --html --lcov
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
-      with:
-        file: ./src-tauri/target/llvm-cov/lcov.info
-        fail_ci_if_error: true
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./src-tauri/target/llvm-cov/lcov.info
+          fail_ci_if_error: true
 
   # Dependency update check
   dependency-check:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.94.1
 
-    - name: Install cargo-outdated
-      run: cargo install cargo-outdated
+      - name: Install cargo-outdated
+        run: cargo install cargo-outdated
 
-    - name: Check for outdated dependencies
-      working-directory: ./src-tauri
-      run: cargo outdated --root-deps-only
+      - name: Check for outdated dependencies
+        working-directory: ./src-tauri
+        run: cargo outdated --root-deps-only
 
-    - name: Check Node.js dependencies
-      run: |
-        npm ci
-        npm outdated || true
+      - name: Check Node.js dependencies
+        run: |
+          npm ci
+          npm outdated || true
 
   # Platform-specific tests
   platform-tests:
@@ -184,30 +187,30 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.94.1
 
-    - name: Install system dependencies
-      run: |
-        if [ "$RUNNER_OS" == "Linux" ]; then
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev ffmpeg
-        elif [ "$RUNNER_OS" == "macOS" ]; then
-          brew install ffmpeg pkg-config
-        elif [ "$RUNNER_OS" == "Windows" ]; then
-          winget install Gyan.FFmpeg
-        fi
-      shell: bash
+      - name: Install system dependencies
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y pkg-config libssl-dev ffmpeg
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install ffmpeg pkg-config
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            winget install Gyan.FFmpeg
+          fi
+        shell: bash
 
-    - name: Test platform detection
-      working-directory: ./src-tauri
-      run: |
-        cargo test platform_detection --verbose || echo "Platform detection tests skipped"
+      - name: Test platform detection
+        working-directory: ./src-tauri
+        run: |
+          cargo test platform_detection --verbose || echo "Platform detection tests skipped"
 
-    - name: Test backend factory
-      working-directory: ./src-tauri
-      run: |
-        cargo test backend_factory --verbose
+      - name: Test backend factory
+        working-directory: ./src-tauri
+        run: |
+          cargo test backend_factory --verbose

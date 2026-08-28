@@ -16,7 +16,13 @@
     "results": "結果",
     "proRequired": "PROが必要です",
     "replays": "リプレイ",
-    "userProfile": "ユーザープロフィール"
+    "userProfile": "ユーザープロフィール",
+    "recording": "録画",
+    "library": "ライブラリ",
+    "studio": "スタジオ",
+    "quit": "LoLShortsを終了",
+    "expandSidebar": "サイドバーを展開",
+    "collapseSidebar": "サイドバーを折りたたむ"
   },
   "auth": {
     "login": "ログイン",
@@ -291,7 +297,53 @@
     "generate": "動画を生成",
     "generating": "生成中...",
     "preview": "プレビュー",
-    "export": "エクスポート"
+    "export": "エクスポート",
+    "pinnedClips": {
+      "title": "Using the {{count}} clips you picked",
+      "summary": "{{clips}} clips from {{games}} games · about {{duration}}",
+      "description": "Your picks replace auto-selection and lock the game list. Every clip you picked goes in.",
+      "rationale": "The {{count}} clips you picked, ordered by highlight score across all selected games.",
+      "useAutomatic": "Switch to auto-selection",
+      "overTargetWarning": "Your picks are about {{estimated}} for a {{target}} target. Every selected scene will be included, so the finished video will be longer.",
+      "overrunTitle": "Include every selected clip?",
+      "overrunDescription": "You selected {{clips}} clips (about {{estimated}}) for a {{target}} target. The finished video will be longer because none of your picks will be removed.",
+      "includeAll": "Include all clips"
+    },
+    "quick": {
+      "title": "クイック作成",
+      "description": "試合と長さを選び、レンダリング前にすべてのシーンを確認します。",
+      "framing": "LoL フレーミング",
+      "preset": "書き出しプリセット",
+      "advanced": "詳細設定",
+      "review": "クリップを確認"
+    },
+    "storyboard": {
+      "title": "クリップを確認",
+      "summary": "{{clips}} クリップ・{{duration}}・{{parts}} 出力",
+      "reset": "おすすめに戻す",
+      "over180Title": "選択内容が Short 1本の長さを超えています",
+      "over180Body": "選択したシーンはすべて保持されます。Shorts シリーズか通常の縦動画を選んでください。",
+      "output": "出力",
+      "timeline": "ストーリーボード",
+      "moveUp": "上へ移動",
+      "moveDown": "下へ移動",
+      "remove": "クリップを除外",
+      "start": "開始（秒）",
+      "end": "終了（秒）",
+      "clipDuration": "{{source}} 中 {{duration}} を選択",
+      "generateSeries": "シリーズを生成"
+    },
+    "output": {
+      "single": "Short 1本",
+      "series": "Shorts シリーズ",
+      "vertical": "通常の縦動画"
+    },
+    "framing": {
+      "focus": "HUD + 戦闘フォーカス",
+      "safe": "全画面",
+      "crop": "中央クロップ"
+    },
+    "cancelJob": "生成をキャンセル"
   },
   "youtube": {
     "title": "YouTube",
@@ -350,6 +402,17 @@
   },
   "settings": {
     "title": "設定",
+    "basic": {
+      "storage": {
+        "currentMedia": "アプリ内メディア: {{size}}",
+        "freeSpace": "空き容量: {{size}}",
+        "checking": "確認中…",
+        "recordingEstimate": "録画の目安: {{bitrate}} Mbpsで1時間あたり約{{size}} GB",
+        "lowSpaceRisk": "容量不足の恐れ: 現在の画質ではあと約{{hours}}時間録画できます。",
+        "retentionPeriod": "保持期間",
+        "retentionDescription": "自動削除は有効にした場合のみ動作し、エクスポート済みクリップは標準では削除しません。"
+      }
+    },
     "license": {
       "title": "ライセンスとサブスクリプション",
       "description": "現在のプランとサブスクリプション情報",
@@ -697,6 +760,138 @@
       "errorTitle": "エラー",
       "errorDesc": "サポート要約の生成またはコピーに失敗しました。",
       "disclaimer": "サポート要約にはアプリバージョン、接続状態、システム指標、ディスク容量、診断チェックが含まれます。パスワード、OAuthトークン、リフレッシュトークン、決済キー、秘密鍵、プライベートメディア、スクリーンショット、個人ファイルは含まれません。"
+    }
+  },
+  "results": {
+    "tabs": {
+      "clips": "ゲーム記録",
+      "highlights": "完成動画",
+      "replays": "リプレイ"
+    },
+    "clips": {
+      "title": "ゲーム記録",
+      "description": "ゲームごとに、見どころのクリップをまとめています。",
+      "title": "Recommended clips",
+      "description": "Original game clips, ranked by the moments most worth watching.",
+      "sortLabel": "Sort clips",
+      "sortRecommended": "Best highlights",
+      "sortNewest": "Newest",
+      "game": "Game",
+      "select": "Select clip",
+      "play": "Play clip",
+      "loading": "Loading recorded clips...",
+      "loadingMore": "Loading more...",
+      "loadMore": "Load more games",
+      "loadError": "Could not load recorded clips.",
+      "skippedItems": "{{count}} damaged clip items were skipped.",
+      "emptyTitle": "No recorded clips yet",
+      "emptyDescription": "Play a game and your strongest moments will appear here.",
+      "unknownDate": "Date unavailable",
+      "clipCount": "{{count}} clips",
+      "selectedCount": "{{count}} selected",
+      "selectGame": "Select all",
+      "clearGameSelection": "Clear game",
+      "gameRank": "This game #{{rank}}",
+      "gameCount": "{{count}} games",
+      "expandAll": "Expand all",
+      "collapseAll": "Collapse all",
+      "searchLabel": "ゲームを検索",
+      "searchPlaceholder": "チャンピオン・モード・ゲームIDで検索",
+      "modeFilterLabel": "ゲームモードの絞り込み",
+      "allModes": "すべてのゲームモード",
+      "noMatches": "条件に一致するゲームがありません",
+      "clearFilters": "条件をクリア",
+      "storageStats": "ライブラリの容量概要",
+      "totalGames": "ゲーム数",
+      "totalClips": "クリップ数",
+      "storageUsed": "使用容量",
+      "selectionActions": "Selected clip actions",
+      "selectionSummary": "{{clips}} clips · {{games}} games · about {{duration}}",
+      "clearAll": "Clear all",
+      "createMontage": "Create montage",
+      "overTargetWarning": "Every selected scene will be included, so the finished video will be longer than the target."
+    }
+  },
+  "mediaJobs": {
+    "title": "メディアジョブ",
+    "queued": "待機中",
+    "processing": "処理中",
+    "completed": "完了",
+    "failed": "失敗",
+    "cancelled": "キャンセル済み",
+    "paused": "一時停止中",
+    "recoverable": "再開できます",
+    "resume": "ジョブを再開",
+    "discard": "ジョブを破棄",
+    "cancel": "ジョブをキャンセル",
+    "retry": "ジョブを再試行",
+    "empty": "メディアジョブはまだありません"
+  },
+  "outputValidation": {
+    "title": "出力チェック",
+    "duration": "再生時間",
+    "clipCount": "クリップ数",
+    "outputFile": "出力ファイル",
+    "fileSize": "ファイルデータ",
+    "verified": "確認済み",
+    "valid": "有効",
+    "warning": "警告",
+    "invalid": "無効",
+    "unknown": "不明",
+    "revalidate": "もう一度確認",
+    "needsReview": "要確認",
+    "missing": "ありません"
+  },
+  "resultSeries": {
+    "title": "シリーズ出力",
+    "part": "{{total}} 本中 {{current}} 本目",
+    "parts": "{{count}} 本",
+    "totalDuration": "合計時間: {{duration}}",
+    "totalSize": "合計サイズ: {{size}}",
+    "deleteGroup": "シリーズを削除",
+    "deletePart": "パート {{part}} を削除",
+    "sharePart": "このパートを共有"
+  },
+  "platformExport": {
+    "title": "別のプラットフォーム向けに書き出す",
+    "tiktok": "TikTok 向けに書き出す",
+    "instagramReels": "Instagram Reels 向けに書き出す",
+    "exporting": "書き出し中…",
+    "passthrough": "元のファイルを使用",
+    "convert": "プラットフォーム用に変換",
+    "cancel": "書き出しをキャンセル",
+    "busy": "別の書き出しが進行中です",
+    "confirmWarning": "プラットフォーム用の別コピーを書き出しますか？",
+    "success": "プラットフォーム用コピーを書き出しました",
+    "failed": "プラットフォーム用コピーを書き出せませんでした"
+  },
+  "appUpdater": {
+    "title": "LoLShorts のアップデートがあります",
+    "description": "バージョン {{available}} をインストールできます。現在は {{current}} です。",
+    "releaseNotes": "新機能",
+    "later": "後で",
+    "install": "アップデートをインストール",
+    "retry": "再試行",
+    "working": "お待ちください…",
+    "downloading": "アップデートをダウンロード中",
+    "installing": "インストーラーを起動中",
+    "progressLabel": "アップデートのダウンロード進行状況",
+    "windowsExitNotice": "Windows がアップデートをインストールする間、LoLShorts は終了します。続行前に作業を保存してください。",
+    "settingsTitle": "アプリのアップデート",
+    "currentVersion": "現在のバージョン: {{version}}",
+    "upToDate": "バージョン {{version}} は最新です。",
+    "disabled": "署名されていない開発ビルドではアップデートは無効です。",
+    "check": "アップデートを確認",
+    "checking": "確認中…",
+    "errors": {
+      "updater_disabled": "このビルドではアップデートが無効です。",
+      "update_busy": "録画を停止し、メディア処理の完了後にインストールしてください。",
+      "update_check_failed": "アップデートを確認できませんでした。再試行してください。",
+      "update_check_timeout": "アップデートサーバーが30秒以内に応答しませんでした。再試行してください。",
+      "update_download_timeout": "アップデートのダウンロードが15分を超えたため、現在のバージョンを維持しました。",
+      "update_signature_invalid": "アップデートの署名が無効なため、現在のバージョンを維持しました。",
+      "update_install_failed": "アップデートをインストールできなかったため、現在のバージョンを維持しました。",
+      "unknown": "アップデートを完了できませんでした。再試行してください。"
     }
   }
 }

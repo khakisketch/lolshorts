@@ -1,7 +1,7 @@
 // src/types/storage.ts
 // Aligned with Rust backend: src-tauri/src/storage/models.rs
 
-export type GameResult = 'Win' | 'Loss' | 'Remake';
+export type GameResult = "Win" | "Loss" | "Remake";
 
 export interface KDA {
   kills: number;
@@ -22,13 +22,13 @@ export interface GameMetadata {
 // EventType is a tagged enum in Rust with snake_case serialization.
 // Simple variants serialize as strings, Multikill/Custom carry data.
 export type EventType =
-  | 'champion_kill'
-  | 'turret_kill'
-  | 'inhibitor_kill'
-  | 'dragon_kill'
-  | 'baron_kill'
-  | 'ace'
-  | 'first_blood'
+  | "champion_kill"
+  | "turret_kill"
+  | "inhibitor_kill"
+  | "dragon_kill"
+  | "baron_kill"
+  | "ace"
+  | "first_blood"
   | { multikill: number }
   | { custom: string };
 
@@ -56,13 +56,13 @@ export type ScoreReason =
   /** 체력이 아주 낮은 상태였다. 값은 퍼센트(정수). */
   | { Clutch: number }
   /** 도움 없이 혼자 해냈다. */
-  | 'Solo'
+  | "Solo"
   /** 수적 열세였다. `[아군, 적군]`. */
   | { Outnumbered: [number, number] }
   /** 후반전이었다. */
-  | 'LateGame'
+  | "LateGame"
   /** 승부가 갈리기 직전이었다. */
-  | 'MatchPoint';
+  | "MatchPoint";
 
 export interface ClipMetadata {
   file_path: string;
@@ -88,6 +88,21 @@ export interface ClipMetadata {
   score_reasons?: ScoreReason[];
   created_at: string;
   usage_count?: number;
+}
+
+export type ClipVaultSort = "best" | "newest";
+
+export interface ClipVaultGameGroup {
+  game_id: string;
+  game: GameMetadata | null;
+  clips: ClipMetadata[];
+  clip_count: number;
+}
+
+export interface ClipVaultPage {
+  groups: ClipVaultGameGroup[];
+  next_cursor: string | null;
+  skipped_item_count: number;
 }
 
 export interface StorageStats {

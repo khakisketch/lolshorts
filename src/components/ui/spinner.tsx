@@ -1,6 +1,6 @@
-import { cn } from "@/lib/utils"
-import { Loader2, LucideProps } from "lucide-react"
-import { forwardRef } from "react"
+import { cn } from "@/lib/utils";
+import { Loader2, LucideProps } from "lucide-react";
+import { forwardRef } from "react";
 
 type SpinnerSize = "xs" | "sm" | "md" | "lg" | "xl";
 
@@ -15,11 +15,11 @@ const sizeMap: Record<SpinnerSize, { icon: number; text: string }> = {
   md: { icon: 24, text: "text-base" },
   lg: { icon: 32, text: "text-lg" },
   xl: { icon: 48, text: "text-xl" },
-}
+};
 
 const Spinner = forwardRef<SVGSVGElement, SpinnerProps>(
   ({ className, size = "md", label, ...props }, ref) => {
-    const { icon: iconSize, text: textSize } = sizeMap[size]
+    const { icon: iconSize, text: textSize } = sizeMap[size];
 
     return (
       <span className="inline-flex items-center gap-2">
@@ -33,38 +33,38 @@ const Spinner = forwardRef<SVGSVGElement, SpinnerProps>(
           <span className={cn("text-muted-foreground", textSize)}>{label}</span>
         )}
       </span>
-    )
-  }
-)
+    );
+  },
+);
 
-Spinner.displayName = "Spinner"
+Spinner.displayName = "Spinner";
 
 // Centered spinner for use in containers
 function SpinnerCenter({
   size = "lg",
   label,
-  className
+  className,
 }: {
   size?: SpinnerSize;
   label?: string;
-  className?: string
+  className?: string;
 }) {
   return (
     <div className={cn("flex items-center justify-center py-12", className)}>
       <Spinner size={size} label={label} />
     </div>
-  )
+  );
 }
 
 // Inline spinner for buttons and text
 function SpinnerInline({
   size = "sm",
-  className
+  className,
 }: {
   size?: SpinnerSize;
-  className?: string
+  className?: string;
 }) {
-  return <Spinner size={size} className={className} />
+  return <Spinner size={size} className={className} />;
 }
 
-export { Spinner, SpinnerCenter, SpinnerInline }
+export { Spinner, SpinnerCenter, SpinnerInline };

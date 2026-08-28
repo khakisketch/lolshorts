@@ -266,16 +266,19 @@ Try:
 
 **2. Clear Temp Files**:
 ```
-1. Close LoLShorts
-2. Navigate to: C:\Users\[You]\AppData\Local\LoLShorts\temp\
-3. Delete all files in temp folder
-4. Restart LoLShorts and retry
+1. Close LoLShorts and allow the five-second shutdown budget to finish
+2. Restart LoLShorts and inspect the processing job's recovery status
+3. Open Settings > Diagnostics if the job remains blocked
+4. Preserve the diagnostic bundle and affected file; do not manually delete the
+   whole app-data temp directory because it can contain recoverable job state
 ```
 
-**3. Update FFmpeg**:
-- ✅ Download latest FFmpeg (see installation section)
-- ✅ Replace old FFmpeg with new version
-- ✅ Restart LoLShorts
+**3. Verify the bundled FFmpeg sidecar**:
+- ✅ End users should install the latest signed LoLShorts build; do not replace
+  bundled executables manually
+- ✅ Developers should run `prepare_ffmpeg.ps1 -Source Auto` and then
+  `npm run verify:release-contract`
+- ✅ Restart LoLShorts and retain diagnostics if the executable check still fails
 
 **4. Check System Resources**:
 - ✅ Close other applications

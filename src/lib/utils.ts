@@ -15,10 +15,10 @@ export function getErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
   }
-  if (typeof err === 'string') {
+  if (typeof err === "string") {
     return err;
   }
-  if (err && typeof err === 'object' && 'message' in err) {
+  if (err && typeof err === "object" && "message" in err) {
     return String((err as { message: unknown }).message);
   }
   return String(err);
@@ -50,9 +50,9 @@ export function formatDuration(seconds: number): string {
   const secs = Math.floor(seconds % 60);
 
   if (hours > 0) {
-    return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return `${hours}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   }
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
 /**

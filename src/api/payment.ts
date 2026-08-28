@@ -1,4 +1,4 @@
-import { cmd } from './client';
+import { cmd } from "./client";
 
 export interface SubscriptionDetails {
   is_active: boolean;
@@ -20,14 +20,17 @@ export interface SubscriptionDetails {
 
 export const paymentApi = {
   confirmPayment: (paymentKey: string, orderId: string, amount: number) =>
-    cmd<SubscriptionDetails>('confirm_payment', { payment_key: paymentKey, order_id: orderId, amount }),
-    
-  getSubscriptionDetails: () => 
-    cmd<SubscriptionDetails>('get_subscription_details'),
-    
-  cancelSubscription: () => 
-    cmd<SubscriptionDetails>('cancel_subscription'),
+    cmd<SubscriptionDetails>("confirm_payment", {
+      payment_key: paymentKey,
+      order_id: orderId,
+      amount,
+    }),
 
-  openPaymentPage: (period: 'MONTHLY' | 'YEARLY' = 'MONTHLY') =>
-    cmd<string>('open_payment_page', { period }),
+  getSubscriptionDetails: () =>
+    cmd<SubscriptionDetails>("get_subscription_details"),
+
+  cancelSubscription: () => cmd<SubscriptionDetails>("cancel_subscription"),
+
+  openPaymentPage: (period: "MONTHLY" | "YEARLY" = "MONTHLY") =>
+    cmd<string>("open_payment_page", { period }),
 };

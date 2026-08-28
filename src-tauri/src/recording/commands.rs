@@ -1,6 +1,5 @@
 use super::game_monitor::{GameMode, UnifiedGameStatus};
 use super::RecordingStatus;
-use crate::auth::middleware::require_auth;
 use crate::error::{AppError, AppResult};
 use crate::lcu::PlayerInfo;
 use crate::recording::live_client::check_live_client_basic;
@@ -10,7 +9,8 @@ use crate::utils::security;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::State;
 
 #[derive(Serialize, Clone)]
@@ -18,6 +18,9 @@ pub struct RecordingStatusInfo {
     pub status: String,
     pub is_monitoring: bool,
     pub buffer_duration_secs: u32,
+    pub capture_mode: Option<crate::recording::CaptureMode>,
+    pub capture_backend: Option<crate::recording::CaptureBackend>,
+    pub capture_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,6 +51,43 @@ pub struct ReplayTargetCandidates {
 
 const MIN_RECORDING_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const RECORDING_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Environment checks start subprocesses, enumerate audio devices, and contact
+/// the Live Client API. Cache them so status/diagnostic callers cannot create a
+/// continuous background workload while the app is idle or in a game.
+const RECORDING_READINESS_CACHE_TTL: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordingReadinessCacheKey {
+    output_dir: PathBuf,
+    encoder_name: String,
+    software_fallback_name: String,
+    audio_configured: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RecordingReadinessEnvironmentProbe {
+    output_dir_error: Option<String>,
+    free_space_bytes: Option<u64>,
+    ffmpeg_path: Option<PathBuf>,
+    ffmpeg_error: Option<String>,
+    ffprobe_available: bool,
+    encoder_available: Option<bool>,
+    software_fallback_available: Option<bool>,
+    system_audio_device_available: bool,
+    live_client_available: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CachedRecordingReadinessEnvironmentProbe {
+    key: RecordingReadinessCacheKey,
+    checked_at: Instant,
+    probe: RecordingReadinessEnvironmentProbe,
+}
+
+static RECORDING_READINESS_ENVIRONMENT_CACHE: OnceLock<
+    Mutex<Option<CachedRecordingReadinessEnvironmentProbe>>,
+> = OnceLock::new();
+static RECORDING_READINESS_PROBE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 /// Show the overlay window when a recording actually starts, if the user has it
 /// enabled (B4 fix). Previously `overlay::show_overlay` was only called from the
@@ -99,6 +139,10 @@ pub struct RecordingReadiness {
     pub blockers: Vec<RecordingReadinessIssue>,
     pub warnings: Vec<RecordingReadinessIssue>,
     pub components: Vec<RecordingReadinessComponent>,
+    #[serde(default)]
+    pub public_services: Option<crate::public_service_config::PublicServiceStatus>,
+    #[serde(default)]
+    pub autostart: Option<crate::autostart::AutostartStatus>,
 }
 
 fn issue(code: &str, component: &str, message: &str, action: &str) -> RecordingReadinessIssue {
@@ -131,6 +175,7 @@ struct RecordingReadinessProbe {
     encoder_available: Option<bool>,
     software_fallback_available: Option<bool>,
     audio_configured: bool,
+    system_audio_device_available: bool,
     lcu_connected: bool,
     live_client_available: bool,
 }
@@ -316,17 +361,45 @@ fn build_recording_readiness(probe: RecordingReadinessProbe) -> RecordingReadine
         }
     }
 
-    if probe.audio_configured {
+    if probe.encoder_name.to_ascii_lowercase().contains("_nvenc")
+        && probe.encoder_available == Some(true)
+    {
+        components.push(component(
+            "support_matrix",
+            "ok",
+            "NVIDIA NVENC matches the official Windows 11 support target",
+        ));
+    } else {
         warnings.push(issue(
-            "audio_hardware_unverified",
+            "experimental_encoder_support",
+            "support_matrix",
+            "The configured encoder is outside the official Windows 11 + NVIDIA NVENC support target",
+            "Use NVIDIA NVENC for the supported release path, or explicitly continue with the experimental fallback",
+        ));
+        components.push(component(
+            "support_matrix",
+            "warning",
+            "AMD, Intel, and CPU encoders are experimental fallbacks",
+        ));
+    }
+
+    if probe.audio_configured && probe.system_audio_device_available {
+        components.push(component(
             "audio",
-            "Audio capture is configured, but hardware/device capture was not verified in readiness",
-            "Use the audio device list if recording has no sound",
+            "ok",
+            "A Windows system-audio output device is available",
+        ));
+    } else if probe.audio_configured {
+        warnings.push(issue(
+            "audio_device_missing",
+            "audio",
+            "Audio capture is configured, but no Windows output device was detected",
+            "Connect or enable an output device, then retry the readiness check",
         ));
         components.push(component(
             "audio",
-            "unknown",
-            "Audio hardware not probed by readiness",
+            "warning",
+            "No output audio device detected",
         ));
     } else {
         warnings.push(issue(
@@ -381,6 +454,8 @@ fn build_recording_readiness(probe: RecordingReadinessProbe) -> RecordingReadine
         blockers,
         warnings,
         components,
+        public_services: None,
+        autostart: None,
     }
 }
 
@@ -497,17 +572,54 @@ fn ffmpeg_encoder_available(ffmpeg_path: &Path, encoder_name: &str) -> Option<bo
     Some(stdout.lines().any(|line| line.contains(encoder_name)))
 }
 
-pub(crate) async fn collect_recording_readiness(state: &AppState) -> RecordingReadiness {
-    let (recording_status, config) = {
-        let manager = state.recording_manager.read().await;
-        (manager.get_status().await, manager.get_config().clone())
-    };
+fn readiness_cache_is_fresh(checked_at: Instant, now: Instant) -> bool {
+    now.checked_duration_since(checked_at)
+        .is_some_and(|age| age < RECORDING_READINESS_CACHE_TTL)
+}
 
-    let output_dir_error = std::fs::create_dir_all(&config.output_dir)
+fn readiness_cache() -> &'static Mutex<Option<CachedRecordingReadinessEnvironmentProbe>> {
+    RECORDING_READINESS_ENVIRONMENT_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn readiness_probe_lock() -> &'static tokio::sync::Mutex<()> {
+    RECORDING_READINESS_PROBE_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+fn cached_environment_probe(
+    key: &RecordingReadinessCacheKey,
+) -> Option<RecordingReadinessEnvironmentProbe> {
+    let cache = readiness_cache().lock().ok()?;
+    let cached = cache.as_ref()?;
+    if cached.key == *key && readiness_cache_is_fresh(cached.checked_at, Instant::now()) {
+        Some(cached.probe.clone())
+    } else {
+        None
+    }
+}
+
+fn cache_environment_probe(
+    key: RecordingReadinessCacheKey,
+    probe: RecordingReadinessEnvironmentProbe,
+) {
+    if let Ok(mut cache) = readiness_cache().lock() {
+        *cache = Some(CachedRecordingReadinessEnvironmentProbe {
+            key,
+            checked_at: Instant::now(),
+            probe,
+        });
+    }
+}
+
+fn probe_recording_environment(
+    key: &RecordingReadinessCacheKey,
+) -> RecordingReadinessEnvironmentProbe {
+    let output_dir_error = std::fs::create_dir_all(&key.output_dir)
         .err()
         .map(|error| error.to_string());
     let free_space_bytes = if output_dir_error.is_none() {
-        get_free_disk_space(&config.output_dir)
+        crate::utils::disk::query_disk_space(&key.output_dir)
+            .ok()
+            .map(|snapshot| snapshot.available_bytes)
     } else {
         None
     };
@@ -516,36 +628,153 @@ pub(crate) async fn collect_recording_readiness(state: &AppState) -> RecordingRe
     let ffmpeg_path = ffmpeg_lookup.as_ref().ok().cloned();
     let ffmpeg_error = ffmpeg_lookup.err().map(|error| error.to_string());
     let ffprobe_available = get_ffprobe_path().is_ok();
-    let encoder_name = config
-        .encoder
-        .to_ffmpeg_name_with_hw(config.hw_accel)
-        .to_string();
     let encoder_available = ffmpeg_path
         .as_deref()
-        .and_then(|path| ffmpeg_encoder_available(path, &encoder_name));
-    let software_fallback = config.encoder.to_software_fallback().to_string();
+        .and_then(|path| ffmpeg_encoder_available(path, &key.encoder_name));
     let software_fallback_available = ffmpeg_path
         .as_deref()
-        .and_then(|path| ffmpeg_encoder_available(path, &software_fallback));
-    let audio_configured = config.audio_config.is_some();
-    let lcu_connected = state.lcu_client.lock().await.is_connected();
-    let live_client_available = check_live_client_basic().await.is_some();
+        .and_then(|path| ffmpeg_encoder_available(path, &key.software_fallback_name));
+    let system_audio_device_available =
+        !crate::recording::wasapi_audio::enumerate_system_audio_devices().is_empty();
 
-    build_recording_readiness(RecordingReadinessProbe {
-        recording_status,
-        output_dir: config.output_dir,
+    RecordingReadinessEnvironmentProbe {
         output_dir_error,
         free_space_bytes,
         ffmpeg_path,
         ffmpeg_error,
         ffprobe_available,
-        encoder_name,
         encoder_available,
         software_fallback_available,
+        system_audio_device_available,
+        // The Live Client check is asynchronous and is populated by the caller.
+        live_client_available: false,
+    }
+}
+
+async fn collect_environment_probe(
+    key: RecordingReadinessCacheKey,
+    force_refresh: bool,
+) -> RecordingReadinessEnvironmentProbe {
+    if !force_refresh {
+        if let Some(probe) = cached_environment_probe(&key) {
+            return probe;
+        }
+    }
+
+    // On startup the app, onboarding wizard, and diagnostics screen can all
+    // request readiness at once. Serialize cache misses so that concurrent
+    // callers do not each spawn FFmpeg probes and enumerate devices.
+    let _probe_guard = readiness_probe_lock().lock().await;
+    if !force_refresh {
+        if let Some(probe) = cached_environment_probe(&key) {
+            return probe;
+        }
+    }
+
+    let probe_key = key.clone();
+    let (environment_result, live_client_available) = tokio::join!(
+        tokio::task::spawn_blocking(move || probe_recording_environment(&probe_key)),
+        check_live_client_basic(),
+    );
+    let mut environment = environment_result.unwrap_or_else(|error| {
+        tracing::warn!(%error, "recording readiness background probe failed");
+        RecordingReadinessEnvironmentProbe {
+            output_dir_error: None,
+            free_space_bytes: None,
+            ffmpeg_path: None,
+            ffmpeg_error: Some("Readiness background probe did not complete".to_string()),
+            ffprobe_available: false,
+            encoder_available: None,
+            software_fallback_available: None,
+            system_audio_device_available: false,
+            live_client_available: false,
+        }
+    });
+    environment.live_client_available = live_client_available.is_some();
+    cache_environment_probe(key, environment.clone());
+    environment
+}
+
+pub(crate) async fn collect_recording_readiness(state: &AppState) -> RecordingReadiness {
+    collect_recording_readiness_with_cache(state, false).await
+}
+
+async fn collect_fresh_recording_readiness(state: &AppState) -> RecordingReadiness {
+    collect_recording_readiness_with_cache(state, true).await
+}
+
+async fn collect_recording_readiness_with_cache(
+    state: &AppState,
+    force_refresh: bool,
+) -> RecordingReadiness {
+    let (recording_status, config) = {
+        let manager = state.recording_manager.read().await;
+        (manager.get_status().await, manager.get_config().clone())
+    };
+    let encoder_name = config
+        .encoder
+        .to_ffmpeg_name_with_hw(config.hw_accel)
+        .to_string();
+    let software_fallback_name = config.encoder.to_software_fallback().to_string();
+    let audio_configured = config.audio_config.is_some();
+    let environment = collect_environment_probe(
+        RecordingReadinessCacheKey {
+            output_dir: config.output_dir.clone(),
+            encoder_name: encoder_name.clone(),
+            software_fallback_name,
+            audio_configured,
+        },
+        force_refresh,
+    )
+    .await;
+    let lcu_connected = state.lcu_client.lock().await.is_connected();
+
+    let mut readiness = build_recording_readiness(RecordingReadinessProbe {
+        recording_status,
+        output_dir: config.output_dir,
+        output_dir_error: environment.output_dir_error,
+        free_space_bytes: environment.free_space_bytes,
+        ffmpeg_path: environment.ffmpeg_path,
+        ffmpeg_error: environment.ffmpeg_error,
+        ffprobe_available: environment.ffprobe_available,
+        encoder_name,
+        encoder_available: environment.encoder_available,
+        software_fallback_available: environment.software_fallback_available,
         audio_configured,
+        system_audio_device_available: environment.system_audio_device_available,
         lcu_connected,
-        live_client_available,
-    })
+        live_client_available: environment.live_client_available,
+    });
+    let overlay_enabled = state.recording_settings.read().await.overlay_enabled;
+    let overlay_status = crate::overlay::capture_exclusion_status();
+    if !overlay_enabled {
+        readiness.components.push(component(
+            "overlay_exclusion",
+            "ok",
+            "Overlay is disabled, so it cannot enter recording frames",
+        ));
+    } else if overlay_status == crate::overlay::CaptureExclusionStatus::Applied {
+        readiness.components.push(component(
+            "overlay_exclusion",
+            "ok",
+            "Windows capture exclusion is applied to the overlay",
+        ));
+    } else {
+        readiness.warnings.push(issue(
+            "overlay_exclusion_unavailable",
+            "overlay_exclusion",
+            "Overlay capture exclusion is unavailable; the overlay will remain hidden",
+            "Restart LoLShorts and review diagnostics before enabling the overlay",
+        ));
+        readiness.components.push(component(
+            "overlay_exclusion",
+            "warning",
+            "Capture exclusion unavailable; fail-closed hiding is active",
+        ));
+    }
+    readiness.public_services = Some(state.public_service_status.clone());
+    readiness.autostart = Some(state.autostart_status.read().await.clone());
+    readiness
 }
 
 fn readiness_blocker_message(readiness: &RecordingReadiness) -> Option<String> {
@@ -745,8 +974,11 @@ pub async fn start_recording(
         return Ok(());
     }
 
-    let readiness = collect_recording_readiness(&state).await;
+    // Starting capture is safety-critical, so it must not rely on a cached
+    // device/disk/encoder result from a previous diagnostics refresh.
+    let readiness = collect_fresh_recording_readiness(&state).await;
     if let Some(message) = readiness_blocker_message(&readiness) {
+        crate::utils::telemetry::capture_operational_error("recording", "recording_start_blocked");
         return Err(AppError::Recording(format!(
             "Recording readiness blockers: {}",
             message
@@ -759,7 +991,13 @@ pub async fn start_recording(
         .await
         .start_recording()
         .await
-        .map_err(|e| AppError::Recording(e.to_string()))?;
+        .map_err(|e| {
+            crate::utils::telemetry::capture_operational_error(
+                "recording",
+                "recording_start_failed",
+            );
+            AppError::Recording(e.to_string())
+        })?;
 
     {
         use tauri::Emitter;
@@ -788,6 +1026,19 @@ pub async fn stop_recording(
     state: State<'_, AppState>,
 ) -> AppResult<()> {
     use tauri::Emitter;
+
+    // A session created through start_auto_capture/game detection owns event
+    // monitoring, metadata finalization, and the recorder as one pipeline. Raw stop
+    // would strand the other two pieces; require the matching public command instead.
+    let auto_capture_active = state.clip_manager.is_monitoring().await
+        || state
+            .recording_manager
+            .read()
+            .await
+            .get_current_game()
+            .await
+            .is_some();
+    reject_raw_stop_during_auto_capture(auto_capture_active)?;
 
     let current_status = state.recording_manager.read().await.get_status().await;
     if matches!(current_status, RecordingStatus::Idle) {
@@ -832,9 +1083,10 @@ pub async fn stop_recording(
         apply_overlay_for_recording_stop(&app_handle);
     }
 
-    stop_call_result
-        .map(|_| ())
-        .map_err(|e| AppError::Recording(e.to_string()))
+    stop_call_result.map(|_| ()).map_err(|e| {
+        crate::utils::telemetry::capture_operational_error("recording", "recording_stop_failed");
+        AppError::Recording(e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -857,8 +1109,13 @@ pub async fn start_auto_capture(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let readiness = collect_recording_readiness(&state).await;
+    // Auto capture has the same safety requirement as manual start.
+    let readiness = collect_fresh_recording_readiness(&state).await;
     if let Some(message) = readiness_blocker_message(&readiness) {
+        crate::utils::telemetry::capture_operational_error(
+            "recording",
+            "auto_capture_start_blocked",
+        );
         return Err(AppError::Recording(format!(
             "Recording readiness blockers: {}",
             message
@@ -879,7 +1136,13 @@ pub async fn start_auto_capture(
         super::game_lifecycle::CaptureStartMode::Manual,
     )
     .await
-    .map_err(AppError::Recording)?;
+    .map_err(|error| {
+        crate::utils::telemetry::capture_operational_error(
+            "recording",
+            "auto_capture_start_failed",
+        );
+        AppError::Recording(error)
+    })?;
     apply_overlay_for_recording_start(&app_handle, &state).await;
 
     let output_dir = state
@@ -931,7 +1194,9 @@ pub async fn stop_auto_capture(
 pub async fn list_system_audio_devices() -> AppResult<Vec<String>> {
     #[cfg(target_os = "windows")]
     {
-        Ok(crate::recording::wasapi_audio::enumerate_system_audio_devices())
+        tokio::task::spawn_blocking(crate::recording::wasapi_audio::enumerate_system_audio_devices)
+            .await
+            .map_err(|error| AppError::Internal(format!("Audio device scan failed: {error}")))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -946,7 +1211,9 @@ pub async fn list_system_audio_devices() -> AppResult<Vec<String>> {
 pub async fn list_microphone_devices() -> AppResult<Vec<String>> {
     #[cfg(target_os = "windows")]
     {
-        Ok(crate::recording::wasapi_audio::enumerate_microphone_devices())
+        tokio::task::spawn_blocking(crate::recording::wasapi_audio::enumerate_microphone_devices)
+            .await
+            .map_err(|error| AppError::Internal(format!("Audio device scan failed: {error}")))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -957,9 +1224,6 @@ pub async fn list_microphone_devices() -> AppResult<Vec<String>> {
 
 #[tauri::command]
 pub async fn save_replay(state: State<'_, AppState>, duration_secs: u32) -> AppResult<PathBuf> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
-
     // Validate duration (1-300 seconds)
     security::validate_range(duration_secs as f64, 1.0, 300.0, "duration_secs")
         .map_err(|e| AppError::Validation(e.to_string()))?;
@@ -1120,47 +1384,32 @@ pub async fn persist_manual_replay_metadata(
 pub async fn get_saved_clips(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<crate::storage::models::ClipMetadata>> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
-
-    // Get all games
-    let games = state
-        .storage
-        .list_games()
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-    // Collect all clips from all games
-    let mut all_clips = Vec::new();
-    for game_id in games {
-        let clips = state
-            .storage
-            .load_clip_metadata(&game_id)
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        all_clips.extend(clips);
-    }
-
-    Ok(all_clips)
+    let storage = state.storage.clone();
+    tokio::task::spawn_blocking(move || {
+        let games = storage.list_games()?;
+        let mut all_clips = Vec::new();
+        for game_id in games {
+            all_clips.extend(storage.load_clip_metadata(&game_id)?);
+        }
+        Ok::<_, crate::storage::StorageError>(all_clips)
+    })
+    .await
+    .map_err(|error| AppError::Internal(format!("Clip library query failed: {error}")))?
+    .map_err(|error| AppError::Database(error.to_string()))
 }
 
 #[tauri::command]
 pub async fn clear_saved_clips(state: State<'_, AppState>) -> AppResult<()> {
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
-
-    // Get all games and delete them
-    let games = state
-        .storage
-        .list_games()
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-    for game_id in games {
-        state
-            .storage
-            .delete_game(&game_id)
-            .map_err(|e| AppError::Database(e.to_string()))?;
-    }
-
-    Ok(())
+    let storage = state.storage.clone();
+    tokio::task::spawn_blocking(move || {
+        for game_id in storage.list_games()? {
+            storage.delete_game(&game_id)?;
+        }
+        Ok::<_, crate::storage::StorageError>(())
+    })
+    .await
+    .map_err(|error| AppError::Internal(format!("Clip library cleanup failed: {error}")))?
+    .map_err(|error| AppError::Database(error.to_string()))
 }
 
 /// List available audio devices (Cross-platform)
@@ -1275,6 +1524,7 @@ pub async fn get_detailed_recording_status(
     let is_monitoring =
         state.clip_manager.is_monitoring().await || manager.get_current_game().await.is_some();
     let buffer_duration = manager.get_config().buffer_duration_secs as u32;
+    let (capture_mode, capture_backend, capture_warning) = manager.get_capture_diagnostics().await;
 
     let status_str = match status {
         RecordingStatus::Idle => "idle",
@@ -1288,7 +1538,20 @@ pub async fn get_detailed_recording_status(
         status: status_str.to_string(),
         is_monitoring,
         buffer_duration_secs: buffer_duration,
+        capture_mode,
+        capture_backend,
+        capture_warning,
     })
+}
+
+fn reject_raw_stop_during_auto_capture(auto_capture_active: bool) -> AppResult<()> {
+    if auto_capture_active {
+        return Err(AppError::Recording(
+            "stop_recording cannot stop an automatic capture session; use stop_auto_capture"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Label the *actual* capture resolution for `get_recording_quality_info`.
@@ -1320,9 +1583,6 @@ pub async fn get_recording_quality_info(
     state: State<'_, AppState>,
 ) -> AppResult<serde_json::Value> {
     use serde_json::json;
-
-    // Require authentication
-    require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
 
     // Get actual configuration from the recording manager
     let recorder = state.recording_manager.read().await;
@@ -1463,52 +1723,39 @@ pub async fn detect_available_encoders() -> AppResult<serde_json::Value> {
 }
 
 #[tauri::command]
-pub async fn get_disk_usage_info() -> AppResult<serde_json::Value> {
+pub async fn get_disk_usage_info(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let recordings_dir = state.recordings_dir.clone();
+    let logs_dir = state.storage.base_path().join("logs");
+    tokio::task::spawn_blocking(move || collect_disk_usage_info(recordings_dir, logs_dir))
+        .await
+        .map_err(|error| AppError::Internal(format!("Disk usage scan failed: {error}")))
+}
+
+fn collect_disk_usage_info(recordings_dir: PathBuf, logs_dir: PathBuf) -> serde_json::Value {
     use serde_json::json;
-    use std::fs;
 
-    // Use actual app data directory (same as main.rs)
-    let app_data = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lolshorts");
-
-    let recordings_dir = app_data.join("recordings");
     // The rolling-buffer segments (the actual temp footage + loopback WAV) live in
     // recordings/segments, not the non-existent recordings/temp_segments the UI used
     // to scan (which always reported ~0 bytes).
-    let temp_dir = app_data.join("recordings").join("segments");
-    let logs_dir = app_data.join("logs");
+    let temp_dir = recordings_dir.join("segments");
 
-    // Calculate directory sizes
-    let get_dir_size = |dir: &Path| -> u64 {
-        if !dir.exists() {
-            return 0;
-        }
+    // The application directories contain nested per-game and per-job folders.
+    // Reuse the recursive storage scanner; the previous one-level sum counted
+    // directory entries as zero bytes and drastically under-reported usage.
+    let recordings_size = crate::storage::dir_size_bytes(&recordings_dir);
+    let temp_size = crate::storage::dir_size_bytes(&temp_dir);
+    let logs_size = crate::storage::dir_size_bytes(&logs_dir);
 
-        fs::read_dir(dir)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter_map(|e| e.metadata().ok())
-                    .map(|m| m.len())
-                    .sum()
-            })
-            .unwrap_or(0)
-    };
-
-    let recordings_size = get_dir_size(&recordings_dir);
-    let temp_size = get_dir_size(&temp_dir);
-    let logs_size = get_dir_size(&logs_dir);
-
-    // Get total disk space (returns None if the OS query fails)
-    let total_space = get_total_disk_space(&app_data);
-    let free_space = get_free_disk_space(&app_data);
-    let disk_known = total_space.is_some() && free_space.is_some();
-    let total_space = total_space.unwrap_or(0);
-    let free_space = free_space.unwrap_or(0);
+    // One atomic volume probe keeps total/free values from different moments
+    // from being combined and halves the WMI/Win32 call overhead.
+    let disk_space = crate::utils::disk::query_disk_space(&recordings_dir).ok();
+    let disk_known = disk_space.is_some();
+    let (total_space, free_space) = disk_space
+        .map(|snapshot| (snapshot.total_bytes, snapshot.available_bytes))
+        .unwrap_or((0, 0));
     let used_space = total_space.saturating_sub(free_space);
 
-    Ok(json!({
+    json!({
         "disk_space_known": disk_known,
         "total_space_gb": (total_space as f64) / (1024.0 * 1024.0 * 1024.0),
         "free_space_gb": (free_space as f64) / (1024.0 * 1024.0 * 1024.0),
@@ -1520,19 +1767,15 @@ pub async fn get_disk_usage_info() -> AppResult<serde_json::Value> {
         "recommendations": {
             "cleanup_temp": temp_size > 0,
             "archive_old_recordings": recordings_size > (1024 * 1024 * 1024 * 20), // > 20GB
-            "low_disk_space": free_space < (1024 * 1024 * 1024 * 10) // < 10GB free
+            "low_disk_space": disk_known && free_space < (1024 * 1024 * 1024 * 10) // < 10GB free
         }
-    }))
+    })
 }
 
 #[tauri::command]
 pub async fn cleanup_temp_files(state: State<'_, AppState>) -> AppResult<u64> {
     // Actual rolling-buffer footage lives in recordings/segments (not temp_segments).
-    let segments_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lolshorts")
-        .join("recordings")
-        .join("segments");
+    let segments_dir = state.recordings_dir.join("segments");
 
     // Always run the standard startup cleanup (logs + legacy temp dirs).
     state
@@ -1552,193 +1795,49 @@ pub async fn cleanup_temp_files(state: State<'_, AppState>) -> AppResult<u64> {
         return Ok(0);
     }
 
-    if !segments_dir.exists() {
-        return Ok(0);
-    }
-
     // Remove stale rolling-buffer segments and the loopback WAV left over from the
-    // last finished session (safe when idle; mirrors cleanup_on_shutdown).
-    let mut freed: u64 = 0;
-    if let Ok(entries) = std::fs::read_dir(&segments_dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let is_segment_artifact = path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| {
-                    matches!(
-                        ext.to_ascii_lowercase().as_str(),
-                        "mp4" | "ts" | "wav" | "txt"
-                    )
-                })
-                .unwrap_or(false);
-            if !is_segment_artifact {
-                continue;
-            }
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            match std::fs::remove_file(&path) {
-                Ok(()) => freed += size,
-                Err(e) => tracing::warn!("Failed to remove segment file {:?}: {}", path, e),
+    // last finished session (safe when idle; mirrors cleanup_on_shutdown). Directory
+    // enumeration and deletes are blocking on Windows, so keep them off Tokio workers.
+    let freed = tokio::task::spawn_blocking(move || {
+        if !segments_dir.exists() {
+            return 0;
+        }
+        let mut freed: u64 = 0;
+        if let Ok(entries) = std::fs::read_dir(&segments_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                let is_segment_artifact = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| {
+                        matches!(
+                            ext.to_ascii_lowercase().as_str(),
+                            "mp4" | "ts" | "wav" | "txt"
+                        )
+                    })
+                    .unwrap_or(false);
+                if !is_segment_artifact {
+                    continue;
+                }
+                let size = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => freed += size,
+                    Err(error) => {
+                        tracing::warn!("Failed to remove segment file {:?}: {}", path, error)
+                    }
+                }
             }
         }
-    }
+        freed
+    })
+    .await
+    .map_err(|error| AppError::Internal(format!("Segment cleanup task failed: {error}")))?;
 
     tracing::info!(
         "cleanup_temp_files: freed {} bytes from segment buffer",
         freed
     );
     Ok(freed)
-}
-
-fn get_total_disk_space(path: &Path) -> Option<u64> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-
-        // Get the root path (e.g., "C:\")
-        let root = path
-            .ancestors()
-            .last()
-            .unwrap_or(path)
-            .to_str()
-            .and_then(|s| s.chars().next())
-            .map(|c| format!("{}:\\", c))
-            .unwrap_or_else(|| "C:\\".to_string());
-
-        let wide_path: Vec<u16> = OsStr::new(&root)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-
-        let mut free_bytes_available: u64 = 0;
-        let mut total_bytes: u64 = 0;
-        let mut total_free_bytes: u64 = 0;
-
-        unsafe {
-            #[link(name = "kernel32")]
-            extern "system" {
-                fn GetDiskFreeSpaceExW(
-                    lpDirectoryName: *const u16,
-                    lpFreeBytesAvailableToCaller: *mut u64,
-                    lpTotalNumberOfBytes: *mut u64,
-                    lpTotalNumberOfFreeBytes: *mut u64,
-                ) -> i32;
-            }
-
-            let result = GetDiskFreeSpaceExW(
-                wide_path.as_ptr(),
-                &mut free_bytes_available,
-                &mut total_bytes,
-                &mut total_free_bytes,
-            );
-
-            if result != 0 {
-                return Some(total_bytes);
-            }
-        }
-        None
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        // Use statvfs on Unix-like systems
-        use std::mem::MaybeUninit;
-
-        unsafe {
-            let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
-            let path_cstr = std::ffi::CString::new(path.to_string_lossy().as_bytes()).ok();
-
-            if let Some(cstr) = path_cstr {
-                if libc::statvfs(cstr.as_ptr(), stat.as_mut_ptr()) == 0 {
-                    let stat = stat.assume_init();
-                    return Some(stat.f_blocks as u64 * stat.f_frsize as u64);
-                }
-            }
-        }
-        None
-    }
-}
-
-fn get_free_disk_space(path: &Path) -> Option<u64> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-
-        let root = path
-            .ancestors()
-            .last()
-            .unwrap_or(path)
-            .to_str()
-            .and_then(|s| s.chars().next())
-            .map(|c| format!("{}:\\", c))
-            .unwrap_or_else(|| "C:\\".to_string());
-
-        let wide_path: Vec<u16> = OsStr::new(&root)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-
-        let mut free_bytes_available: u64 = 0;
-        let mut total_bytes: u64 = 0;
-        let mut total_free_bytes: u64 = 0;
-
-        unsafe {
-            #[link(name = "kernel32")]
-            extern "system" {
-                fn GetDiskFreeSpaceExW(
-                    lpDirectoryName: *const u16,
-                    lpFreeBytesAvailableToCaller: *mut u64,
-                    lpTotalNumberOfBytes: *mut u64,
-                    lpTotalNumberOfFreeBytes: *mut u64,
-                ) -> i32;
-            }
-
-            let result = GetDiskFreeSpaceExW(
-                wide_path.as_ptr(),
-                &mut free_bytes_available,
-                &mut total_bytes,
-                &mut total_free_bytes,
-            );
-
-            if result != 0 {
-                return Some(free_bytes_available);
-            }
-        }
-        None
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        use std::mem::MaybeUninit;
-
-        unsafe {
-            let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
-            let path_cstr = std::ffi::CString::new(path.to_string_lossy().as_bytes()).ok();
-
-            if let Some(cstr) = path_cstr {
-                if libc::statvfs(cstr.as_ptr(), stat.as_mut_ptr()) == 0 {
-                    let stat = stat.assume_init();
-                    return Some(stat.f_bavail as u64 * stat.f_frsize as u64);
-                }
-            }
-        }
-        None
-    }
-}
-
-#[tauri::command]
-pub async fn get_memory_pool_stats() -> AppResult<serde_json::Value> {
-    use serde_json::json;
-
-    // Memory pool optimization removed for production simplification
-    let stats_json = json!({
-        "message": "Memory pool optimization temporarily disabled for production stability",
-        "pools": []
-    });
-
-    Ok(stats_json)
 }
 
 #[tauri::command]
@@ -1784,6 +1883,32 @@ pub async fn get_recording_backend_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readiness_environment_cache_expires_after_ttl() {
+        let now = Instant::now();
+        assert!(readiness_cache_is_fresh(now, now));
+        assert!(readiness_cache_is_fresh(
+            now,
+            now + RECORDING_READINESS_CACHE_TTL - Duration::from_millis(1)
+        ));
+        assert!(!readiness_cache_is_fresh(
+            now,
+            now + RECORDING_READINESS_CACHE_TTL
+        ));
+    }
+
+    #[test]
+    fn raw_stop_rejects_an_owned_auto_capture_session() {
+        let error = reject_raw_stop_during_auto_capture(true)
+            .expect_err("raw stop must not tear down only one part of the pipeline");
+        let message = error.to_string();
+        assert!(
+            message.contains("stop_auto_capture"),
+            "unexpected error: {message}"
+        );
+        assert!(reject_raw_stop_during_auto_capture(false).is_ok());
+    }
 
     fn player(name: &str, champion_id: u32, team_id: u32) -> PlayerInfo {
         PlayerInfo {
@@ -1838,6 +1963,7 @@ mod tests {
             encoder_available: None,
             software_fallback_available: None,
             audio_configured: true,
+            system_audio_device_available: true,
             lcu_connected: false,
             live_client_available: false,
         });
@@ -1867,6 +1993,7 @@ mod tests {
             encoder_available: Some(true),
             software_fallback_available: Some(true),
             audio_configured: true,
+            system_audio_device_available: true,
             lcu_connected: true,
             live_client_available: false,
         });

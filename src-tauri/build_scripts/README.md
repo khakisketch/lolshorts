@@ -29,29 +29,33 @@ Automated scripts for preparing the production build environment.
 ---
 
 ### `prepare_ffmpeg.ps1`
-**Purpose**: Download and prepare FFmpeg binaries for bundling with the installer
+**Purpose**: Validate and prepare reproducible Windows FFmpeg sidecars for Tauri
 
 **What it does**:
-1. Checks if FFmpeg already exists in `../bin/`
-2. Downloads latest FFmpeg GPL build from GitHub
-3. Extracts `ffmpeg.exe` and `ffprobe.exe`
-4. Copies binaries to `../bin/` directory
-5. Verifies binaries work correctly
-6. Cleans up temporary files
+1. Resolves `src-tauri/binaries` from the script location, independent of the caller's current directory
+2. Reuses existing sidecars only after executable `-version` validation
+3. In `Auto` mode, copies validated real system executables while rejecting package-manager shims
+4. If system tools are unavailable, downloads an immutable BtbN archive and verifies its pinned SHA-256
+5. Copies triplet-named `ffmpeg` and `ffprobe` sidecars required by Tauri
+6. Cleans only the uniquely named, validated temporary directory it created
 
 **Usage**:
 ```powershell
-.\prepare_ffmpeg.ps1
+# From the repository root; prefer validated system tools and download if absent
+.\src-tauri\build_scripts\prepare_ffmpeg.ps1 -Source Auto
+
+# Release/CI: always use the checksum-pinned archive
+.\src-tauri\build_scripts\prepare_ffmpeg.ps1 -Source Download
 ```
 
 **Requirements**:
-- Internet connection
+- A working system FFmpeg/ffprobe pair, or an internet connection
 - ~150 MB free disk space
 - PowerShell 5.1+
 
 **Output Location**:
-- `../bin/ffmpeg.exe` (~75-80 MB)
-- `../bin/ffprobe.exe` (~70-75 MB)
+- `src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe`
+- `src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe`
 
 ---
 
@@ -69,27 +73,29 @@ cd src-tauri\build_scripts
 
 3. **Prepare FFmpeg**:
 ```powershell
-.\prepare_ffmpeg.ps1
+cd ..\..
+.\src-tauri\build_scripts\prepare_ffmpeg.ps1 -Source Auto
 ```
 
 4. **Build the app**:
 ```powershell
-cd ..\..
-cargo tauri build
+npm run tauri:build
 ```
 
 ### Subsequent Builds
 
 If FFmpeg is already prepared:
 ```powershell
-cargo tauri build
+npm run tauri:build
 ```
 
 ### Clean Build
 
 ```powershell
 # Clean previous builds
+cd src-tauri
 cargo clean
+cd ..
 
 # Re-verify environment
 cd src-tauri\build_scripts
@@ -97,7 +103,7 @@ cd src-tauri\build_scripts
 
 # Rebuild
 cd ..\..
-cargo tauri build
+npm run tauri:build
 ```
 
 ## Build Output
@@ -106,9 +112,9 @@ After successful build, installers are located in:
 ```
 src-tauri/target/release/bundle/
 ├── nsis/
-│   └── LoLShorts_0.1.0_x64-setup.exe
+│   └── LoLShorts_1.2.0_x64-setup.exe
 ├── msi/
-│   └── LoLShorts_0.1.0_x64_en-US.msi
+│   └── LoLShorts_1.2.0_x64_en-US.msi
 └── LoLShorts.exe
 ```
 
@@ -123,21 +129,26 @@ src-tauri/target/release/bundle/
 ### "FFmpeg download failed"
 **Solution**:
 - Check internet connection
-- Try manual download: https://github.com/BtbN/FFmpeg-Builds/releases
-- Place `ffmpeg.exe` and `ffprobe.exe` in `../bin/`
+- Do not switch release builds to a mutable `latest` URL
+- Install FFmpeg locally and use `-Source System`, or provide explicit validated paths:
+```powershell
+.\src-tauri\build_scripts\prepare_ffmpeg.ps1 -Source System `
+  -FfmpegPath C:\tools\ffmpeg\bin\ffmpeg.exe `
+  -FfprobePath C:\tools\ffmpeg\bin\ffprobe.exe
+```
 
 ### "Node modules not found"
 **Solution**:
 ```powershell
 cd ../..
-npm install
+npm ci
 ```
 
 ### "Rust compilation errors"
 **Solution**:
 ```powershell
-# Update Rust
-rustup update
+# Install the repository-pinned toolchain
+rustup toolchain install 1.94.1
 
 # Clean and rebuild
 cargo clean
@@ -150,13 +161,13 @@ cargo build --release
 
 ```powershell
 # MSI only
-cargo tauri build --bundles msi
+npm run tauri -- build --bundles msi
 
 # NSIS only
-cargo tauri build --bundles nsis
+npm run tauri -- build --bundles nsis
 
 # Portable exe only
-cargo tauri build --bundles app
+npm run tauri -- build --bundles app
 ```
 
 ### Development Build
@@ -172,8 +183,8 @@ If you need a specific FFmpeg version:
 
 1. Download from https://ffmpeg.org/download.html
 2. Extract `ffmpeg.exe` and `ffprobe.exe`
-3. Copy to `../bin/`
-4. Run `verify_environment.ps1` to confirm
+3. Run `prepare_ffmpeg.ps1 -Source System` with `-FfmpegPath` and `-FfprobePath`
+4. Keep `-Source Download` for release builds so the release provenance remains reproducible
 
 ## CI/CD Integration
 
@@ -187,11 +198,10 @@ These scripts can be used in GitHub Actions or other CI systems:
 
 - name: Prepare FFmpeg
   run: |
-    cd src-tauri/build_scripts
-    .\prepare_ffmpeg.ps1
+    .\src-tauri\build_scripts\prepare_ffmpeg.ps1 -Source Download
 
 - name: Build Release
-  run: cargo tauri build
+  run: npm run tauri:build
 ```
 
 ## Additional Resources

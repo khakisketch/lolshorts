@@ -15,8 +15,20 @@ import { test as base, expect, Page } from "@playwright/test";
 declare global {
   interface Window {
     __TEST_AUTH_STATE__: { authenticated: boolean; tier: string | null };
+    __TEST_UPDATE_STATE__: {
+      status: string;
+      current_version: string;
+      available_version: string | null;
+      notes: string | null;
+      published_at: string | null;
+      progress_percentage: number;
+      error_code: string | null;
+    };
     __TAURI__: unknown;
     __TAURI_INTERNALS__: unknown;
+    __TAURI_EVENT_PLUGIN_INTERNALS__: {
+      unregisterListener: (event: string, eventId: number) => void;
+    };
   }
 }
 
@@ -25,7 +37,14 @@ export const test = base.extend({
     // Set up Tauri mocks BEFORE any navigation (runs before app JS loads)
     await page.addInitScript(() => {
       // Skip onboarding modal
-      localStorage.setItem("lolshorts_onboarding_completed", "true");
+      localStorage.setItem(
+        "lolshorts_onboarding_completed",
+        JSON.stringify({
+          version: 2,
+          completedAt: "2026-08-20T00:00:00.000Z",
+          completion: "passed",
+        }),
+      );
 
       // Set default language to English for consistent test results
       // (prevents auto-detection of system language, e.g., Korean on Korean Windows)
@@ -38,6 +57,15 @@ export const test = base.extend({
       (window as Window).__TEST_AUTH_STATE__ = {
         authenticated: false,
         tier: null,
+      };
+      (window as Window).__TEST_UPDATE_STATE__ = {
+        status: "disabled",
+        current_version: "1.2.0",
+        available_version: null,
+        notes: null,
+        published_at: null,
+        progress_percentage: 0,
+        error_code: "updater_disabled",
       };
 
       // Create a simple mock function that tracks calls
@@ -54,7 +82,7 @@ export const test = base.extend({
       // Comprehensive Tauri invoke handler
       const mockInvoke = async (
         cmd: string,
-        _args?: unknown,
+        args?: Record<string, unknown>,
       ): Promise<unknown> => {
         switch (cmd) {
           case "get_auth_status":
@@ -84,6 +112,7 @@ export const test = base.extend({
           case "get_settings":
           case "get_recording_settings":
             return {
+              schema_version: 4,
               // 백엔드 기본값(1080p60 / medium / h264)과 같은 조합 = 기본 화면의 "보통".
               video: {
                 resolution: "r1920x1080",
@@ -164,7 +193,7 @@ export const test = base.extend({
                 max_storage_gb: 50,
                 delete_exported_clips: false,
               },
-              auto_start_with_league: true,
+              launch_on_windows_startup: false,
               minimize_to_tray: true,
               show_notifications: true,
               show_replay_popup: true,
@@ -352,24 +381,61 @@ export const test = base.extend({
           case "list_match_history":
             return [];
 
-          case "get_user_license":
-            return {
-              tier:
-                (window as Window).__TEST_AUTH_STATE__.tier === "PRO"
-                  ? "PRO"
-                  : "FREE",
-              is_active: Boolean(
-                (window as Window).__TEST_AUTH_STATE__.authenticated,
-              ),
-              expires_at: null,
-            };
-
           case "get_recording_metrics":
           case "get_system_metrics":
             return null;
 
           case "get_health_status":
             return "Healthy";
+
+          case "get_autostart_status":
+            return { configured: true, enabled: false, error_code: null };
+
+          case "set_launch_on_windows_startup":
+            return {
+              configured: true,
+              enabled: Boolean(args?.enabled),
+              error_code: null,
+            };
+
+          case "select_and_stage_external_media":
+            return {
+              path: `C:\\Users\\Tester\\AppData\\Roaming\\lolshorts\\staging\\imports\\selected.${args?.kind === "image" ? "png" : args?.kind === "audio" ? "mp3" : "mp4"}`,
+              size_bytes: 1024,
+              reused_app_owned_file: false,
+              original_file_name: `selected.${args?.kind === "image" ? "png" : args?.kind === "audio" ? "mp3" : "mp4"}`,
+            };
+
+          case "get_app_update_status":
+            return (window as Window).__TEST_UPDATE_STATE__;
+
+          case "check_app_update": {
+            const current = (window as Window).__TEST_UPDATE_STATE__;
+            const next = current.available_version
+              ? { ...current, status: "available", error_code: null }
+              : {
+                  status: "up_to_date",
+                  current_version: "1.2.0",
+                  available_version: null,
+                  notes: null,
+                  published_at: null,
+                  progress_percentage: 100,
+                  error_code: null,
+                };
+            (window as Window).__TEST_UPDATE_STATE__ = next;
+            return next;
+          }
+
+          case "install_app_update": {
+            const next = {
+              ...(window as Window).__TEST_UPDATE_STATE__,
+              status: "installing",
+              progress_percentage: 100,
+              error_code: null,
+            };
+            (window as Window).__TEST_UPDATE_STATE__ = next;
+            return next;
+          }
 
           case "get_diagnostics_status":
             return {
@@ -419,6 +485,53 @@ export const test = base.extend({
 
           case "list_clips":
             return [];
+
+          case "list_clip_vault_page":
+            return {
+              groups: Array.from({ length: 6 }, (_, gameIndex) => ({
+                game_id: `fixture-game-${gameIndex + 1}`,
+                game: {
+                  game_id: `fixture-game-${gameIndex + 1}`,
+                  champion: [
+                    "Ahri",
+                    "Braum",
+                    "Jinx",
+                    "Lee Sin",
+                    "Lux",
+                    "Yasuo",
+                  ][gameIndex],
+                  game_mode: "CLASSIC",
+                  start_time: new Date(
+                    Date.UTC(2026, 7, 9 - gameIndex, 12, 0, 0),
+                  ).toISOString(),
+                  end_time: null,
+                  result: gameIndex % 2 === 0 ? "Win" : "Loss",
+                  kda: null,
+                },
+                clips: Array.from({ length: 3 }, (_, clipIndex) => ({
+                  file_path: `C:\\fixture\\clips\\game-${gameIndex + 1}-${clipIndex + 1}.mp4`,
+                  thumbnail_path: null,
+                  event_type:
+                    clipIndex === 0 ? { multikill: 3 } : "champion_kill",
+                  event_time: 100 + clipIndex * 20,
+                  priority: 3 - clipIndex,
+                  duration: 25,
+                  event_offset_secs: 10,
+                  highlight_score: 80 - gameIndex * 3 - clipIndex,
+                  score_reasons: [],
+                  created_at: new Date(
+                    Date.UTC(2026, 7, 9 - gameIndex, 12, clipIndex, 0),
+                  ).toISOString(),
+                  usage_count: 0,
+                })),
+                clip_count: 3,
+              })),
+              next_cursor: null,
+              skipped_item_count: 0,
+            };
+
+          case "ensure_clip_thumbnail":
+            return "C:\\fixture\\clips\\thumbnail.jpg";
 
           case "save_canvas_template":
           case "delete_canvas_template":
@@ -516,6 +629,9 @@ export const test = base.extend({
         transformCallback: () => 0,
         convertFileSrc: (path: string) => path,
         metadata: {},
+      };
+      (window as Window).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+        unregisterListener: () => {},
       };
 
       // Mock Tauri plugin modules by intercepting module resolution

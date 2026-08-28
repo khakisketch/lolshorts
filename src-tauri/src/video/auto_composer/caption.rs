@@ -66,7 +66,18 @@ const CAPTION_SECS: f64 = 2.6;
 pub(super) fn clip_caption(clip: &ClipInfo, locale: CaptionLocale) -> Option<CaptionSpec> {
     let title = event_title(&clip.event_type, locale)?;
 
-    let detail = reason_phrases(&clip.score_reasons, locale);
+    // 제목이 이미 1vX 를 말하고 있으면 이유에서 수적열세를 뺀다.
+    //
+    // 「1대3 아웃플레이」와 「1대4」는 **서로 다른 것을 센다** — 전자는 10초 안에
+    // 내가 잡은 고유 피해자 수(`recent_solo_kills`), 후자는 그 순간 살아 있던
+    // 양 팀 인원(`capture_moment`). 나란히 구워 놓으면 보는 사람이 둘 중 하나를
+    // 틀린 값으로 읽는다.
+    //
+    // 화면 쪽 같은 규칙: `src/lib/clipLabel.ts`. 한쪽만 고치면 카드와 영상이
+    // 다른 말을 하게 되므로 둘을 함께 본다.
+    let title_says_outplay = clip.event_type.starts_with("Outplay1v");
+
+    let detail = reason_phrases(&clip.score_reasons, locale, title_says_outplay);
     let detail = if detail.is_empty() {
         None
     } else {
@@ -171,9 +182,17 @@ fn event_title(event_type: &str, locale: CaptionLocale) -> Option<&'static str> 
 ///
 /// 순서는 화면 카드(`src/lib/scoreReason.ts`)와 같은 규칙이다 — 같은 클립을 보고
 /// 앱과 영상이 다른 순서로 말하면 그 자체가 결함처럼 읽힌다.
-fn reason_phrases(reasons: &[ScoreReason], locale: CaptionLocale) -> Vec<String> {
+///
+/// `skip_outnumbered` 는 제목이 이미 1vX 를 말할 때 켠다 — 걸러낸 **뒤에** 셋으로
+/// 자르므로, 수적열세를 뺀 자리에 다음 이유가 올라온다.
+fn reason_phrases(
+    reasons: &[ScoreReason],
+    locale: CaptionLocale,
+    skip_outnumbered: bool,
+) -> Vec<String> {
     let mut ranked: Vec<(u8, String)> = reasons
         .iter()
+        .filter(|reason| !(skip_outnumbered && matches!(reason, ScoreReason::Outnumbered(..))))
         .map(|reason| match (reason, locale) {
             (ScoreReason::Clutch(pct), CaptionLocale::Ko) => (0, format!("체력 {}%", pct)),
             (ScoreReason::Clutch(pct), CaptionLocale::En) => (0, format!("{}% HP", pct)),
@@ -223,7 +242,11 @@ mod tests {
         let caption = clip_caption(
             &clip(
                 "PentaKill",
-                vec![ScoreReason::LateGame, ScoreReason::Clutch(8), ScoreReason::Solo],
+                vec![
+                    ScoreReason::LateGame,
+                    ScoreReason::Clutch(8),
+                    ScoreReason::Solo,
+                ],
             ),
             CaptionLocale::Ko,
         )
@@ -239,7 +262,11 @@ mod tests {
         let caption = clip_caption(
             &clip(
                 "PentaKill",
-                vec![ScoreReason::LateGame, ScoreReason::Clutch(8), ScoreReason::Solo],
+                vec![
+                    ScoreReason::LateGame,
+                    ScoreReason::Clutch(8),
+                    ScoreReason::Solo,
+                ],
             ),
             CaptionLocale::En,
         )
@@ -247,6 +274,43 @@ mod tests {
 
         assert_eq!(caption.title, "Pentakill");
         assert_eq!(caption.detail.as_deref(), Some("8% HP · Solo · Late game"));
+    }
+
+    /// 제목이 「1대3 아웃플레이」인데 이유에 「1대4」가 또 나오면 안 된다.
+    ///
+    /// 둘은 서로 다른 것을 센다 — 전자는 10초 안에 내가 잡은 고유 피해자 수,
+    /// 후자는 그 순간 살아 있던 양 팀 인원. 나란히 구우면 보는 사람이 하나를
+    /// 틀린 값으로 읽는다. 화면 쪽 같은 규칙은 `src/lib/clipLabel.ts`.
+    #[test]
+    fn an_outplay_title_does_not_repeat_the_headcount_in_its_detail() {
+        let mut outplay = clip(
+            "Outplay1v3",
+            vec![
+                ScoreReason::Clutch(8),
+                ScoreReason::Outnumbered(1, 4),
+                ScoreReason::Solo,
+            ],
+        );
+        outplay.event_type = "Outplay1v3".to_string();
+
+        let caption = clip_caption(&outplay, CaptionLocale::Ko).unwrap();
+        assert_eq!(caption.title, "1대3 아웃플레이");
+
+        let detail = caption.detail.expect("이유가 있어야 한다");
+        assert!(!detail.contains("1대4"), "수적열세가 중복됐다: {}", detail);
+        // 뺀 자리에 다음 이유가 올라온다 — 걸러낸 뒤에 셋으로 자르기 때문이다.
+        assert_eq!(detail, "체력 8% · 혼자서");
+    }
+
+    /// 반대로 제목이 1vX 가 아니면 수적열세는 그대로 보여준다.
+    #[test]
+    fn a_normal_title_keeps_the_headcount() {
+        let caption = clip_caption(
+            &clip("ChampionKill", vec![ScoreReason::Outnumbered(2, 5)]),
+            CaptionLocale::Ko,
+        )
+        .unwrap();
+        assert_eq!(caption.detail.as_deref(), Some("2대5"));
     }
 
     #[test]
@@ -280,7 +344,9 @@ mod tests {
         let mut unknown = clip("ChampionKill", vec![]);
         unknown.duration = None;
         assert_eq!(
-            clip_caption(&unknown, CaptionLocale::Ko).unwrap().duration_secs,
+            clip_caption(&unknown, CaptionLocale::Ko)
+                .unwrap()
+                .duration_secs,
             CAPTION_SECS
         );
     }
@@ -363,7 +429,11 @@ mod tests {
 
         let names: Vec<String> = triggers
             .iter()
-            .map(|t| as_clip_info_string(crate::recording::auto_clip_manager::trigger_to_event_type(t)))
+            .map(|t| {
+                as_clip_info_string(crate::recording::auto_clip_manager::trigger_to_event_type(
+                    t,
+                ))
+            })
             .collect();
 
         for locale in [CaptionLocale::Ko, CaptionLocale::En] {
@@ -371,7 +441,12 @@ mod tests {
                 .iter()
                 .filter(|name| event_title(name, locale).is_none())
                 .collect();
-            assert!(missing.is_empty(), "{:?} 자막 표에 없는 이벤트: {:?}", locale, missing);
+            assert!(
+                missing.is_empty(),
+                "{:?} 자막 표에 없는 이벤트: {:?}",
+                locale,
+                missing
+            );
         }
     }
 }

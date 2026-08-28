@@ -54,7 +54,13 @@ where
                 tokio::time::sleep(delay).await;
                 attempt += 1;
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                crate::utils::telemetry::capture_operational_error(
+                    "youtube",
+                    "youtube_operation_failed",
+                );
+                return Err(e);
+            }
         }
     }
 }

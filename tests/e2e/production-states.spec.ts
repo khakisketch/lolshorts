@@ -68,7 +68,7 @@ test.describe("Production candidate browser states", () => {
     expect(errors).toEqual([]);
   });
 
-  test("FREE user payment upgrade is visible but checkout is deferred", async ({
+  test("FREE public edition exposes no payment or PRO checkout", async ({
     page,
   }, testInfo) => {
     const errors = collectUnexpectedErrors(page);
@@ -78,18 +78,15 @@ test.describe("Production candidate browser states", () => {
     const settings = page.getByTestId("settings");
     await expect(settings).toBeVisible({ timeout: 30000 });
 
-    // 구독·라이선스는 「계정」 칸으로 내려갔다(설정이 2단 구조로 바뀌면서
-    // 항상 붙어 있던 푸터 카피가 사라졌다).
     await settings.getByTestId("settings-nav-license").click();
-    await settings.getByRole("button", { name: /Upgrade to PRO/i }).click();
-    await expect(page.getByRole("dialog")).toBeVisible({ timeout: 10000 });
     await expect(
-      page.getByText(/Payment and PRO upgrades are deferred/i),
+      page.getByText(/Free public edition/i),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: /Select Plan/i }),
-    ).toBeDisabled();
-    await attachScreenshot(page, testInfo, "payment-deferred");
+      settings.getByRole("button", { name: /Upgrade to PRO/i }),
+    ).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await attachScreenshot(page, testInfo, "free-public-edition");
 
     expect(errors).toEqual([]);
   });

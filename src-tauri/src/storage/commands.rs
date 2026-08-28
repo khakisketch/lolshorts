@@ -2,20 +2,53 @@ use crate::auth::command_policy::require_command_access;
 use crate::auth::middleware::require_auth;
 use crate::auth::SubscriptionTier;
 use crate::error::{AppError, AppResult};
-use crate::storage::{ClipMetadata, EventData, GameMetadata, StorageError, StorageStats};
+use crate::storage::{
+    thumbnail_offset_secs, thumbnail_output_path, ClipMetadata, ClipVaultPage, ClipVaultPageInput,
+    EventData, GameMetadata, StorageError, StorageStats,
+};
 use crate::utils::security::{self, SafeDeleteOutcome, SecurityError};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::State;
+
+/// Run synchronous SQLite/filesystem work on Tokio's blocking pool.
+///
+/// The storage layer intentionally owns a single SQLite connection, but Tauri
+/// commands are async. Keeping read-heavy commands on the async worker can
+/// delay recording/control IPC when a library is large or the disk is busy.
+async fn run_storage_blocking<T, F>(
+    storage: Arc<crate::storage::Storage>,
+    operation: F,
+) -> AppResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&crate::storage::Storage) -> crate::storage::Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || operation(&storage))
+        .await
+        .map_err(|error| AppError::Internal(format!("Storage task panicked: {error}")))?
+        .map_err(|error| AppError::Database(error.to_string()))
+}
+
+async fn run_storage_app_blocking<T, F>(
+    storage: Arc<crate::storage::Storage>,
+    operation: F,
+) -> AppResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&crate::storage::Storage) -> AppResult<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || operation(&storage))
+        .await
+        .map_err(|error| AppError::Internal(format!("Storage task panicked: {error}")))?
+}
 
 /// List all games (sorted by most recent)
 #[tauri::command]
 pub async fn list_games(state: State<'_, AppState>) -> AppResult<Vec<String>> {
     // FREE tier feature - no authentication required
-    state
-        .storage
-        .list_games()
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), |storage| storage.list_games()).await
 }
 
 /// Get metadata for a specific game
@@ -26,10 +59,10 @@ pub async fn get_game_metadata(
 ) -> AppResult<GameMetadata> {
     // FREE tier feature - no authentication required
     security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
-    state
-        .storage
-        .load_game_metadata(&game_id)
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.load_game_metadata(&game_id)
+    })
+    .await
 }
 
 /// Save game metadata
@@ -47,10 +80,10 @@ pub async fn save_game_metadata(
             "metadata.game_id must match the command game_id".to_string(),
         ));
     }
-    state
-        .storage
-        .save_game_metadata(&game_id, &metadata)
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.save_game_metadata(&game_id, &metadata)
+    })
+    .await
 }
 
 /// Load events for a game
@@ -61,10 +94,10 @@ pub async fn get_game_events(
 ) -> AppResult<Vec<EventData>> {
     // FREE tier feature - no authentication required
     security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
-    state
-        .storage
-        .load_events(&game_id)
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.load_events(&game_id)
+    })
+    .await
 }
 
 /// Save events for a game
@@ -77,10 +110,10 @@ pub async fn save_game_events(
     require_command_access(&state.auth, "save_game_events")
         .map_err(|e| AppError::Auth(e.to_string()))?;
     security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
-    state
-        .storage
-        .save_events(&game_id, &events)
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.save_events(&game_id, &events)
+    })
+    .await
 }
 
 /// Save clip metadata
@@ -93,10 +126,10 @@ pub async fn save_clip_metadata(
     require_command_access(&state.auth, "save_clip_metadata")
         .map_err(|e| AppError::Auth(e.to_string()))?;
     security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
-    state
-        .storage
-        .save_clip_metadata(&game_id, &clip)
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.save_clip_metadata(&game_id, &clip)
+    })
+    .await
 }
 
 /// Delete a game and all its data (including video files)
@@ -105,32 +138,29 @@ pub async fn delete_game(state: State<'_, AppState>, game_id: String) -> AppResu
     require_command_access(&state.auth, "delete_game")
         .map_err(|e| AppError::Auth(e.to_string()))?;
     security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
-    // 1. Load all clip metadata for this game to find physical files
-    let clips = state
-        .storage
-        .load_clip_metadata(&game_id)
-        .map_err(|e| AppError::Database(e.to_string()))?;
+    run_storage_app_blocking(state.storage.clone(), move |storage| {
+        // Keep the ownership-checked file deletion and SQLite transaction off
+        // the async IPC worker. Large games can contain many clips/thumbnails.
+        let clips = storage
+            .load_clip_metadata(&game_id)
+            .map_err(|e| AppError::Database(e.to_string()))?;
 
-    // 2. Delete physical video files
-    for clip in &clips {
-        safe_delete_game_file(&state.storage, &clip.file_path, "clip")?;
-    }
-
-    // 3. Delete thumbnail files if they exist
-    for clip in &clips {
-        if let Some(ref thumb_path) = clip.thumbnail_path {
-            safe_delete_game_file(&state.storage, thumb_path, "thumbnail")?;
+        for clip in &clips {
+            safe_delete_game_file(storage, &clip.file_path, "clip")?;
         }
-    }
+        for clip in &clips {
+            if let Some(ref thumb_path) = clip.thumbnail_path {
+                safe_delete_game_file(storage, thumb_path, "thumbnail")?;
+            }
+        }
 
-    // 4. Delete metadata (Game and associated Clips)
-    state
-        .storage
-        .delete_game(&game_id)
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-    tracing::info!("Successfully deleted game {} and associated files", game_id);
-    Ok(())
+        storage
+            .delete_game(&game_id)
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        tracing::info!("Successfully deleted game {} and associated files", game_id);
+        Ok(())
+    })
+    .await
 }
 
 fn safe_delete_game_file(
@@ -181,10 +211,7 @@ fn safe_delete_game_file(
 #[tauri::command]
 pub async fn get_storage_stats(state: State<'_, AppState>) -> AppResult<StorageStats> {
     // FREE tier feature - no authentication required
-    state
-        .storage
-        .get_stats()
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), |storage| storage.get_stats()).await
 }
 
 /// List all clips for a specific game
@@ -195,10 +222,69 @@ pub async fn list_clips(
 ) -> AppResult<Vec<ClipMetadata>> {
     // FREE tier feature - no authentication required
     security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
-    state
-        .storage
-        .load_clip_metadata(&game_id)
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.load_clip_metadata(&game_id)
+    })
+    .await
+}
+
+/// Return one cursor-paginated page of games that contain usable clip metadata.
+#[tauri::command]
+pub async fn list_clip_vault_page(
+    state: State<'_, AppState>,
+    input: ClipVaultPageInput,
+) -> AppResult<ClipVaultPage> {
+    let game_limit = input.game_limit.unwrap_or(6);
+    if !(1..=12).contains(&game_limit) {
+        return Err(AppError::Validation(
+            "game_limit must be between 1 and 12".to_string(),
+        ));
+    }
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.list_clip_vault_page(
+            input.sort,
+            input.cursor.as_deref(),
+            game_limit,
+            input.query.as_deref(),
+            input.game_mode.as_deref(),
+        )
+    })
+    .await
+}
+
+/// Generate and persist an app-owned thumbnail for the exact clip row owned by `game_id`.
+#[tauri::command]
+pub async fn ensure_clip_thumbnail(
+    state: State<'_, AppState>,
+    game_id: String,
+    clip_file_path: String,
+) -> AppResult<String> {
+    security::validate_game_id(&game_id).map_err(|e| AppError::Validation(e.to_string()))?;
+    let input = security::validate_video_input_path(&clip_file_path)
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    // The exact `(game_id, file_path)` lookup establishes ownership before ffmpeg writes anything.
+    // Keep the synchronous SQLite read off the async runtime worker.
+    let clip = run_storage_blocking(state.storage.clone(), {
+        let game_id = game_id.clone();
+        let clip_file_path = clip_file_path.clone();
+        move |storage| storage.load_owned_clip_metadata(&game_id, &clip_file_path)
+    })
+    .await?;
+    let output = thumbnail_output_path(&input).map_err(|e| AppError::Validation(e.to_string()))?;
+    let output_string = output.to_string_lossy().to_string();
+    if let Err(error) = state
+        .video_processor
+        .generate_thumbnail(&input, &output, thumbnail_offset_secs(&clip))
+        .await
+    {
+        return Err(AppError::Internal(error.to_string()));
+    }
+    let persisted_output = output_string.clone();
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.update_owned_clip_thumbnail(&game_id, &clip_file_path, &persisted_output)
+    })
+    .await?;
+    Ok(output_string)
 }
 
 // ============================================================================
@@ -221,10 +307,11 @@ pub async fn get_auto_edit_quota(state: State<'_, AppState>) -> AppResult<AutoEd
 
     // Load current usage (scoped to this user; see storage::Storage doc on
     // auto_edit_usage_by_user for why this is local-only, non-authoritative)
-    let usage = state
-        .storage
-        .load_auto_edit_usage(&user.id)
-        .map_err(|e| AppError::Database(e.to_string()))?;
+    let usage = run_storage_blocking(state.storage.clone(), {
+        let user_id = user.id.clone();
+        move |storage| storage.load_auto_edit_usage(&user_id)
+    })
+    .await?;
 
     // Calculate remaining quota
     let limit = if is_pro { u32::MAX } else { 5 };
@@ -275,10 +362,35 @@ pub struct AutoEditQuotaInfo {
 pub async fn get_auto_edit_results(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<crate::storage::AutoEditResultMetadata>> {
-    state
-        .storage
-        .load_auto_edit_results()
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), |storage| {
+        storage.load_auto_edit_results()
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_auto_edit_result_groups(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::storage::AutoEditResultGroup>> {
+    run_storage_blocking(state.storage.clone(), |storage| {
+        storage.load_auto_edit_result_groups()
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_auto_edit_result_group(
+    state: State<'_, AppState>,
+    series_id: String,
+    delete_files: bool,
+) -> AppResult<()> {
+    require_auth(&state.auth).map_err(|error| AppError::Auth(error.to_string()))?;
+    security::validate_id(&series_id, 160)
+        .map_err(|error| AppError::Validation(error.to_string()))?;
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.delete_auto_edit_result_group(&series_id, delete_files)
+    })
+    .await
 }
 
 /// Get a specific auto-edit result by ID
@@ -288,10 +400,14 @@ pub async fn get_auto_edit_result(
     result_id: String,
 ) -> AppResult<crate::storage::AutoEditResultMetadata> {
     security::validate_id(&result_id, 100).map_err(|e| AppError::Validation(e.to_string()))?;
-    state
-        .storage
-        .load_auto_edit_result(&result_id)
-        .map_err(|e| AppError::NotFound(e.to_string()))
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.load_auto_edit_result(&result_id)
+    })
+    .await
+    .map_err(|error| match error {
+        AppError::Database(message) => AppError::NotFound(message),
+        other => other,
+    })
 }
 
 /// Delete an auto-edit result
@@ -307,10 +423,10 @@ pub async fn delete_auto_edit_result(
     require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
 
     security::validate_id(&result_id, 100).map_err(|e| AppError::Validation(e.to_string()))?;
-    state
-        .storage
-        .delete_auto_edit_result(&result_id, delete_file)
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.delete_auto_edit_result(&result_id, delete_file)
+    })
+    .await
 }
 
 /// Update YouTube upload status for an auto-edit result
@@ -324,10 +440,10 @@ pub async fn update_auto_edit_youtube_status(
     require_auth(&state.auth).map_err(|e| AppError::Auth(e.to_string()))?;
 
     security::validate_id(&result_id, 100).map_err(|e| AppError::Validation(e.to_string()))?;
-    state
-        .storage
-        .update_auto_edit_youtube_status(&result_id, status)
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), move |storage| {
+        storage.update_auto_edit_youtube_status(&result_id, status)
+    })
+    .await
 }
 
 /// Get dashboard statistics (total games, clips, storage used)
@@ -339,9 +455,5 @@ pub async fn get_dashboard_stats(state: State<'_, AppState>) -> AppResult<Storag
     // directory trees on disk (`dir_size_bytes`) synchronously; on a large
     // library that can take long enough to stall the async runtime worker
     // thread it runs on. Move it to a blocking-pool thread instead.
-    let storage = state.storage.clone();
-    tokio::task::spawn_blocking(move || storage.get_stats())
-        .await
-        .map_err(|e| AppError::Internal(format!("Dashboard stats task panicked: {}", e)))?
-        .map_err(|e| AppError::Database(e.to_string()))
+    run_storage_blocking(state.storage.clone(), |storage| storage.get_stats()).await
 }

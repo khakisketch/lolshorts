@@ -151,10 +151,28 @@ pub struct HighlightScore {
 /// 체력 배수. 이벤트 **직후** 체력이므로, 킬을 따낸 뒤 체력이 바닥이면 그 교전이
 /// 아슬아슬했다는 뜻이다.
 ///
-/// 죽는 장면(`Death`)에는 적용하지 않는다 — 죽었으면 체력은 항상 0 이라
-/// 모든 데스가 최고 배수를 받아버린다. 호출부에서 걸러야 하는 이 조건은
-/// `score()` 안에서 처리한다.
+/// # 체력 0% 는 클러치가 아니다
+///
+/// 0% 는 살아남은 게 아니라 **죽은 것**이다. 예전에는 `ratio <= 0.10` 갈래가
+/// 0.0 도 받아 최고 배수 1.50 을 줬고, 실게임에서 이렇게 나왔다:
+///
+/// ```text
+///   Assist   29.0 — [Clutch(0), Outnumbered(2,5), LateGame]
+///   GameEnd  43.1 — [Clutch(0), LateGame]
+/// ```
+///
+/// 어시스트는 내가 죽은 뒤 팀이 마무리해도 발생하고, 게임 끝은 거의 항상 부활
+/// 대기 중이다. 죽은 순간이 가장 높은 가산점을 받고 훅 자막에 「체력 0%」가
+/// 찍혔다 — 시청자에게 자랑할 문구가 아니다.
+///
+/// 종류별 제외(`Death`·`FirstBloodVictim`·`GameEnd`)는 `score()` 가 맡는다.
+/// 여기서는 **값 자체가 말이 안 되는 경우**만 거른다.
 fn clutch_multiplier(ratio: f64) -> (f64, Option<ScoreReason>) {
+    // 0% = 죽음. 살아남지 못했으면 아슬아슬한 것도 아니다.
+    if ratio <= 0.0 {
+        return (1.0, None);
+    }
+
     let pct = (ratio * 100.0).round().clamp(0.0, 100.0) as u8;
     if ratio <= 0.10 {
         (1.50, Some(ScoreReason::Clutch(pct)))
@@ -225,10 +243,18 @@ pub fn score(kind: HighlightKind, ctx: &MomentContext) -> HighlightScore {
         }
     };
 
-    // 죽는 장면은 체력이 언제나 0 이므로 클러치 판정에서 제외한다.
+    // 클러치를 물어볼 수 있는 순간인가.
+    //
+    // - `Death`·`FirstBloodVictim` — 죽는 장면이라 체력이 언제나 0
+    // - `GameEnd` — 게임이 끝난 시점의 체력은 아무 의미가 없다. 이겼든 졌든
+    //   그 순간 부활 대기 중이면 0 이고, 살아 있었다면 그 값이 우연일 뿐이다.
+    //   실게임에서 「게임 끝 · 체력 0%」가 43.1점을 받았다
+    //
+    // 오브젝트·스틸은 **제외하지 않는다** — 체력 5% 에 바론을 스틸한 건 진짜
+    // 클러치이고, 그게 이 앱이 확언할 수 있는 종류의 사실이다.
     if !matches!(
         kind,
-        HighlightKind::Death | HighlightKind::FirstBloodVictim
+        HighlightKind::Death | HighlightKind::FirstBloodVictim | HighlightKind::GameEnd { .. }
     ) {
         if let Some(ratio) = ctx.my_health_ratio {
             apply(clutch_multiplier(ratio), &mut value, &mut reasons);
@@ -348,6 +374,77 @@ mod tests {
 
     fn ctx() -> MomentContext {
         MomentContext::default()
+    }
+
+    /// **체력 0% 는 클러치가 아니라 죽은 것이다.**
+    ///
+    /// 실게임 회귀: `Assist 29.0 — [Clutch(0), ...]`, `GameEnd 43.1 — [Clutch(0), ...]`.
+    /// 죽은 순간이 최고 가산점(1.50)을 받고 훅 자막에 「체력 0%」가 찍혔다.
+    #[test]
+    fn zero_health_is_death_not_a_clutch() {
+        let dead = MomentContext {
+            my_health_ratio: Some(0.0),
+            ..ctx()
+        };
+
+        for kind in [
+            HighlightKind::Assist,
+            HighlightKind::Kill,
+            HighlightKind::ObjectiveSteal,
+        ] {
+            let scored = score(kind, &dead);
+            assert!(
+                !scored
+                    .reasons
+                    .iter()
+                    .any(|r| matches!(r, ScoreReason::Clutch(_))),
+                "{:?} 에 체력 0% 클러치가 붙었다: {:?}",
+                kind,
+                scored.reasons
+            );
+        }
+    }
+
+    /// 게임이 끝난 시점의 체력은 의미가 없다 — 이겼든 졌든 우연이다.
+    #[test]
+    fn the_end_of_the_game_never_counts_as_a_clutch() {
+        for ratio in [0.0, 0.05, 0.3, 0.9] {
+            let moment = MomentContext {
+                my_health_ratio: Some(ratio),
+                ..ctx()
+            };
+            for won in [true, false] {
+                let scored = score(HighlightKind::GameEnd { won }, &moment);
+                assert!(
+                    !scored
+                        .reasons
+                        .iter()
+                        .any(|r| matches!(r, ScoreReason::Clutch(_))),
+                    "게임 끝(won={}, 체력 {})에 클러치가 붙었다: {:?}",
+                    won,
+                    ratio,
+                    scored.reasons
+                );
+            }
+        }
+    }
+
+    /// 반대 방향도 지킨다 — 살아남은 저체력은 여전히 클러치다.
+    #[test]
+    fn surviving_on_low_health_is_still_a_clutch() {
+        let barely = MomentContext {
+            my_health_ratio: Some(0.05),
+            ..ctx()
+        };
+
+        // 체력 5% 에 바론 스틸 — 이 앱이 확언할 수 있는 종류의 사실이다.
+        let scored = score(HighlightKind::ObjectiveSteal, &barely);
+        assert!(
+            scored.reasons.contains(&ScoreReason::Clutch(5)),
+            "저체력 스틸에 클러치가 안 붙었다: {:?}",
+            scored.reasons
+        );
+        assert!(scored.value > HighlightKind::ObjectiveSteal.base());
     }
 
     #[test]

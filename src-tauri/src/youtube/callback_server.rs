@@ -153,13 +153,19 @@ impl CallbackServer {
             self.port, self.path
         );
 
-        // Start server with graceful shutdown signal
-        let server = warp::serve(callback_route);
-        let (_, server_task) = server.bind_with_graceful_shutdown(addr, async move {
-            // Wait for shutdown signal
-            let _ = shutdown_rx.await;
-            info!("OAuth callback server shutting down gracefully");
-        });
+        // Bind explicitly so an occupied callback port is returned as an
+        // actionable OAuth error instead of panicking inside warp.
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("Failed to bind OAuth callback port {}", self.port))?;
+        let server_task = warp::serve(callback_route)
+            .incoming(listener)
+            .graceful(async move {
+                // Wait for shutdown signal
+                let _ = shutdown_rx.await;
+                info!("OAuth callback server shutting down gracefully");
+            })
+            .run();
 
         let server_handle = tokio::spawn(server_task);
 
@@ -256,6 +262,19 @@ fn parse_redirect_uri(redirect_uri: &str) -> Result<(u16, String)> {
             port_str, redirect_uri
         )
     })?;
+    if port == 0 {
+        return Err(anyhow::anyhow!(
+            "YOUTUBE_REDIRECT_URI must use a non-zero port, got: {}",
+            redirect_uri
+        ));
+    }
+
+    if path_part.contains(['?', '#']) {
+        return Err(anyhow::anyhow!(
+            "YOUTUBE_REDIRECT_URI must not contain a query or fragment, got: {}",
+            redirect_uri
+        ));
+    }
 
     let path = format!("/{}", path_part.trim_matches('/'));
     if path == "/" {
@@ -510,6 +529,9 @@ mod tests {
     fn from_redirect_uri_rejects_invalid_port() {
         let error = parse_redirect_uri("http://localhost:abc/oauth/callback").unwrap_err();
         assert!(error.to_string().contains("invalid port"));
+
+        let error = parse_redirect_uri("http://localhost:0/oauth/callback").unwrap_err();
+        assert!(error.to_string().contains("non-zero port"));
     }
 
     #[test]
@@ -521,6 +543,9 @@ mod tests {
         assert!(error_no_slash
             .to_string()
             .contains("non-root callback path"));
+
+        let error = parse_redirect_uri("http://localhost:9090/oauth/callback?state=1").unwrap_err();
+        assert!(error.to_string().contains("query or fragment"));
     }
 
     #[test]

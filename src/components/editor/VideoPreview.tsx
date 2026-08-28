@@ -1,12 +1,12 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useEditorStore } from '@/stores/editorStore';
-import { Button } from '@/components/ui/button';
-import { Slider } from '@/components/ui/slider';
-import { Play, Pause, Volume2, VolumeX, Maximize } from 'lucide-react';
-import { convertFileSrc } from '@tauri-apps/api/core';
-import { formatDuration } from '@/lib/utils';
-import { logger } from '@/lib/logger';
+import { useRef, useEffect, useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import { useEditorStore } from "@/stores/editorStore";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { Play, Pause, Volume2, VolumeX, Maximize } from "lucide-react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { formatDuration } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 export function VideoPreview() {
   const { t } = useTranslation();
@@ -27,11 +27,15 @@ export function VideoPreview() {
   } = useEditorStore();
 
   // Get selected clip
-  const selectedClip = availableClips.find(c => c.file_path === selectedClipId);
+  const selectedClip = availableClips.find(
+    (c) => c.file_path === selectedClipId,
+  );
 
   // If the selected clip is on the timeline, it may have a trim range - the
   // library-only ClipMetadata has no trim fields, so look it up separately.
-  const timelineClip = timelineClips.find(c => c.file_path === selectedClipId);
+  const timelineClip = timelineClips.find(
+    (c) => c.file_path === selectedClipId,
+  );
   const trimStart = timelineClip?.trimStart ?? 0;
   // trimEnd is undefined until the video's real duration is known (metadata
   // load), at which point it falls back to the full duration.
@@ -54,7 +58,9 @@ export function VideoPreview() {
   useEffect(() => {
     if (videoRef.current) {
       if (isPlaying) {
-        videoRef.current.play().catch(err => logger.error('Play failed:', err));
+        videoRef.current
+          .play()
+          .catch((err) => logger.error("Play failed:", err));
       } else {
         videoRef.current.pause();
       }
@@ -116,13 +122,16 @@ export function VideoPreview() {
     }
   }, [isPlaying, pause, play, trimStart, effectiveEnd]);
 
-  const handleSeek = useCallback((value: number[]) => {
-    if (videoRef.current) {
-      const clamped = Math.min(Math.max(value[0], trimStart), effectiveEnd);
-      videoRef.current.currentTime = clamped;
-      setCurrentVideoTime(clamped);
-    }
-  }, [trimStart, effectiveEnd]);
+  const handleSeek = useCallback(
+    (value: number[]) => {
+      if (videoRef.current) {
+        const clamped = Math.min(Math.max(value[0], trimStart), effectiveEnd);
+        videoRef.current.currentTime = clamped;
+        setCurrentVideoTime(clamped);
+      }
+    },
+    [trimStart, effectiveEnd],
+  );
 
   const handleVolumeChange = useCallback((value: number[]) => {
     setVolume(value[0]);
@@ -130,7 +139,7 @@ export function VideoPreview() {
   }, []);
 
   const toggleMute = useCallback(() => {
-    setIsMuted(prev => !prev);
+    setIsMuted((prev) => !prev);
   }, []);
 
   const toggleFullscreen = useCallback(() => {
@@ -155,13 +164,13 @@ export function VideoPreview() {
             onLoadedMetadata={handleLoadedMetadata}
             onEnded={() => pause()}
           >
-            <track kind="captions" label={t('editor.preview.noCaptions')} />
+            <track kind="captions" label={t("editor.preview.noCaptions")} />
           </video>
         ) : (
           <div className="text-center p-8">
             <Play className="w-24 h-24 mx-auto text-muted-foreground mb-4" />
             <p className="text-muted-foreground">
-              {t('editor.preview.selectClipHint')}
+              {t("editor.preview.selectClipHint")}
             </p>
           </div>
         )}
@@ -187,25 +196,23 @@ export function VideoPreview() {
               {formatDuration(effectiveEnd)}
             </span>
           </div>
-          {timelineClip && (trimStart > 0 || (trimEnd !== undefined && trimEnd < duration)) && (
-            <p className="text-xs text-muted-foreground text-center">
-              {t('editor.preview.trimmedRangeNotice', {
-                start: formatDuration(trimStart),
-                end: formatDuration(effectiveEnd),
-                defaultValue: 'Trimmed preview: {{start}} - {{end}}',
-              })}
-            </p>
-          )}
+          {timelineClip &&
+            (trimStart > 0 ||
+              (trimEnd !== undefined && trimEnd < duration)) && (
+              <p className="text-xs text-muted-foreground text-center">
+                {t("editor.preview.trimmedRangeNotice", {
+                  start: formatDuration(trimStart),
+                  end: formatDuration(effectiveEnd),
+                  defaultValue: "Trimmed preview: {{start}} - {{end}}",
+                })}
+              </p>
+            )}
 
           {/* Control Buttons */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               {/* Play/Pause */}
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={handlePlayPause}
-              >
+              <Button size="sm" variant="ghost" onClick={handlePlayPause}>
                 {isPlaying ? (
                   <Pause className="w-5 h-5" />
                 ) : (
@@ -215,11 +222,7 @@ export function VideoPreview() {
 
               {/* Volume */}
               <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={toggleMute}
-                >
+                <Button size="sm" variant="ghost" onClick={toggleMute}>
                   {isMuted || volume === 0 ? (
                     <VolumeX className="w-5 h-5" />
                   ) : (
@@ -238,11 +241,7 @@ export function VideoPreview() {
 
             <div className="flex items-center gap-2">
               {/* Fullscreen */}
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={toggleFullscreen}
-              >
+              <Button size="sm" variant="ghost" onClick={toggleFullscreen}>
                 <Maximize className="w-5 h-5" />
               </Button>
             </div>

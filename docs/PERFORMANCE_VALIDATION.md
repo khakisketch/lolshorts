@@ -2,7 +2,13 @@
 
 **Date**: 2025-01-04
 **Wave**: Wave 4 - Production Hardening
-**Status**: ✅ Infrastructure validated, VideoEncoder pending
+**Status**: Historical benchmark plan; not current implementation or field evidence
+
+> This 2025 document records an abandoned `VideoEncoder` validation path. The
+> current shipping candidate uses the FFmpeg/Desktop Duplication pipeline and
+> must be evaluated with `docs/E5_FIELD_QA_PACKET.md` and
+> `scripts/collect-gameplay-field-evidence.ps1`. Pending items below are kept as
+> historical context, not as open implementation tasks for the current path.
 
 ## Test Coverage
 

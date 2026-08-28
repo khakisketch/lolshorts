@@ -40,6 +40,51 @@ pub struct VideoProcessor {
     pub(super) optimal_encoder: VideoEncoder,
 }
 
+#[cfg(test)]
+mod framing_contract_tests {
+    use super::*;
+    use crate::video::processor::types::VerticalFraming;
+
+    #[test]
+    fn lol_focus_stack_preserves_full_hud_and_focuses_only_lower_viewport() {
+        let graph = VideoProcessor::build_compose_filtergraph_with_framing(
+            1,
+            1080,
+            1920,
+            60,
+            None,
+            &[12.0],
+            &[true],
+            Some(&[5.0]),
+            None,
+            VerticalFraming::LolFocusStack,
+        );
+        assert!(graph.contains("pad=1080:608"), "graph: {}", graph);
+        assert!(graph.contains("overlay=0:64"), "graph: {}", graph);
+        assert!(graph.contains("overlay=0:672"), "graph: {}", graph);
+        assert!(graph.contains("crop=1080:1080:0:672"), "graph: {}", graph);
+        assert!(graph.contains("gblur=sigma=35"), "graph: {}", graph);
+    }
+
+    #[test]
+    fn safe_full_frame_uses_aspect_fit_over_blurred_fill() {
+        let graph = VideoProcessor::build_compose_filtergraph_with_framing(
+            1,
+            1080,
+            1920,
+            60,
+            None,
+            &[12.0],
+            &[true],
+            None,
+            None,
+            VerticalFraming::SafeFullFrame,
+        );
+        assert!(graph.contains("force_original_aspect_ratio=decrease"));
+        assert!(graph.contains("overlay=(W-w)/2:(H-h)/2"));
+    }
+}
+
 impl VideoProcessor {
     pub fn new() -> Result<Self> {
         let optimal_encoder = Self::detect_optimal_encoder();
@@ -73,6 +118,22 @@ impl VideoProcessor {
                 }
             }
         }
+    }
+
+    /// Create a processor pinned to the portable software H.264 encoder.
+    ///
+    /// This is useful for deterministic offline processing in environments
+    /// where a hardware encoder might be present but is not the subject of the
+    /// operation (for example, the real-media regression suite).
+    pub fn new_with_software_h264() -> Result<Self> {
+        let ffmpeg_path = get_ffmpeg_path().map_err(|e| VideoError::ProcessingError {
+            message: format!("Failed to find FFmpeg: {}", e),
+        })?;
+
+        Ok(Self {
+            ffmpeg_path: ffmpeg_path.to_string_lossy().to_string(),
+            optimal_encoder: VideoEncoder::H264,
+        })
     }
 
     /// Detect the optimal hardware-accelerated encoder available on the system.
@@ -1282,10 +1343,7 @@ impl VideoProcessor {
         // 이 결함은 문자열 단언으로는 잡히지 않았다. 실제로 렌더해 보고서야
         // 드러났고, 그마저도 조용하다: ffmpeg 는 `Stray % near ''` 를 155번 찍은 뒤
         // **exit 0 으로 끝난다**. 글자만 빠진 정상 영상이 나온다.
-        let enable = format!(
-            "expansion=none:enable='lt(t\\,{:.2})'",
-            spec.duration_secs
-        );
+        let enable = format!("expansion=none:enable='lt(t\\,{:.2})'", spec.duration_secs);
 
         let mut chain = vec![format!(
             "drawtext={font_clause}text='{text}':x=(w-text_w)/2:y={top}:fontsize={title_size}:fontcolor=white:borderw=4:bordercolor=black@0.85:{enable}",
@@ -1309,7 +1367,7 @@ impl VideoProcessor {
     // trim plan). Bundling them into a struct here would only move the same argument
     // list one level up while hiding which of them the graph actually depends on.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn build_compose_filtergraph(
+    pub(super) fn build_compose_filtergraph_with_framing(
         n: usize,
         width: u32,
         height: u32,
@@ -1319,13 +1377,8 @@ impl VideoProcessor {
         has_audio: &[bool],
         event_times: Option<&[f64]>,
         captions: Option<&[Option<CaptionSpec>]>,
+        framing: super::types::VerticalFraming,
     ) -> String {
-        let base_vf = format!(
-            "scale=-1:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,format=yuv420p,fps={fps}",
-            h = height,
-            w = width,
-            fps = fps
-        );
         let base_af =
             "aresample=async=1:out_sample_rate=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
 
@@ -1338,7 +1391,28 @@ impl VideoProcessor {
                 .and_then(|c| c.as_ref())
                 .map(|spec| format!(",{}", Self::build_caption_filter(spec, width, height)))
                 .unwrap_or_default();
-            parts.push(format!("[{i}:v]{base_vf}{caption}[v{i}]"));
+            match framing {
+                super::types::VerticalFraming::CenterCrop => {
+                    let base_vf = format!(
+                        "scale=-1:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1,format=yuv420p,fps={fps}"
+                    );
+                    parts.push(format!("[{i}:v]{base_vf}{caption}[v{i}]"));
+                }
+                super::types::VerticalFraming::SafeFullFrame => {
+                    parts.push(format!(
+                        "[{i}:v]split=2[bg{i}src][fg{i}src];[bg{i}src]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},gblur=sigma=35,setsar=1[bg{i}];[fg{i}src]scale={width}:{height}:force_original_aspect_ratio=decrease,setsar=1[fg{i}];[bg{i}][fg{i}]overlay=(W-w)/2:(H-h)/2,format=yuv420p,fps={fps}{caption}[v{i}]"
+                    ));
+                }
+                super::types::VerticalFraming::LolFocusStack => {
+                    let full_height = ((width as f64) * 9.0 / 16.0).round() as u32;
+                    let full_y = 64u32;
+                    let focus_y = full_y + full_height;
+                    let focus_height = width;
+                    parts.push(format!(
+                        "[{i}:v]split=3[bg{i}src][full{i}src][focus{i}src];[bg{i}src]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},gblur=sigma=35,setsar=1[bg{i}];[full{i}src]scale={width}:{full_height}:force_original_aspect_ratio=decrease,pad={width}:{full_height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1[full{i}];[focus{i}src]scale={width}:{focus_height}:force_original_aspect_ratio=increase,crop={width}:{focus_height}:(iw-ow)/2:max(0\\,(ih-oh)*0.46),setsar=1[focus{i}];[bg{i}][full{i}]overlay=0:{full_y}[stack{i}];[stack{i}][focus{i}]overlay=0:{focus_y},format=yuv420p,fps={fps}{caption}[v{i}]"
+                    ));
+                }
+            }
             if has_audio.get(i).copied().unwrap_or(true) {
                 parts.push(format!("[{i}:a]{base_af}[a{i}]"));
             } else {
@@ -1399,8 +1473,16 @@ impl VideoProcessor {
         // Optional event-based zoom on the composed video timeline.
         match event_times {
             Some(times) if !times.is_empty() => {
-                let zoom = Self::generate_event_zoom_filter(times, fps, width, height);
-                parts.push(format!("[{video_label}]{zoom}[outv]"));
+                if framing == super::types::VerticalFraming::LolFocusStack {
+                    let focus_y = 64 + ((width as f64) * 9.0 / 16.0).round() as u32;
+                    let zoom = Self::generate_event_zoom_filter(times, fps, width, width);
+                    parts.push(format!(
+                        "[{video_label}]split[zoom_base][zoom_src];[zoom_src]crop={width}:{width}:0:{focus_y},{zoom}[zoom_focus];[zoom_base][zoom_focus]overlay=0:{focus_y}[outv]"
+                    ));
+                } else {
+                    let zoom = Self::generate_event_zoom_filter(times, fps, width, height);
+                    parts.push(format!("[{video_label}]{zoom}[outv]"));
+                }
             }
             _ => {
                 parts.push(format!("[{video_label}]null[outv]"));
@@ -1409,6 +1491,32 @@ impl VideoProcessor {
         parts.push(format!("[{audio_label}]anull[outa]"));
 
         parts.join(";")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn build_compose_filtergraph(
+        n: usize,
+        width: u32,
+        height: u32,
+        fps: u32,
+        transition: Option<(&str, f64)>,
+        effective_durations: &[f64],
+        has_audio: &[bool],
+        event_times: Option<&[f64]>,
+        captions: Option<&[Option<CaptionSpec>]>,
+    ) -> String {
+        Self::build_compose_filtergraph_with_framing(
+            n,
+            width,
+            height,
+            fps,
+            transition,
+            effective_durations,
+            has_audio,
+            event_times,
+            captions,
+            super::types::VerticalFraming::CenterCrop,
+        )
     }
 
     fn map_transition_kind(kind: &str) -> &'static str {
@@ -1575,7 +1683,7 @@ impl VideoProcessor {
         }
 
         let transition_ref = transition.as_ref().map(|(k, d)| (k.as_str(), *d));
-        let filter = Self::build_compose_filtergraph(
+        let filter = Self::build_compose_filtergraph_with_framing(
             clips.len(),
             opts.width,
             opts.height,
@@ -1585,6 +1693,7 @@ impl VideoProcessor {
             &has_audio,
             opts.event_times.as_deref(),
             opts.captions.as_deref(),
+            opts.framing,
         );
 
         // When normalizing we render to a temp file first, then loudnorm into
@@ -1804,8 +1913,17 @@ mod tests {
 
     #[test]
     fn build_compose_filtergraph_single_clip_hardcut() {
-        let f =
-            VideoProcessor::build_compose_filtergraph(1, 1080, 1920, 60, None, &[], &[true], None, None);
+        let f = VideoProcessor::build_compose_filtergraph(
+            1,
+            1080,
+            1920,
+            60,
+            None,
+            &[],
+            &[true],
+            None,
+            None,
+        );
         assert!(f.contains("[0:v]"), "{}", f);
         assert!(f.contains("crop=1080:1920"), "{}", f);
         assert!(f.contains("[outv]") && f.ends_with("[outa]"), "{}", f);
@@ -1890,8 +2008,6 @@ mod tests {
     }
 
     // ---- 훅 자막 ----
-
-
     fn caption(title: &str, detail: Option<&str>) -> CaptionSpec {
         CaptionSpec {
             title: title.to_string(),
@@ -1928,11 +2044,7 @@ mod tests {
     /// **exit 0** 으로 끝난다. 산출물은 정상이고 길이도 맞고 게이트도 초록이다.
     #[test]
     fn caption_text_is_never_treated_as_a_format_string() {
-        let f = VideoProcessor::build_caption_filter(
-            &caption("킬", Some("체력 8%")),
-            1080,
-            1920,
-        );
+        let f = VideoProcessor::build_caption_filter(&caption("킬", Some("체력 8%")), 1080, 1920);
         assert!(
             f.contains("expansion=none"),
             "`%` 가 들어간 자막이 조용히 사라진다: {}",
@@ -2001,11 +2113,7 @@ mod tests {
     #[test]
     fn caption_text_is_escaped_against_filter_injection() {
         // 챔피언 이름이나 사용자 문자열이 자막에 들어올 수 있는 경로를 막아 둔다.
-        let f = VideoProcessor::build_caption_filter(
-            &caption("a:b[c]", Some("d;e")),
-            1080,
-            1920,
-        );
+        let f = VideoProcessor::build_caption_filter(&caption("a:b[c]", Some("d;e")), 1080, 1920);
         assert!(f.contains(r"a\:b\[c\]"), "{}", f);
         assert!(f.contains(r"d\;e"), "{}", f);
     }

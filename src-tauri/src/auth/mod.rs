@@ -67,6 +67,15 @@ impl AuthManager {
         }
     }
 
+    /// Create the local-only auth state used when the public Supabase client
+    /// configuration was not embedded in this build.
+    pub fn disabled() -> Self {
+        Self {
+            current_user: RwLock::new(None),
+            supabase_client: None,
+        }
+    }
+
     pub fn new_with_config(config: SupabaseConfig) -> Self {
         let supabase_client = SupabaseClient::new(config).ok();
 

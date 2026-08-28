@@ -2,20 +2,32 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Check, Film, Pause, Play, Scissors, Sparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  Film,
+  Pause,
+  Play,
+  Scissors,
+  Sparkles,
+} from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { VideoModal } from "@/components/video/VideoModal";
+import { ClipCard } from "@/components/clips/ClipCard";
+import { GameSummary } from "@/components/game/GameSummary";
 import { recordingApi } from "@/api/recording";
 import { storageApi } from "@/api/storage";
 import { videoApi } from "@/api/video";
 import { lcuApi, type UnifiedGameStatus } from "@/api/lcu";
 import { useToast } from "@/components/ui/use-toast";
+import { useEditorStore } from "@/stores/editorStore";
+import { useAutoEditStore } from "@/stores/autoEditStore";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/utils";
-import { clipSeconds, eventLabel } from "@/lib/eventLabel";
-import { reasonLabels } from "@/lib/scoreReason";
-import type { ClipMetadata } from "@/types/storage";
+import { clipLabel } from "@/lib/clipLabel";
+import { rankClips } from "@/lib/clipRanking";
+import type { ClipMetadata, GameMetadata } from "@/types/storage";
 
 /**
  * 홈 — "방금 판에서 나온 재료로 무엇을 만들지" 한 화면.
@@ -33,122 +45,16 @@ import type { ClipMetadata } from "@/types/storage";
 /** 한 화면에 스크롤 없이 들어가는 개수. 1280x800 기준 4열 x 2행. */
 const MAX_CLIPS_ON_HOME = 8;
 
-interface ClipCardProps {
-  clip: ClipMetadata;
-  selected: boolean;
-  generatingThumbnail: boolean;
-  onToggle: () => void;
-  onPlay: () => void;
-  label: string;
-}
-
-function ClipCard({
-  clip,
-  selected,
-  generatingThumbnail,
-  onToggle,
-  onPlay,
-  label,
-}: ClipCardProps) {
-  const { t } = useTranslation();
-  const seconds = clipSeconds(clip.duration);
-  const thumbnailSrc = clip.thumbnail_path
-    ? convertFileSrc(clip.thumbnail_path)
-    : undefined;
-  // 이 클립이 왜 뽑혔는지. 앱이 확언할 수 있는 유일한 것이고(Live Client API 로
-  // 그 순간의 체력·생존 인원을 직접 받는다) 지금까지 저장만 되고 화면에는
-  // 한 번도 나오지 않았다.
-  const reasons = reasonLabels(clip.score_reasons);
-
-  return (
-    <div className="group relative h-full">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-pressed={selected}
-        aria-label={t("home.clips.toggleLabel", { event: label, seconds })}
-        data-testid={`home-clip-${clip.file_path}`}
-        className={[
-          // `h-full`: 이유 줄이 없는 카드(상황을 못 찍은 클립)가 한 줄만큼
-          // 짧아져 격자 아래 모서리가 들쭉날쭉해졌다. 칸을 채우게 두면 한 행의
-          // 카드가 가장 큰 것에 맞춰 정렬된다.
-          "block h-full w-full overflow-hidden rounded-lg border text-left transition-colors",
-          selected
-            ? "border-gaming-cyan bg-gaming-cyan/10"
-            : "border-white/5 bg-white/[0.02] hover:border-gaming-cyan/40",
-        ].join(" ")}
-      >
-        <span className="relative block aspect-video w-full bg-black/40">
-          {thumbnailSrc && (
-            <img
-              src={thumbnailSrc}
-              alt=""
-              className="absolute inset-0 h-full w-full object-cover"
-              onError={(e) => {
-                e.currentTarget.style.visibility = "hidden";
-              }}
-            />
-          )}
-          {generatingThumbnail && !thumbnailSrc && (
-            <span className="absolute inset-0 flex items-center justify-center">
-              <Spinner size="sm" />
-            </span>
-          )}
-          {!generatingThumbnail && !thumbnailSrc && (
-            <span className="absolute inset-0 flex items-center justify-center">
-              <Film className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
-            </span>
-          )}
-          <span className="absolute bottom-1.5 right-1.5 rounded bg-black/75 px-1.5 py-0.5 text-xs tabular-nums text-white">
-            {t("home.clips.seconds", { count: seconds })}
-          </span>
-          {selected && (
-            <span className="absolute left-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-gaming-cyan text-black">
-              <Check className="h-4 w-4" aria-hidden="true" />
-            </span>
-          )}
-        </span>
-        <span className="block px-3 py-2">
-          <span
-            className="block truncate text-sm font-medium"
-            style={{ wordBreak: "keep-all" }}
-          >
-            {label}
-          </span>
-          {reasons.length > 0 && (
-            <span
-              className="mt-0.5 block truncate text-xs text-gaming-cyan/80"
-              style={{ wordBreak: "keep-all" }}
-              data-testid={`home-clip-reasons-${clip.file_path}`}
-            >
-              {/* 가운뎃점으로 잇는다 — 배지 다섯 개는 카드 폭을 넘고, 이 줄은
-                  읽히는 것이 목적이지 클릭 대상이 아니다. */}
-              {reasons.map((r) => t(r.key, r.params)).join(" · ")}
-            </span>
-          )}
-        </span>
-      </button>
-
-      {/* 재생은 선택과 다른 동작이므로 카드 버튼 안에 중첩하지 않는다. */}
-      <button
-        type="button"
-        onClick={onPlay}
-        aria-label={t("home.clips.playLabel", { event: label })}
-        data-testid={`home-clip-play-${clip.file_path}`}
-        className="absolute right-1.5 top-1.5 flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-white opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
-      >
-        <Play className="h-4 w-4" aria-hidden="true" />
-      </button>
-    </div>
-  );
-}
-
 export function Home() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const setSelectedGameId = useEditorStore((s) => s.setSelectedGameId);
+  const setPinnedClips = useAutoEditStore((s) => s.setPinnedClips);
+  const setSelectedGameIds = useAutoEditStore((s) => s.setSelectedGameIds);
 
   const [gameStatus, setGameStatus] = useState<UnifiedGameStatus | null>(null);
+  const [captureWarning, setCaptureWarning] = useState<string | null>(null);
   const [isTogglingCapture, setIsTogglingCapture] = useState(false);
   const [clips, setClips] = useState<ClipMetadata[]>([]);
   const [generating, setGenerating] = useState<Set<string>>(new Set());
@@ -157,12 +63,26 @@ export function Home() {
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [videoTitle, setVideoTitle] = useState("");
 
+  /**
+   * 이 화면이 보여주는 판. 액션(다듬기·만들기)이 **어느 판인지** 알아야 하는데
+   * 지금까지 홈은 이 값을 갖고 있지도 않았고 넘기지도 않았다.
+   */
+  const [gameId, setGameId] = useState<string | null>(null);
+  const [game, setGame] = useState<GameMetadata | null>(null);
+
   const refreshStatus = useCallback(async () => {
-    try {
-      setGameStatus(await lcuApi.getUnifiedGameStatus());
-    } catch (error) {
+    const [gameResult, recordingResult] = await Promise.allSettled([
+      lcuApi.getUnifiedGameStatus(),
+      recordingApi.getStatus(),
+    ]);
+    if (gameResult.status === "fulfilled") {
+      setGameStatus(gameResult.value);
+    } else {
       // 상태 한 줄이 안 읽히는 것으로 화면 전체를 죽이지 않는다.
-      logger.error("[Home] Failed to read game status:", error);
+      logger.error("[Home] Failed to read game status:", gameResult.reason);
+    }
+    if (recordingResult.status === "fulfilled") {
+      setCaptureWarning(recordingResult.value.capture_warning ?? null);
     }
   }, []);
 
@@ -171,21 +91,37 @@ export function Home() {
     try {
       const games = (await storageApi.listGames()) ?? [];
       if (games.length === 0) {
+        setGameId(null);
+        setGame(null);
         setClips([]);
         return;
       }
 
       const latest = games[0];
+      setGameId(latest);
+
+      // 판 맥락(챔피언·승패·KDA)은 **있으면 좋은 것**이다. 못 얻어도 클립은
+      // 보여야 하므로 클립 로딩과 묶지 않고 따로 실패시킨다.
+      storageApi
+        .getGameMetadata(latest)
+        .then((meta) => setGame(meta ?? null))
+        .catch((error) => {
+          logger.error("[Home] Failed to read game metadata:", error);
+          setGame(null);
+        });
+
       const list = (await storageApi.listClips(latest)) ?? [];
-      // 새로 만들어진 것이 앞에. 백엔드 정렬에 기대지 않는다.
-      const ordered = [...list].sort((a, b) =>
-        String(b.created_at).localeCompare(String(a.created_at)),
-      );
-      const shown = ordered.slice(0, MAX_CLIPS_ON_HOME);
+
+      // **점수순**이다. 만들어진 시각순이 아니다.
+      //
+      // 이 화면이 답하는 질문은 "이번 판에서 내가 뭘 잘했나" 이고, 마지막에
+      // 저장된 어시스트가 그 판의 펜타킬 위에 놓이면 그 질문에 답하지 못한다.
+      // 규칙은 `clipRanking.ts` — 백엔드와 같은 폴백을 쓰되 재사용 감쇠는 뺀다.
+      const shown = rankClips(list).slice(0, MAX_CLIPS_ON_HOME);
       setClips(shown);
 
-      // 자동 클립은 `thumbnail_path: None` 으로 저장되므로(auto_clip_manager)
-      // 여기서 만들어 붙인다. 실패해도 카드는 아이콘으로 남는다.
+      // 자동 클립은 저장 시점에 썸네일이 붙지만(auto_clip_manager), 수동 저장분과
+      // 예전 클립은 비어 있다. 없는 것만 만들어 붙인다 — 실패해도 카드는 아이콘으로 남는다.
       for (const clip of shown) {
         if (clip.thumbnail_path) continue;
         setGenerating((prev) => new Set(prev).add(clip.file_path));
@@ -219,6 +155,58 @@ export function Home() {
       setIsLoading(false);
     }
   }, []);
+
+  /**
+   * 편집기·자동편집으로 넘어갈 때 **어느 판인지, 무엇을 골랐는지** 알려준다.
+   *
+   * 예전에는 `navigate({to:"/editor"})` 만 했다 — gameId 도 선택도 넘기지 않아서
+   * 홈에서 「만들기」를 누르면 빈 화면이 열렸고, 카드의 선택 체크는 아무 일도
+   * 하지 않는 장식이었다. `Games.tsx` 는 처음부터 gameId 를 제대로 넘기고
+   * 있었으므로 같은 방식을 쓰고, 클립 선택은 store 로 건넨다(경로 목록은 URL 에
+   * 실을 것이 아니다).
+   */
+  const openWithGame = useCallback(
+    (to: "/editor" | "/auto-edit") => {
+      if (!gameId) return;
+
+      setSelectedGameId(gameId);
+      if (to === "/editor") {
+        setPinnedClips(null);
+        navigate({ to, search: { gameId } });
+        return;
+      }
+
+      // 고른 게 있으면 그것만 쓰라고 넘긴다. 없으면 null 로 눕혀 자동 선택으로
+      // 되돌린다 — 이전 방문의 선택이 남아 조용히 이번 영상을 제한하면 안 된다.
+      setPinnedClips(
+        selected.size > 0
+          ? {
+              groups: [
+                {
+                  gameId,
+                  // 화면에 보이는 순서(=점수순)를 그대로 넘긴다.
+                  paths: clips
+                    .map((c) => c.file_path)
+                    .filter((p) => selected.has(p)),
+                },
+              ],
+            }
+          : null,
+      );
+
+      setSelectedGameIds([gameId]);
+      navigate({ to });
+    },
+    [
+      clips,
+      gameId,
+      navigate,
+      selected,
+      setPinnedClips,
+      setSelectedGameId,
+      setSelectedGameIds,
+    ],
+  );
 
   useEffect(() => {
     refreshStatus();
@@ -282,6 +270,24 @@ export function Home() {
   return (
     <div data-testid="home" className="flex min-h-full flex-col gap-5 p-6">
       {/* 연동 상태 — 한 줄. 이 화면의 주인공이 아니다. */}
+      {captureWarning && (
+        <Alert
+          className="border-yellow-500/40 bg-yellow-500/10"
+          data-testid="home-capture-warning"
+        >
+          <AlertTriangle className="h-4 w-4 text-yellow-400" />
+          <AlertTitle>Capture privacy warning</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span>{captureWarning}</span>
+            <Link
+              to="/settings"
+              className="font-medium underline underline-offset-4"
+            >
+              Review capture settings
+            </Link>
+          </AlertDescription>
+        </Alert>
+      )}
       <div
         data-testid="home-status"
         className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-white/5 bg-white/[0.02] px-4 py-2.5 text-sm"
@@ -297,8 +303,13 @@ export function Home() {
                 : "bg-muted-foreground",
           ].join(" ")}
         />
-        <span className="font-medium">{t(`home.status.${statusTone}.title`)}</span>
-        <span className="text-muted-foreground" style={{ wordBreak: "keep-all" }}>
+        <span className="font-medium">
+          {t(`home.status.${statusTone}.title`)}
+        </span>
+        <span
+          className="text-muted-foreground"
+          style={{ wordBreak: "keep-all" }}
+        >
           {t(`home.status.${statusTone}.description`)}
         </span>
         <div className="ml-auto flex items-center gap-3">
@@ -325,12 +336,23 @@ export function Home() {
         </div>
       </div>
 
-      {/* 재료 */}
+      {/* 이번 판의 하이라이트 — 점수 높은 순 */}
       <section className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h1 className="text-lg font-semibold">{t("home.clips.title")}</h1>
+          {/*
+            어느 판인지부터 말한다. 메타데이터를 못 얻으면 일반 제목으로 떨어지되
+            클립은 그대로 보인다 — 헤더 하나 때문에 화면이 비면 안 된다.
+          */}
+          {game ? (
+            <GameSummary game={game} testId="home-game-summary" />
+          ) : (
+            <h1 className="text-lg font-semibold" data-autofocus tabIndex={-1}>
+              {t("home.clips.title")}
+            </h1>
+          )}
           <Link
             to="/results"
+            search={{ tab: "clips" }}
             className="text-sm text-muted-foreground underline-offset-4 hover:underline"
             data-testid="home-see-all"
           >
@@ -347,20 +369,37 @@ export function Home() {
             data-testid="home-empty"
             className="flex min-h-[320px] flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-white/10 px-6 py-10 text-center"
           >
-            <Film className="h-10 w-10 text-muted-foreground" aria-hidden="true" />
-            <p className="text-base font-medium">{t("home.empty.title")}</p>
+            <Film
+              className="h-10 w-10 text-muted-foreground"
+              aria-hidden="true"
+            />
+            {/*
+              빈 이유가 둘이고 할 일이 다르다.
+
+              - 판 자체가 없다  -> 아직 녹화된 게임이 없다. 기다리거나 설정을 본다
+              - 판은 있는데 0개 -> 녹화는 됐는데 담을 만한 게 없었다. 문턱을 낮춰야 한다
+
+              같은 문구로 뭉개면 후자의 사용자는 "녹화가 안 됐나" 하고 엉뚱한 곳을 본다.
+            */}
+            <p className="text-base font-medium">
+              {t(gameId ? "home.empty.noClips.title" : "home.empty.title")}
+            </p>
             <p
               className="max-w-md text-sm text-muted-foreground"
               style={{ wordBreak: "keep-all" }}
             >
-              {t("home.empty.description")}
+              {t(
+                gameId
+                  ? "home.empty.noClips.description"
+                  : "home.empty.description",
+              )}
             </p>
             <Button
               variant="outline"
               onClick={() => navigate({ to: "/settings" })}
               data-testid="home-empty-settings"
             >
-              {t("home.empty.action")}
+              {t(gameId ? "home.empty.noClips.action" : "home.empty.action")}
             </Button>
           </div>
         ) : (
@@ -368,14 +407,15 @@ export function Home() {
             data-testid="home-clip-grid"
             className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4"
           >
-            {clips.map((clip) => {
-              const label = eventLabel(clip.event_type);
-              const text = t(label.key, label.params ?? {});
+            {clips.map((clip, index) => {
+              const { title } = clipLabel(clip);
+              const text = t(title.key, title.params);
               return (
                 <ClipCard
                   key={clip.file_path}
                   clip={clip}
-                  label={text}
+                  // 목록은 점수순이므로 첫 장이 곧 이 판의 최고의 순간이다.
+                  top={index === 0}
                   selected={selected.has(clip.file_path)}
                   generatingThumbnail={generating.has(clip.file_path)}
                   onToggle={() => toggle(clip.file_path)}
@@ -414,14 +454,16 @@ export function Home() {
           <div className="ml-auto flex flex-wrap gap-2">
             <Button
               variant="outline"
-              onClick={() => navigate({ to: "/editor" })}
+              onClick={() => openWithGame("/editor")}
+              disabled={!gameId}
               data-testid="home-trim"
             >
               <Scissors className="mr-2 h-4 w-4" aria-hidden="true" />
               {t("home.actions.trim")}
             </Button>
             <Button
-              onClick={() => navigate({ to: "/auto-edit" })}
+              onClick={() => openWithGame("/auto-edit")}
+              disabled={!gameId}
               data-testid="home-make-highlight"
             >
               <Sparkles className="mr-2 h-4 w-4" aria-hidden="true" />

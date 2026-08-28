@@ -20,7 +20,10 @@ interface GameModeSettingsProps {
   onChange: (settings: GameModeSettings) => void;
 }
 
-export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) {
+export function GameModeSettings({
+  settings,
+  onChange,
+}: GameModeSettingsProps) {
   const { t } = useTranslation();
   const updateSetting = (key: keyof GameModeSettings, value: boolean) => {
     onChange({ ...settings, [key]: value });
@@ -74,16 +77,30 @@ export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) 
     <div className="space-y-6">
       {/* Presets */}
       <div>
-        <h3 className="text-sm font-semibold mb-3">{t('settings.recordingConfig.gameModes.quickPresets')}</h3>
+        <h3 className="text-sm font-semibold mb-3">
+          {t("settings.recordingConfig.gameModes.quickPresets")}
+        </h3>
         <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" size="sm" onClick={() => applyPreset("competitive")}>
-            {t('settings.recordingConfig.gameModes.competitiveModes')}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => applyPreset("competitive")}
+          >
+            {t("settings.recordingConfig.gameModes.competitiveModes")}
           </Button>
-          <Button variant="outline" size="sm" onClick={() => applyPreset("ranked-only")}>
-            {t('settings.recordingConfig.gameModes.rankedOnly')}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => applyPreset("ranked-only")}
+          >
+            {t("settings.recordingConfig.gameModes.rankedOnly")}
           </Button>
-          <Button variant="outline" size="sm" onClick={() => applyPreset("all")}>
-            {t('settings.recordingConfig.gameModes.allModes')}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => applyPreset("all")}
+          >
+            {t("settings.recordingConfig.gameModes.allModes")}
           </Button>
         </div>
       </div>
@@ -91,41 +108,53 @@ export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) 
       {/* Ranked Modes */}
       <div className="gaming-panel p-6">
         <div className="mb-4">
-          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.gameModes.rankedModes.title')}</h3>
+          <h3 className="text-lg font-semibold">
+            {t("settings.recordingConfig.gameModes.rankedModes.title")}
+          </h3>
           <p className="text-sm text-muted-foreground">
-            {t('settings.recordingConfig.gameModes.rankedModes.description')}
+            {t("settings.recordingConfig.gameModes.rankedModes.description")}
           </p>
         </div>
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_ranked_solo" className="cursor-pointer">
-                {t('settings.recordingConfig.gameModes.rankedModes.rankedSoloDuo')}
+                {t(
+                  "settings.recordingConfig.gameModes.rankedModes.rankedSoloDuo",
+                )}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('settings.recordingConfig.gameModes.rankedModes.rankedSoloDuoDesc')}
+                {t(
+                  "settings.recordingConfig.gameModes.rankedModes.rankedSoloDuoDesc",
+                )}
               </p>
             </div>
             <Switch
               id="record_ranked_solo"
               checked={settings.record_ranked_solo}
-              onCheckedChange={(checked: boolean) => updateSetting("record_ranked_solo", checked)}
+              onCheckedChange={(checked: boolean) =>
+                updateSetting("record_ranked_solo", checked)
+              }
             />
           </div>
 
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_ranked_flex" className="cursor-pointer">
-                {t('settings.recordingConfig.gameModes.rankedModes.rankedFlex')}
+                {t("settings.recordingConfig.gameModes.rankedModes.rankedFlex")}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('settings.recordingConfig.gameModes.rankedModes.rankedFlexDesc')}
+                {t(
+                  "settings.recordingConfig.gameModes.rankedModes.rankedFlexDesc",
+                )}
               </p>
             </div>
             <Switch
               id="record_ranked_flex"
               checked={settings.record_ranked_flex}
-              onCheckedChange={(checked: boolean) => updateSetting("record_ranked_flex", checked)}
+              onCheckedChange={(checked: boolean) =>
+                updateSetting("record_ranked_flex", checked)
+              }
             />
           </div>
         </div>
@@ -134,41 +163,53 @@ export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) 
       {/* Normal Modes */}
       <div className="gaming-panel p-6">
         <div className="mb-4">
-          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.gameModes.normalModes.title')}</h3>
+          <h3 className="text-lg font-semibold">
+            {t("settings.recordingConfig.gameModes.normalModes.title")}
+          </h3>
           <p className="text-sm text-muted-foreground">
-            {t('settings.recordingConfig.gameModes.normalModes.description')}
+            {t("settings.recordingConfig.gameModes.normalModes.description")}
           </p>
         </div>
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_normal" className="cursor-pointer">
-                {t('settings.recordingConfig.gameModes.normalModes.normalDraftBlind')}
+                {t(
+                  "settings.recordingConfig.gameModes.normalModes.normalDraftBlind",
+                )}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('settings.recordingConfig.gameModes.normalModes.normalDraftBlindDesc')}
+                {t(
+                  "settings.recordingConfig.gameModes.normalModes.normalDraftBlindDesc",
+                )}
               </p>
             </div>
             <Switch
               id="record_normal"
               checked={settings.record_normal}
-              onCheckedChange={(checked: boolean) => updateSetting("record_normal", checked)}
+              onCheckedChange={(checked: boolean) =>
+                updateSetting("record_normal", checked)
+              }
             />
           </div>
 
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_quick_play" className="cursor-pointer">
-                {t('settings.recordingConfig.gameModes.normalModes.quickPlay')}
+                {t("settings.recordingConfig.gameModes.normalModes.quickPlay")}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('settings.recordingConfig.gameModes.normalModes.quickPlayDesc')}
+                {t(
+                  "settings.recordingConfig.gameModes.normalModes.quickPlayDesc",
+                )}
               </p>
             </div>
             <Switch
               id="record_quick_play"
               checked={settings.record_quick_play}
-              onCheckedChange={(checked: boolean) => updateSetting("record_quick_play", checked)}
+              onCheckedChange={(checked: boolean) =>
+                updateSetting("record_quick_play", checked)
+              }
             />
           </div>
         </div>
@@ -177,57 +218,75 @@ export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) 
       {/* Alternative Modes */}
       <div className="gaming-panel p-6">
         <div className="mb-4">
-          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.gameModes.alternativeModes.title')}</h3>
+          <h3 className="text-lg font-semibold">
+            {t("settings.recordingConfig.gameModes.alternativeModes.title")}
+          </h3>
           <p className="text-sm text-muted-foreground">
-            {t('settings.recordingConfig.gameModes.alternativeModes.description')}
+            {t(
+              "settings.recordingConfig.gameModes.alternativeModes.description",
+            )}
           </p>
         </div>
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_aram" className="cursor-pointer">
-                {t('settings.recordingConfig.gameModes.alternativeModes.aram')}
+                {t("settings.recordingConfig.gameModes.alternativeModes.aram")}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('settings.recordingConfig.gameModes.alternativeModes.aramDesc')}
+                {t(
+                  "settings.recordingConfig.gameModes.alternativeModes.aramDesc",
+                )}
               </p>
             </div>
             <Switch
               id="record_aram"
               checked={settings.record_aram}
-              onCheckedChange={(checked: boolean) => updateSetting("record_aram", checked)}
+              onCheckedChange={(checked: boolean) =>
+                updateSetting("record_aram", checked)
+              }
             />
           </div>
 
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_arena" className="cursor-pointer">
-                {t('settings.recordingConfig.gameModes.alternativeModes.arena')}
+                {t("settings.recordingConfig.gameModes.alternativeModes.arena")}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('settings.recordingConfig.gameModes.alternativeModes.arenaDesc')}
+                {t(
+                  "settings.recordingConfig.gameModes.alternativeModes.arenaDesc",
+                )}
               </p>
             </div>
             <Switch
               id="record_arena"
               checked={settings.record_arena}
-              onCheckedChange={(checked: boolean) => updateSetting("record_arena", checked)}
+              onCheckedChange={(checked: boolean) =>
+                updateSetting("record_arena", checked)
+              }
             />
           </div>
 
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_special" className="cursor-pointer">
-                {t('settings.recordingConfig.gameModes.alternativeModes.specialEvents')}
+                {t(
+                  "settings.recordingConfig.gameModes.alternativeModes.specialEvents",
+                )}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('settings.recordingConfig.gameModes.alternativeModes.specialEventsDesc')}
+                {t(
+                  "settings.recordingConfig.gameModes.alternativeModes.specialEventsDesc",
+                )}
               </p>
             </div>
             <Switch
               id="record_special"
               checked={settings.record_special}
-              onCheckedChange={(checked: boolean) => updateSetting("record_special", checked)}
+              onCheckedChange={(checked: boolean) =>
+                updateSetting("record_special", checked)
+              }
             />
           </div>
         </div>
@@ -236,41 +295,55 @@ export function GameModeSettings({ settings, onChange }: GameModeSettingsProps) 
       {/* Practice Modes */}
       <div className="gaming-panel p-6">
         <div className="mb-4">
-          <h3 className="text-lg font-semibold">{t('settings.recordingConfig.gameModes.practiceModes.title')}</h3>
+          <h3 className="text-lg font-semibold">
+            {t("settings.recordingConfig.gameModes.practiceModes.title")}
+          </h3>
           <p className="text-sm text-muted-foreground">
-            {t('settings.recordingConfig.gameModes.practiceModes.description')}
+            {t("settings.recordingConfig.gameModes.practiceModes.description")}
           </p>
         </div>
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_custom" className="cursor-pointer">
-                {t('settings.recordingConfig.gameModes.practiceModes.customGames')}
+                {t(
+                  "settings.recordingConfig.gameModes.practiceModes.customGames",
+                )}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('settings.recordingConfig.gameModes.practiceModes.customGamesDesc')}
+                {t(
+                  "settings.recordingConfig.gameModes.practiceModes.customGamesDesc",
+                )}
               </p>
             </div>
             <Switch
               id="record_custom"
               checked={settings.record_custom}
-              onCheckedChange={(checked: boolean) => updateSetting("record_custom", checked)}
+              onCheckedChange={(checked: boolean) =>
+                updateSetting("record_custom", checked)
+              }
             />
           </div>
 
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <Label htmlFor="record_practice" className="cursor-pointer">
-                {t('settings.recordingConfig.gameModes.practiceModes.practiceTool')}
+                {t(
+                  "settings.recordingConfig.gameModes.practiceModes.practiceTool",
+                )}
               </Label>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('settings.recordingConfig.gameModes.practiceModes.practiceToolDesc')}
+                {t(
+                  "settings.recordingConfig.gameModes.practiceModes.practiceToolDesc",
+                )}
               </p>
             </div>
             <Switch
               id="record_practice"
               checked={settings.record_practice}
-              onCheckedChange={(checked: boolean) => updateSetting("record_practice", checked)}
+              onCheckedChange={(checked: boolean) =>
+                updateSetting("record_practice", checked)
+              }
             />
           </div>
         </div>

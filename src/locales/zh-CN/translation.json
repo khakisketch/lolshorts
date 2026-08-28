@@ -193,7 +193,53 @@
     "generate": "生成视频",
     "generating": "生成中...",
     "preview": "预览",
-    "export": "导出"
+    "export": "导出",
+    "pinnedClips": {
+      "title": "Using the {{count}} clips you picked",
+      "summary": "{{clips}} clips from {{games}} games · about {{duration}}",
+      "description": "Your picks replace auto-selection and lock the game list. Every clip you picked goes in.",
+      "rationale": "The {{count}} clips you picked, ordered by highlight score across all selected games.",
+      "useAutomatic": "Switch to auto-selection",
+      "overTargetWarning": "Your picks are about {{estimated}} for a {{target}} target. Every selected scene will be included, so the finished video will be longer.",
+      "overrunTitle": "Include every selected clip?",
+      "overrunDescription": "You selected {{clips}} clips (about {{estimated}}) for a {{target}} target. The finished video will be longer because none of your picks will be removed.",
+      "includeAll": "Include all clips"
+    },
+    "quick": {
+      "title": "快速创建",
+      "description": "选择对局和时长，并在渲染前检查所有场景。",
+      "framing": "LoL 画面布局",
+      "preset": "导出预设",
+      "advanced": "高级设置",
+      "review": "检查片段"
+    },
+    "storyboard": {
+      "title": "检查片段",
+      "summary": "{{clips}} 个片段 · {{duration}} · {{parts}} 个输出",
+      "reset": "恢复推荐",
+      "over180Title": "所选内容超过一条 Short 的时长",
+      "over180Body": "所有已选场景都会保留。请选择 Shorts 系列或普通竖屏视频。",
+      "output": "输出",
+      "timeline": "故事板时间线",
+      "moveUp": "上移片段",
+      "moveDown": "下移片段",
+      "remove": "排除片段",
+      "start": "开始（秒）",
+      "end": "结束（秒）",
+      "clipDuration": "已从 {{source}} 中选择 {{duration}}",
+      "generateSeries": "生成系列"
+    },
+    "output": {
+      "single": "单条 Short",
+      "series": "Shorts 系列",
+      "vertical": "普通竖屏视频"
+    },
+    "framing": {
+      "focus": "HUD + 战斗聚焦",
+      "safe": "完整画面",
+      "crop": "居中裁剪"
+    },
+    "cancelJob": "取消生成"
   },
   "youtube": {
     "title": "YouTube",
@@ -443,5 +489,119 @@
     "uploadComplete": "上传完成：{{title}}",
     "uploadFailed": "上传失败：{{error}}",
     "updateAvailable": "可用更新：v{{version}}"
+  },
+  "results": {
+    "tabs": {
+      "clips": "Clip vault"
+    },
+    "clips": {
+      "title": "Recommended clips",
+      "description": "Original game clips, ranked by the moments most worth watching.",
+      "sortLabel": "Sort clips",
+      "sortRecommended": "Best highlights",
+      "sortNewest": "Newest",
+      "game": "Game",
+      "select": "Select clip",
+      "play": "Play clip",
+      "loading": "Loading recorded clips...",
+      "loadingMore": "Loading more...",
+      "loadMore": "Load more games",
+      "loadError": "Could not load recorded clips.",
+      "skippedItems": "{{count}} damaged clip items were skipped.",
+      "emptyTitle": "No recorded clips yet",
+      "emptyDescription": "Play a game and your strongest moments will appear here.",
+      "unknownDate": "Date unavailable",
+      "clipCount": "{{count}} clips",
+      "selectGame": "Select all",
+      "clearGameSelection": "Clear game",
+      "gameRank": "This game #{{rank}}",
+      "selectionActions": "Selected clip actions",
+      "selectionSummary": "{{clips}} clips · {{games}} games · about {{duration}}",
+      "clearAll": "Clear all",
+      "createMontage": "Create montage",
+      "overTargetWarning": "Every selected scene will be included, so the finished video will be longer than the target."
+    }
+  },
+  "mediaJobs": {
+    "title": "媒体任务",
+    "queued": "排队中",
+    "processing": "处理中",
+    "completed": "已完成",
+    "failed": "失败",
+    "cancelled": "已取消",
+    "paused": "已暂停",
+    "recoverable": "可以继续",
+    "resume": "继续任务",
+    "discard": "放弃任务",
+    "cancel": "取消任务",
+    "retry": "重试任务",
+    "empty": "还没有媒体任务"
+  },
+  "outputValidation": {
+    "title": "输出检查",
+    "duration": "时长",
+    "clipCount": "片段数量",
+    "outputFile": "输出文件",
+    "fileSize": "文件数据",
+    "verified": "已验证",
+    "valid": "有效",
+    "warning": "警告",
+    "invalid": "无效",
+    "unknown": "未知",
+    "revalidate": "重新检查",
+    "needsReview": "需要检查",
+    "missing": "缺失"
+  },
+  "resultSeries": {
+    "title": "系列输出",
+    "part": "第 {{current}} 部，共 {{total}} 部",
+    "parts": "{{count}} 个部分",
+    "totalDuration": "总时长：{{duration}}",
+    "totalSize": "总大小：{{size}}",
+    "deleteGroup": "删除系列",
+    "deletePart": "删除第 {{part}} 部分",
+    "sharePart": "分享此部分"
+  },
+  "platformExport": {
+    "title": "导出到其他平台",
+    "tiktok": "导出到 TikTok",
+    "instagramReels": "导出到 Instagram Reels",
+    "exporting": "正在导出…",
+    "passthrough": "使用原始文件",
+    "convert": "转换为平台格式",
+    "cancel": "取消导出",
+    "busy": "另一个导出正在进行中",
+    "confirmWarning": "要导出一个单独的平台副本吗？",
+    "success": "平台副本已导出",
+    "failed": "无法导出平台副本"
+  },
+  "appUpdater": {
+    "title": "LoLShorts 有可用更新",
+    "description": "版本 {{available}} 已就绪。当前版本为 {{current}}。",
+    "releaseNotes": "更新内容",
+    "later": "稍后",
+    "install": "安装更新",
+    "retry": "重试",
+    "working": "请稍候…",
+    "downloading": "正在下载更新",
+    "installing": "正在启动安装程序",
+    "progressLabel": "更新下载进度",
+    "windowsExitNotice": "Windows 安装更新时 LoLShorts 将关闭。继续前请保存工作。",
+    "settingsTitle": "应用更新",
+    "currentVersion": "当前版本：{{version}}",
+    "upToDate": "版本 {{version}} 已是最新。",
+    "disabled": "未签名的开发版本已禁用更新。",
+    "check": "检查更新",
+    "checking": "正在检查…",
+    "errors": {
+      "updater_disabled": "此版本已禁用更新。",
+      "update_busy": "请停止录制并等待媒体任务完成后再安装。",
+      "update_check_failed": "无法检查更新，请重试。",
+      "update_check_timeout": "更新服务器未在30秒内响应，请重试。",
+      "update_download_timeout": "更新下载超过15分钟，已保留当前版本。",
+      "update_signature_invalid": "更新签名无效，已保留当前版本。",
+      "update_install_failed": "无法安装更新，已保留当前版本。",
+      "unknown": "无法完成更新，请重试。"
+    }
   }
 }

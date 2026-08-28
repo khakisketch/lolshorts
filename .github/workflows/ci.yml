@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
         with:
           components: rustfmt, clippy
 
@@ -49,6 +49,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-build-
 
+      - name: Prepare compile-only FFmpeg resource fixtures
+        shell: powershell
+        run: |
+          # Cargo/Tauri validates externalBin paths while compiling tests, but
+          # this job never bundles or executes the media tools. Keep the large,
+          # checksum-pinned download in the installer/E2E jobs below.
+          New-Item -ItemType Directory -Path src-tauri/binaries -Force | Out-Null
+          New-Item -ItemType File -Path src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe -Force | Out-Null
+          New-Item -ItemType File -Path src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe -Force | Out-Null
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Set-Content -LiteralPath dist/index.html -Value '<!doctype html><html><body>compile-only fixture</body></html>' -NoNewline
+
       - name: Check formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
@@ -73,8 +85,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
       - name: Install dependencies
         run: npm ci
@@ -113,17 +128,27 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
 
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Build frontend for Tauri
+        run: npm run build
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
+
+      - name: Prepare pinned FFmpeg sidecars
+        shell: powershell
+        run: ./src-tauri/build_scripts/prepare_ffmpeg.ps1 -Source Download
 
       - name: Build application
         run: npm run tauri build -- --debug
@@ -149,21 +174,24 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
 
       - name: Run Rust security audit
-        run: cargo audit --manifest-path src-tauri/Cargo.toml
+        run: cargo audit --file Cargo.lock
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
       - name: Run npm security audit
-        run: npm audit --audit-level=moderate
+        run: npm audit --omit=dev --audit-level=moderate
 
   # Build check (verify full build works)
   build-check:
@@ -176,22 +204,51 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24.2.0"
           cache: "npm"
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Build frontend for Tauri
+        run: npm run build
+
+      - name: Prepare pinned FFmpeg sidecars
+        shell: powershell
+        run: ./src-tauri/build_scripts/prepare_ffmpeg.ps1 -Source Download
+
+      - name: Generate ephemeral updater signing fixture
+        id: fixture-key
+        shell: powershell
+        run: |
+          # CI validates that installers can be produced without depending on
+          # production signing secrets. The release workflow is the only job
+          # allowed to consume the real private key.
+          $keyPath = Join-Path $env:RUNNER_TEMP "lolshorts-ci.key"
+          npx tauri signer generate --ci --password "ci-fixture-only" --write-keys $keyPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "private_key_path=$keyPath" >> $env:GITHUB_OUTPUT
+          "public_key_path=$keyPath.pub" >> $env:GITHUB_OUTPUT
+
       - name: Build application (release mode)
-        run: cargo tauri build --verbose
+        # Use the pinned project-local CLI from package-lock.json. A runner's
+        # global cargo-tauri installation is not part of our reproducible toolchain.
+        shell: powershell
+        run: |
+          $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath '${{ steps.fixture-key.outputs.private_key_path }}' -Raw
+          $env:TAURI_UPDATER_PUBKEY = Get-Content -LiteralPath '${{ steps.fixture-key.outputs.public_key_path }}' -Raw
+          npm run tauri build -- --verbose
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         env:
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ci-fixture-only
 
       - name: Verify installers created
         run: |

@@ -72,7 +72,9 @@ const MULTIKILL_NAMES: Record<number, string> = {
   5: "penta",
 };
 
-export function eventLabel(eventType: EventType | null | undefined): EventLabel {
+export function eventLabel(
+  eventType: EventType | null | undefined,
+): EventLabel {
   if (eventType == null) {
     return { key: "events.unknown", unknown: true };
   }

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { supabase } from "./supabase";
 import { authApi, EntitlementInfo } from "@/api/auth";
-import { getErrorKey } from "./errorMapper";
+import { getErrorKey, isNetworkError } from "./errorMapper";
 import { logger } from "@/lib/logger";
 import type { User as SupabaseUser, Session } from "@supabase/supabase-js";
 
@@ -32,13 +32,13 @@ export interface SignupCredentials {
   confirm_password: string;
 }
 
+export type SignupResult = "signed_in" | "confirmation_required";
+
 export interface LicenseInfo {
   tier: "FREE" | "PRO";
   expires_at?: string;
   features: string[];
 }
-
-let tokenRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
 interface AuthState {
   user: User | null;
@@ -48,17 +48,18 @@ interface AuthState {
   error: string | null;
 
   login: (credentials: LoginCredentials) => Promise<void>;
-  loginWithGoogle: () => Promise<void>;
-  signup: (credentials: SignupCredentials) => Promise<void>;
+  signup: (credentials: SignupCredentials) => Promise<SignupResult>;
   logout: () => Promise<void>;
   refreshToken: () => Promise<void>;
+  syncSession: (session: Session) => Promise<void>;
+  syncSignedOut: () => Promise<void>;
   refreshEntitlement: () => Promise<EntitlementInfo | null>;
   checkAuth: () => Promise<void>;
   getLicenseInfo: () => Promise<LicenseInfo | null>;
   clearError: () => void;
-  startTokenRefresh: () => void;
-  stopTokenRefresh: () => void;
 }
+
+let backendLogoutInFlight: Promise<void> | null = null;
 
 function tierFromEntitlement(
   entitlement: EntitlementInfo | null,
@@ -132,16 +133,40 @@ async function ensureUserProfile(user: SupabaseUser): Promise<void> {
   }
 }
 
-async function syncBackendSession(session: Session): Promise<EntitlementInfo> {
-  const response = await authApi.setSession(
-    session.access_token,
-    session.refresh_token,
-    session.user.id,
-    session.user.email || "",
-    session.expires_at ?? null,
-  );
+async function fetchOrCreateUserProfile(
+  user: SupabaseUser,
+): Promise<UserProfile | null> {
+  const existing = await fetchUserProfile(user);
+  if (existing) return existing;
 
-  return response.entitlement;
+  await ensureUserProfile(user);
+  return fetchUserProfile(user);
+}
+
+async function syncBackendSession(session: Session): Promise<EntitlementInfo> {
+  const retryDelaysMs = [0, 500, 1_500] as const;
+  let lastError: unknown;
+
+  for (const delayMs of retryDelaysMs) {
+    if (delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+    try {
+      const response = await authApi.setSession(
+        session.access_token,
+        session.refresh_token,
+        session.user.id,
+        session.user.email || "",
+        session.expires_at ?? null,
+      );
+      return response.entitlement;
+    } catch (error) {
+      lastError = error;
+      if (!isNetworkError(error)) throw error;
+    }
+  }
+
+  throw lastError;
 }
 
 function requireSession(session: Session | null): Session {
@@ -173,7 +198,7 @@ export const useAuthStore = create<AuthState>()(
 
           const session = requireSession(data.session);
           const entitlement = await syncBackendSession(session);
-          const profile = await fetchUserProfile(data.user);
+          const profile = await fetchOrCreateUserProfile(data.user);
           const user = buildUser(data.user, entitlement, profile);
 
           set({
@@ -183,28 +208,6 @@ export const useAuthStore = create<AuthState>()(
             isLoading: false,
             error: null,
           });
-        } catch (error: unknown) {
-          const errorKey = getErrorKey(error);
-          set({
-            error: errorKey,
-            isLoading: false,
-          });
-          throw new Error(errorKey);
-        }
-      },
-
-      loginWithGoogle: async () => {
-        set({ isLoading: true, error: null });
-        try {
-          const { error } = await supabase.auth.signInWithOAuth({
-            provider: "google",
-            options: {
-              redirectTo: window.location.origin,
-            },
-          });
-
-          if (error) throw error;
-          set({ isLoading: false });
         } catch (error: unknown) {
           const errorKey = getErrorKey(error);
           set({
@@ -232,8 +235,22 @@ export const useAuthStore = create<AuthState>()(
           if (error) throw error;
           if (!data.user) throw new Error("No user returned");
 
+          // No session is Supabase's successful email-confirmation path. Do
+          // not attempt authenticated profile or entitlement calls until the
+          // user has confirmed the email address and signed in.
+          if (!data.session) {
+            set({
+              user: null,
+              entitlement: null,
+              isAuthenticated: false,
+              isLoading: false,
+              error: null,
+            });
+            return "confirmation_required";
+          }
+
+          const session = data.session;
           await ensureUserProfile(data.user);
-          const session = requireSession(data.session);
           const entitlement = await syncBackendSession(session);
           const profile = await fetchUserProfile(data.user);
           const user = buildUser(data.user, entitlement, profile);
@@ -245,6 +262,7 @@ export const useAuthStore = create<AuthState>()(
             isLoading: false,
             error: null,
           });
+          return "signed_in";
         } catch (error: unknown) {
           const errorKey = getErrorKey(error);
           set({
@@ -258,20 +276,9 @@ export const useAuthStore = create<AuthState>()(
       logout: async () => {
         set({ isLoading: true, error: null });
         try {
-          get().stopTokenRefresh();
-
           const { error } = await supabase.auth.signOut();
           if (error) throw error;
-
-          await authApi.logout();
-
-          set({
-            user: null,
-            entitlement: null,
-            isAuthenticated: false,
-            isLoading: false,
-            error: null,
-          });
+          await get().syncSignedOut();
         } catch (error: unknown) {
           const errorKey = getErrorKey(error);
           set({
@@ -288,11 +295,7 @@ export const useAuthStore = create<AuthState>()(
           if (error) throw error;
 
           if (data.user && data.session) {
-            const entitlement = await syncBackendSession(data.session);
-            const profile = await fetchUserProfile(data.user);
-            const user = buildUser(data.user, entitlement, profile);
-
-            set({ user, entitlement, isAuthenticated: true });
+            await get().syncSession(data.session);
           }
         } catch (error) {
           logger.error("[AuthStore] Token refresh failed:", error);
@@ -302,6 +305,65 @@ export const useAuthStore = create<AuthState>()(
             isAuthenticated: false,
             error: "errors.sessionExpired",
           });
+        }
+      },
+
+      // Supabase JS owns refresh scheduling. Every refreshed session must also
+      // replace the Rust-side access/refresh tokens used by entitlement, quota,
+      // and YouTube command authorization during long-running app sessions.
+      syncSession: async (session) => {
+        try {
+          const entitlement = await syncBackendSession(session);
+          const profile = await fetchOrCreateUserProfile(session.user);
+          const user = buildUser(session.user, entitlement, profile);
+
+          set({
+            user,
+            entitlement,
+            isAuthenticated: true,
+            isLoading: false,
+            error: null,
+          });
+        } catch (error: unknown) {
+          const errorKey = getErrorKey(error);
+          set({ error: errorKey, isLoading: false });
+          throw new Error(errorKey);
+        }
+      },
+
+      // A SIGNED_OUT event can be raised by an explicit logout, a revoked
+      // refresh token, or another device. Clear local authorization first and
+      // coalesce the Rust-side logout so explicit and event-driven paths cannot
+      // race or leave stale command authorization behind.
+      syncSignedOut: async () => {
+        const hadAuthenticatedSession =
+          get().isAuthenticated || get().user !== null;
+
+        set({
+          user: null,
+          entitlement: null,
+          isAuthenticated: false,
+          isLoading: false,
+          error: null,
+        });
+
+        if (!backendLogoutInFlight && hadAuthenticatedSession) {
+          backendLogoutInFlight = authApi.logout().finally(() => {
+            backendLogoutInFlight = null;
+          });
+        }
+
+        if (backendLogoutInFlight) {
+          try {
+            await backendLogoutInFlight;
+          } catch (error) {
+            // Local state remains signed out (fail closed). The backend session
+            // is in-memory only and is also discarded when the app exits.
+            logger.warn(
+              "[AuthStore] Backend logout synchronization failed:",
+              error,
+            );
+          }
         }
       },
 
@@ -348,7 +410,7 @@ export const useAuthStore = create<AuthState>()(
 
           if (session?.user) {
             const entitlement = await syncBackendSession(session);
-            const profile = await fetchUserProfile(session.user);
+            const profile = await fetchOrCreateUserProfile(session.user);
             const user = buildUser(session.user, entitlement, profile);
 
             set({
@@ -394,69 +456,6 @@ export const useAuthStore = create<AuthState>()(
       },
 
       clearError: () => set({ error: null }),
-
-      startTokenRefresh: () => {
-        if (tokenRefreshInterval) {
-          clearInterval(tokenRefreshInterval);
-        }
-
-        const calculateRefreshInterval = async (): Promise<number> => {
-          const {
-            data: { session },
-          } = await supabase.auth.getSession();
-          if (!session) {
-            return 30 * 60 * 1000;
-          }
-
-          const expiresAt = session.expires_at;
-          const expiresInSeconds = session.expires_in;
-
-          if (expiresAt) {
-            const now = Math.floor(Date.now() / 1000);
-            const timeUntilExpiry = expiresAt - now;
-            const refreshInterval = Math.max(timeUntilExpiry - 300, 60) * 1000;
-            logger.info(
-              `[AuthStore] Session expires in ${timeUntilExpiry}s, refreshing in ${refreshInterval / 1000}s`,
-            );
-            return refreshInterval;
-          }
-
-          if (expiresInSeconds) {
-            const refreshInterval = Math.max(expiresInSeconds - 300, 60) * 1000;
-            logger.info(
-              `[AuthStore] Session expires in ${expiresInSeconds}s, refreshing in ${refreshInterval / 1000}s`,
-            );
-            return refreshInterval;
-          }
-
-          return 30 * 60 * 1000;
-        };
-
-        calculateRefreshInterval()
-          .then((refreshInterval) => {
-            tokenRefreshInterval = setInterval(() => {
-              const { user, refreshToken } = get();
-              if (user) {
-                refreshToken().catch((err) => {
-                  logger.error("[AuthStore] Token refresh failed:", err);
-                });
-              }
-            }, refreshInterval);
-          })
-          .catch((err) => {
-            logger.error(
-              "[AuthStore] Failed to calculate refresh interval:",
-              err,
-            );
-          });
-      },
-
-      stopTokenRefresh: () => {
-        if (tokenRefreshInterval) {
-          clearInterval(tokenRefreshInterval);
-          tokenRefreshInterval = null;
-        }
-      },
     }),
     {
       name: "lolshorts-auth",

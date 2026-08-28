@@ -69,7 +69,7 @@ mod tests {
                 recommended_settings: RecommendedSettings {
                     video: VideoRecommendations {
                         recommended_encoder: EncoderPreference::Auto,
-                        recommended_codec: "h265".to_string(),
+                        recommended_codec: "h264".to_string(),
                         recommended_bitrate_kbps: 10000,
                         recommended_resolution: "1920x1080".to_string(),
                         recommended_frame_rate: "60".to_string(),
@@ -79,7 +79,7 @@ mod tests {
                         recommended_sample_rate: "48000".to_string(),
                         recommended_bitrate: "192".to_string(),
                         max_channels: 2,
-                        enable_microphone_by_default: true,
+                        enable_microphone_by_default: false,
                         enable_system_audio_by_default: true,
                     },
                     performance: PerformanceRecommendations {

@@ -32,7 +32,10 @@ export function AdvancedDisclosure({
   const { t } = useTranslation();
 
   return (
-    <details data-testid={testId} className="group rounded-lg border border-white/5">
+    <details
+      data-testid={testId}
+      className="group rounded-lg border border-white/5"
+    >
       <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
         <ChevronRight
           className="h-4 w-4 shrink-0 transition-transform group-open:rotate-90"

@@ -14,8 +14,8 @@ pub mod windows_capture;
 
 pub use segment_recorder::SegmentRecorder;
 pub use types::{
-    get_league_capture_title, HwAccel, RecordingConfig, RecordingStats, RecordingStatus,
-    SystemStatus, VideoEncoder, VideoSettingsConfig,
+    get_league_capture_title, CaptureBackend, CaptureMode, HwAccel, RecordingConfig,
+    RecordingStats, RecordingStatus, SystemStatus, VideoEncoder, VideoSettingsConfig,
 };
 pub use windows_capture::WindowsCaptureRecorder;
 
@@ -59,6 +59,7 @@ pub async fn initialize_recording_backend_full(
         hw_accel,
         output_dir,
         audio_config,
+        monitor_index: video.monitor_index,
         ..Default::default()
     };
 
@@ -108,7 +109,7 @@ mod tests {
     async fn test_config_default() {
         let config = RecordingConfig::default();
         assert_eq!(config.fps, 60);
-        assert_eq!(config.bitrate, 15_000_000);
+        assert_eq!(config.bitrate, 20_000_000);
         assert_eq!(config.resolution, (1920, 1080));
         assert_eq!(config.buffer_duration_secs, 90);
         assert_eq!(config.segment_duration_secs, 10);

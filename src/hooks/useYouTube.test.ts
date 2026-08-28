@@ -1,8 +1,8 @@
-import { renderHook, act, waitFor } from '@testing-library/react';
-import { useYouTube } from './useYouTube';
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { useYouTube } from "./useYouTube";
 
 // Mock the youtube API
-jest.mock('@/api/youtube', () => ({
+jest.mock("@/api/youtube", () => ({
   youtubeApi: {
     getAuthStatus: jest.fn(),
     getUploadHistory: jest.fn(),
@@ -20,21 +20,21 @@ jest.mock('@/api/youtube', () => ({
 }));
 
 // Mock client API
-jest.mock('@/api/client', () => ({
+jest.mock("@/api/client", () => ({
   cmd: jest.fn(),
   listenToEvent: jest.fn().mockResolvedValue(jest.fn()),
 }));
 
 // Mock utils
-jest.mock('@/lib/utils', () => ({
-  getErrorMessage: jest.fn((err) => err?.message || 'Unknown error'),
+jest.mock("@/lib/utils", () => ({
+  getErrorMessage: jest.fn((err) => err?.message || "Unknown error"),
 }));
 
-import { youtubeApi } from '../api/youtube';
+import { youtubeApi } from "../api/youtube";
 
 const mockYoutubeApi = youtubeApi as jest.Mocked<typeof youtubeApi>;
 
-describe('useYouTube', () => {
+describe("useYouTube", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockYoutubeApi.getAuthStatus.mockResolvedValue({
@@ -43,33 +43,47 @@ describe('useYouTube', () => {
       has_refresh_token: false,
     });
     mockYoutubeApi.getUploadHistory.mockResolvedValue([]);
+    mockYoutubeApi.getUploadQueue.mockResolvedValue([]);
   });
 
-  describe('initialization', () => {
-    it('should check auth status on mount', async () => {
-      renderHook(() => useYouTube());
+  afterEach(async () => {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  });
 
+  describe("initialization", () => {
+    it("should check auth status on mount", async () => {
+      renderHook(() => useYouTube());
+      await act(async () => {
+        await Promise.resolve();
+      });
       await waitFor(() => {
         expect(mockYoutubeApi.getAuthStatus).toHaveBeenCalled();
       });
     });
 
-    it('should load history on mount', async () => {
+    it("should load history on mount", async () => {
       renderHook(() => useYouTube());
-
+      await act(async () => {
+        await Promise.resolve();
+      });
       await waitFor(() => {
         expect(mockYoutubeApi.getUploadHistory).toHaveBeenCalled();
       });
     });
 
-    it('should set isAuthenticated to false initially', () => {
+    it("should set isAuthenticated to false initially", async () => {
       const { result } = renderHook(() => useYouTube());
+      await act(async () => {
+        await Promise.resolve();
+      });
       expect(result.current.isAuthenticated).toBe(false);
     });
   });
 
-  describe('authentication', () => {
-    it('should update auth status after checkAuthStatus', async () => {
+  describe("authentication", () => {
+    it("should update auth status after checkAuthStatus", async () => {
       mockYoutubeApi.getAuthStatus.mockResolvedValue({
         authenticated: true,
         expires_at: Date.now() + 3600000,
@@ -83,8 +97,8 @@ describe('useYouTube', () => {
       });
     });
 
-    it('should call startAuthWithServer when startAuth is called', async () => {
-      mockYoutubeApi.startAuthWithServer.mockResolvedValue('https://auth.url');
+    it("should call startAuthWithServer when startAuth is called", async () => {
+      mockYoutubeApi.startAuthWithServer.mockResolvedValue("https://auth.url");
 
       const { result } = renderHook(() => useYouTube());
 
@@ -94,10 +108,10 @@ describe('useYouTube', () => {
       });
 
       expect(mockYoutubeApi.startAuthWithServer).toHaveBeenCalled();
-      expect(authUrl).toBe('https://auth.url');
+      expect(authUrl).toBe("https://auth.url");
     });
 
-    it('should handle logout correctly', async () => {
+    it("should handle logout correctly", async () => {
       mockYoutubeApi.getAuthStatus.mockResolvedValue({
         authenticated: true,
         expires_at: Date.now() + 3600000,
@@ -120,14 +134,14 @@ describe('useYouTube', () => {
     });
   });
 
-  describe('upload', () => {
-    it('should upload video with correct parameters', async () => {
+  describe("upload", () => {
+    it("should upload video with correct parameters", async () => {
       const mockVideo = {
-        id: 'video123',
-        title: 'Test Video',
-        description: 'Test Description',
-        url: 'https://youtube.com/watch?v=video123',
-        thumbnail_url: 'https://img.youtube.com/vi/video123/default.jpg',
+        id: "video123",
+        title: "Test Video",
+        description: "Test Description",
+        url: "https://youtube.com/watch?v=video123",
+        thumbnail_url: "https://img.youtube.com/vi/video123/default.jpg",
       };
       mockYoutubeApi.uploadVideo.mockResolvedValue(mockVideo);
 
@@ -136,35 +150,35 @@ describe('useYouTube', () => {
       let uploadResult;
       await act(async () => {
         uploadResult = await result.current.uploadVideo(
-          '/path/to/video.mp4',
+          "/path/to/video.mp4",
           {
-            title: 'Test Video',
-            description: 'Test Description',
-            tags: ['test', 'video'],
-            privacy_status: 'private',
+            title: "Test Video",
+            description: "Test Description",
+            tags: ["test", "video"],
+            privacy_status: "private",
           },
-          '/path/to/thumbnail.jpg'
+          "/path/to/thumbnail.jpg",
         );
       });
 
       expect(mockYoutubeApi.uploadVideo).toHaveBeenCalledWith(
-        '/path/to/video.mp4',
-        'Test Video',
-        'Test Description',
-        ['test', 'video'],
-        'private',
-        '/path/to/thumbnail.jpg'
+        "/path/to/video.mp4",
+        "Test Video",
+        "Test Description",
+        ["test", "video"],
+        "private",
+        "/path/to/thumbnail.jpg",
       );
       expect(uploadResult).toEqual(mockVideo);
     });
 
-    it('should reload history after successful upload', async () => {
+    it("should reload history after successful upload", async () => {
       mockYoutubeApi.uploadVideo.mockResolvedValue({
-        id: 'video123',
-        title: 'Test',
-        description: '',
-        url: '',
-        thumbnail_url: '',
+        id: "video123",
+        title: "Test",
+        description: "",
+        url: "",
+        thumbnail_url: "",
       });
 
       const { result } = renderHook(() => useYouTube());
@@ -173,10 +187,10 @@ describe('useYouTube', () => {
       mockYoutubeApi.getUploadHistory.mockClear();
 
       await act(async () => {
-        await result.current.uploadVideo('/path.mp4', {
-          title: 'Test',
-          description: '',
-          privacy_status: 'private',
+        await result.current.uploadVideo("/path.mp4", {
+          title: "Test",
+          description: "",
+          privacy_status: "private",
         });
       });
 
@@ -184,8 +198,8 @@ describe('useYouTube', () => {
     });
   });
 
-  describe('quota', () => {
-    it('should fetch quota info', async () => {
+  describe("quota", () => {
+    it("should fetch quota info", async () => {
       const mockQuota = {
         daily_limit: 10000,
         used: 1600,
@@ -204,22 +218,24 @@ describe('useYouTube', () => {
       expect(quotaInfo).toEqual(mockQuota);
     });
 
-    it('should expose and rethrow quota fetch errors', async () => {
-      mockYoutubeApi.getQuotaInfo.mockRejectedValue(new Error('Network error'));
+    it("should expose and rethrow quota fetch errors", async () => {
+      mockYoutubeApi.getQuotaInfo.mockRejectedValue(new Error("Network error"));
 
       const { result } = renderHook(() => useYouTube());
 
       await act(async () => {
-        await expect(result.current.getQuotaInfo()).rejects.toThrow('Network error');
+        await expect(result.current.getQuotaInfo()).rejects.toThrow(
+          "Network error",
+        );
       });
 
       await waitFor(() => {
-        expect(result.current.error).toBe('Network error');
+        expect(result.current.error).toBe("Network error");
       });
     });
   });
 
-  describe('progress polling', () => {
+  describe("progress polling", () => {
     beforeEach(() => {
       jest.useFakeTimers();
     });
@@ -228,10 +244,10 @@ describe('useYouTube', () => {
       jest.useRealTimers();
     });
 
-    it('should start polling when startProgressPolling is called', async () => {
+    it("should start polling when startProgressPolling is called", async () => {
       mockYoutubeApi.getUploadProgress.mockResolvedValue({
         progress: 50,
-        status: 'uploading',
+        status: "uploading",
       });
 
       const { result } = renderHook(() => useYouTube());
@@ -248,8 +264,11 @@ describe('useYouTube', () => {
       expect(mockYoutubeApi.getUploadProgress).toHaveBeenCalled();
     });
 
-    it('should stop polling when stopProgressPolling is called', () => {
+    it("should stop polling when stopProgressPolling is called", async () => {
       const { result } = renderHook(() => useYouTube());
+      await act(async () => {
+        await Promise.resolve();
+      });
 
       act(() => {
         result.current.startProgressPolling();

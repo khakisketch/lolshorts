@@ -19,7 +19,7 @@ Complete guide for setting up your development environment and building LoLShort
 ### Required Software
 
 #### Node.js and npm
-- **Node.js 18+** (LTS recommended)
+- **Node.js 24.2.0 and npm 11.6.3** (pinned by `.nvmrc`, `package.json`, and CI)
 - [Download](https://nodejs.org/)
 - Verify installation:
   ```bash
@@ -28,7 +28,7 @@ Complete guide for setting up your development environment and building LoLShort
   ```
 
 #### Rust
-- **Rust 1.70+** (latest stable)
+- **Rust 1.94.1** (pinned by `rust-toolchain.toml`)
 - [Install Rust](https://www.rust-lang.org/tools/install)
 - Verify installation:
   ```bash
@@ -39,8 +39,8 @@ Complete guide for setting up your development environment and building LoLShort
 #### FFmpeg
 - **FFmpeg 6.0+** with gdigrab support (Windows) or avfoundation (macOS)
 - Windows: Download from [FFmpeg Builds](https://github.com/BtbN/FFmpeg-Builds/releases)
-  - Extract to `src-tauri/bin/` directory
-  - Files needed: `ffmpeg.exe`, `ffprobe.exe`
+  - Run `prepare_ffmpeg.ps1 -Source System` with the extracted `ffmpeg.exe`
+    and `ffprobe.exe` paths; do not manually invent Tauri sidecar names
 - Verify installation:
   ```bash
   ffmpeg -version
@@ -100,16 +100,18 @@ This installs all frontend and development dependencies defined in `package.json
 
 ### 3. Prepare FFmpeg Binaries
 
-FFmpeg must be present in `src-tauri/bin/` for the app to work.
+FFmpeg must be present as triplet-named Tauri sidecars in `src-tauri/binaries/`
+for the desktop app to build.
 
 **Option A: Automated Setup (Recommended)**
 
-```bash
-# On Windows
-cd src-tauri/build_scripts
-.\prepare_ffmpeg.ps1
-cd ../..
+```powershell
+# On Windows, from the repository root. This validates existing/system tools
+# and otherwise uses the checksum-pinned archive.
+.\src-tauri\build_scripts\prepare_ffmpeg.ps1 -Source Auto
+```
 
+```bash
 # On macOS/Linux
 cd src-tauri/build_scripts
 ./prepare_ffmpeg.sh
@@ -120,18 +122,21 @@ cd ../..
 
 1. Download FFmpeg from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases)
 2. Extract `ffmpeg.exe` and `ffprobe.exe` (Windows) or `ffmpeg` and `ffprobe` (macOS/Linux)
-3. Create directory: `src-tauri/bin/`
-4. Copy binaries to `src-tauri/bin/`
+3. On Windows, pass both extracted executable paths to
+   `prepare_ffmpeg.ps1 -Source System`; the script validates and names them
+   correctly under `src-tauri/binaries/`
+4. Release automation must continue to use `-Source Download` so the immutable
+   URL and SHA-256 contract are enforced
 
 Verify FFmpeg setup:
-```bash
-ls src-tauri/bin/
+```powershell
+Get-ChildItem src-tauri/binaries/*-x86_64-pc-windows-msvc.exe
 ```
 
 Output should show:
 ```
-ffmpeg.exe (or ffmpeg on macOS/Linux)
-ffprobe.exe (or ffprobe on macOS/Linux)
+ffmpeg-x86_64-pc-windows-msvc.exe
+ffprobe-x86_64-pc-windows-msvc.exe
 ```
 
 ### 4. Environment Configuration
@@ -479,17 +484,17 @@ top -p $(pgrep -f ffmpeg)
 
 ### Issue: `FFmpeg not found`
 
-**Cause**: FFmpeg binaries missing from `src-tauri/bin/`
+**Cause**: FFmpeg sidecars are missing from `src-tauri/binaries/`
 
 **Solution**:
-```bash
-# Verify directory exists
-ls src-tauri/bin/
+```powershell
+# Windows, from the repository root
+.\src-tauri\build_scripts\prepare_ffmpeg.ps1 -Source Auto
+```
 
-# If missing, run preparation script
+```bash
+# macOS/Linux
 cd src-tauri/build_scripts
-.\prepare_ffmpeg.ps1  # Windows
-# or
 ./prepare_ffmpeg.sh   # macOS/Linux
 cd ../..
 ```

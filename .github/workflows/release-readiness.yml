@@ -1,0 +1,105 @@
+name: Release Readiness
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  VITE_SUPABASE_URL: https://fixture.supabase.co
+  VITE_SUPABASE_ANON_KEY: release-readiness-public-anon-fixture
+  SUPABASE_URL: https://fixture.supabase.co
+  SUPABASE_ANON_KEY: release-readiness-public-anon-fixture
+  YOUTUBE_CLIENT_ID: release-readiness.apps.googleusercontent.com
+  YOUTUBE_CLIENT_SECRET: release-readiness-public-desktop-fixture
+  YOUTUBE_REDIRECT_URI: http://127.0.0.1:9090/oauth/callback
+  # Intentionally omitted: Sentry is optional and must not block this gate.
+
+jobs:
+  verify-and-build-fixtures:
+    name: Full non-game gate and signed fixture installers
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.2.0
+          cache: npm
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
+
+      - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install pinned Rust audit tool
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox msedge
+
+      - name: Prepare FFmpeg sidecars
+        shell: powershell
+        run: ./src-tauri/build_scripts/prepare_ffmpeg.ps1 -Source Download
+
+      - name: Run complete readiness gate
+        shell: powershell
+        run: ./scripts/verify-non-game-readiness.ps1
+
+      - name: Generate ephemeral updater fixture key
+        id: fixture-key
+        shell: powershell
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP "lolshorts-readiness.key"
+          npx tauri signer generate --ci --password "readiness-fixture-only" --write-keys $keyPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "private_key_path=$keyPath" >> $env:GITHUB_OUTPUT
+          "public_key_path=$keyPath.pub" >> $env:GITHUB_OUTPUT
+
+      - name: Build MSI and NSIS updater fixtures
+        shell: powershell
+        env:
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: readiness-fixture-only
+        run: |
+          $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath '${{ steps.fixture-key.outputs.private_key_path }}' -Raw
+          $env:TAURI_UPDATER_PUBKEY = Get-Content -LiteralPath '${{ steps.fixture-key.outputs.public_key_path }}' -Raw
+          npx tauri build --bundles msi,nsis
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate fixture contract and silent install lifecycle
+        shell: powershell
+        run: |
+          ./scripts/verify-release-contract.ps1 -BundleDir src-tauri/target/release/bundle
+          $msi = Get-ChildItem src-tauri/target/release/bundle/msi -Filter *.msi | Select-Object -First 1
+          $nsis = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
+          ./tests/installer/validate-installer.ps1 -InstallerPath $msi.FullName -InstallerType MSI -NonInteractive -RunSilentInstall
+          ./tests/installer/validate-installer.ps1 -InstallerPath $nsis.FullName -InstallerType NSIS -NonInteractive -RunSilentInstall
+
+      - name: Verify updater failure-preservation fixtures
+        shell: powershell
+        run: ./tests/installer/verify-updater-fixtures.ps1 -BundleDir src-tauri/target/release/bundle
+
+      - name: Upload readiness artifacts only
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-readiness-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.sig
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*.sig
+            test-results/
+            playwright-report/
+          retention-days: 7

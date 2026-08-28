@@ -13,14 +13,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { utilsApi } from "@/api/utils";
-import type { DiagnosticsStatus } from "@/api/utils";
+import type { DiagnosticsStatus, SystemMetrics } from "@/api/utils";
 import {
   Activity,
   AlertTriangle,
   CheckCircle2,
   XCircle,
   Cpu,
-  HardDrive,
   Radio,
   Clock,
   WifiOff,
@@ -28,24 +27,11 @@ import {
 } from "lucide-react";
 import { cmd } from "@/api/client";
 import { logger } from "@/lib/logger";
-
-interface RecordingMetrics {
-  fps: number;
-  frame_drops: number;
-  bitrate_kbps: number;
-  cpu_percent: number;
-  memory_mb: number;
-  buffer_segments: number;
-  buffer_size_mb: number;
-}
-
-interface SystemMetrics {
-  total_cpu_percent: number;
-  available_ram_gb: number;
-  available_disk_gb: number;
-  gpu_percent?: number;
-  gpu_memory_mb?: number;
-}
+import type {
+  CaptureBackend,
+  CaptureMode,
+  PerformanceStats,
+} from "@/api/recording";
 
 type HealthStatus = "Healthy" | "Warning" | "Critical";
 
@@ -53,10 +39,10 @@ interface RecordingStatus {
   status: "idle" | "buffering" | "recording" | "processing" | "error";
   is_monitoring: boolean;
   buffer_duration_secs: number;
+  capture_mode: CaptureMode | null;
+  capture_backend: CaptureBackend | null;
+  capture_warning: string | null;
 }
-
-const MAX_BUFFER_SEGMENTS = 6;
-const MAX_MEMORY_MB = 2048;
 
 const getCommandErrorMessage = (error: unknown): string => {
   if (
@@ -91,8 +77,8 @@ const getDiagnosticBadgeVariant = (
 
 export function StatusDashboard() {
   const { t } = useTranslation();
-  const [recordingMetrics, setRecordingMetrics] =
-    useState<RecordingMetrics | null>(null);
+  const [performanceStats, setPerformanceStats] =
+    useState<PerformanceStats | null>(null);
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(
     null,
   );
@@ -108,6 +94,9 @@ export function StatusDashboard() {
     status: "idle",
     is_monitoring: false,
     buffer_duration_secs: 0,
+    capture_mode: null,
+    capture_backend: null,
+    capture_warning: null,
   });
 
   useEffect(() => {
@@ -117,31 +106,35 @@ export function StatusDashboard() {
         const status = await cmd<RecordingStatus>(
           "get_detailed_recording_status",
         );
-        setRecordingStatus(status);
+        setRecordingStatus({
+          ...status,
+          capture_mode: status.capture_mode ?? null,
+          capture_backend: status.capture_backend ?? null,
+          capture_warning: status.capture_warning ?? null,
+        });
 
         // Fetch performance metrics if recording
         if (status.status === "buffering" || status.status === "recording") {
-          // Fetch actual metrics from backend
-          const recMetrics = await cmd<RecordingMetrics>(
-            "get_recording_metrics",
-          );
-          if (recMetrics) {
-            setRecordingMetrics(recMetrics);
-          }
-
-          const sysMetrics = await cmd<SystemMetrics>("get_system_metrics");
+          // This command is backed by FFmpeg's real progress/frame counter. The legacy
+          // `get_recording_metrics` object was never updated in production and therefore
+          // exposed plausible-looking zero/default CPU, memory and frame-drop values.
+          const [stats, sysMetrics] = await Promise.all([
+            cmd<PerformanceStats>("get_performance_stats"),
+            cmd<SystemMetrics>("get_system_metrics"),
+          ]);
+          setPerformanceStats(stats);
           setSystemMetrics(sysMetrics);
 
-          // Determine health status (only if recMetrics exists)
-          if (recMetrics) {
-            if (recMetrics.fps < 45 || recMetrics.cpu_percent > 95) {
-              setHealthStatus("Critical");
-            } else if (recMetrics.fps < 55 || recMetrics.cpu_percent > 80) {
-              setHealthStatus("Warning");
-            } else {
-              setHealthStatus("Healthy");
-            }
+          const measuredFps = stats.recording.current_fps;
+          if (measuredFps > 0 && measuredFps < 45) {
+            setHealthStatus("Critical");
+          } else if (measuredFps > 0 && measuredFps < 55) {
+            setHealthStatus("Warning");
+          } else {
+            setHealthStatus("Healthy");
           }
+        } else {
+          setPerformanceStats(null);
         }
       } catch (error) {
         logger.error("Failed to fetch metrics:", error);
@@ -329,6 +322,15 @@ export function StatusDashboard() {
               : t("statusDashboard.autoCapture.pressF8")}
           </p>
         </div>
+        {recordingStatus.capture_warning && (
+          <Alert className="mb-4" data-testid="capture-warning">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>{t("statusDashboard.captureWarning.title")}</AlertTitle>
+            <AlertDescription>
+              {recordingStatus.capture_warning}
+            </AlertDescription>
+          </Alert>
+        )}
         <div className="grid grid-cols-2 gap-4">
           <div>
             <div className="text-sm text-muted-foreground">
@@ -338,13 +340,24 @@ export function StatusDashboard() {
               {recordingStatus.buffer_duration_secs}s
             </div>
           </div>
-          {recordingMetrics && (
+          {recordingStatus.capture_backend && (
             <div>
               <div className="text-sm text-muted-foreground">
-                {t("statusDashboard.bufferSegments")}
+                {t("statusDashboard.captureBackend", "Capture backend")}
               </div>
-              <div className="text-2xl font-bold">
-                {recordingMetrics.buffer_segments}/{MAX_BUFFER_SEGMENTS}
+              <div
+                className="text-base font-bold"
+                data-testid="capture-backend"
+              >
+                {recordingStatus.capture_backend === "desktop_duplication"
+                  ? t(
+                      "statusDashboard.captureBackends.desktopDuplication",
+                      "Desktop Duplication",
+                    )
+                  : t(
+                      "statusDashboard.captureBackends.gdiGrab",
+                      "GDI compatibility",
+                    )}
               </div>
             </div>
           )}
@@ -352,7 +365,7 @@ export function StatusDashboard() {
       </div>
 
       {/* Performance Metrics */}
-      {recordingMetrics && (
+      {performanceStats && (
         <div className="gaming-panel p-6">
           <div className="mb-4">
             <div className="flex items-center justify-between">
@@ -376,76 +389,38 @@ export function StatusDashboard() {
                   {t("statusDashboard.fps")}
                 </span>
                 <span className="text-sm text-muted-foreground">
-                  {recordingMetrics.fps.toFixed(1)} / 60
+                  {performanceStats.recording.current_fps.toFixed(1)} / 60
                 </span>
               </div>
               <Progress
-                value={(recordingMetrics.fps / 60) * 100}
-                className={recordingMetrics.fps < 55 ? "bg-yellow-500" : ""}
-              />
-            </div>
-
-            {/* CPU */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium flex items-center gap-1">
-                  <Cpu className="h-4 w-4" />
-                  {t("statusDashboard.ffmpegCpu")}
-                </span>
-                <span className="text-sm text-muted-foreground">
-                  {recordingMetrics.cpu_percent.toFixed(1)}%
-                </span>
-              </div>
-              <Progress
-                value={recordingMetrics.cpu_percent}
+                value={(performanceStats.recording.current_fps / 60) * 100}
                 className={
-                  recordingMetrics.cpu_percent > 80 ? "bg-orange-500" : ""
+                  performanceStats.recording.current_fps < 55
+                    ? "bg-yellow-500"
+                    : ""
                 }
               />
             </div>
-
-            {/* Memory */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium flex items-center gap-1">
-                  <HardDrive className="h-4 w-4" />
-                  {t("statusDashboard.memory")}
-                </span>
-                <span className="text-sm text-muted-foreground">
-                  {recordingMetrics.memory_mb.toFixed(0)} MB
-                </span>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded border border-white/10 p-3">
+                <div className="text-muted-foreground">
+                  {t("statusDashboard.totalFrames", "Captured frames")}
+                </div>
+                <div className="font-semibold tabular-nums">
+                  {performanceStats.recording.total_frames.toLocaleString()}
+                </div>
               </div>
-              <Progress
-                value={(recordingMetrics.memory_mb / MAX_MEMORY_MB) * 100}
-              />
-            </div>
-
-            {/* Bitrate */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">
-                  {t("statusDashboard.bitrate")}
-                </span>
-                <span className="text-sm text-muted-foreground">
-                  {(recordingMetrics.bitrate_kbps / 1000).toFixed(1)} Mbps
-                </span>
+              <div className="rounded border border-white/10 p-3">
+                <div className="text-muted-foreground">
+                  {t("statusDashboard.audioCapture", "Audio capture")}
+                </div>
+                <div className="font-semibold">
+                  {performanceStats.recording.audio_active
+                    ? t("statusDashboard.active", "Active")
+                    : t("statusDashboard.unavailable", "Unavailable")}
+                </div>
               </div>
             </div>
-
-            {/* Frame Drops */}
-            {recordingMetrics.frame_drops > 0 && (
-              <Alert variant="destructive">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>
-                  {t("statusDashboard.frameDropsDetected")}
-                </AlertTitle>
-                <AlertDescription>
-                  {t("statusDashboard.frameDropsMessage", {
-                    count: recordingMetrics.frame_drops,
-                  })}
-                </AlertDescription>
-              </Alert>
-            )}
           </div>
         </div>
       )}
@@ -482,31 +457,53 @@ export function StatusDashboard() {
                   {t("statusDashboard.availableDisk")}
                 </div>
                 <div className="text-2xl font-bold">
-                  {systemMetrics.available_disk_gb.toFixed(1)} GB
+                  {systemMetrics.available_disk_gb >= 0
+                    ? `${systemMetrics.available_disk_gb.toFixed(1)} GB`
+                    : "—"}
                 </div>
               </div>
-              {systemMetrics.gpu_percent && (
-                <div>
-                  <div className="text-sm text-muted-foreground">
-                    {t("statusDashboard.gpu")}
+              {systemMetrics.gpu_percent !== null &&
+                systemMetrics.gpu_percent !== undefined && (
+                  <div>
+                    <div className="text-sm text-muted-foreground">
+                      {t("statusDashboard.gpu")}
+                    </div>
+                    <div className="text-2xl font-bold">
+                      {systemMetrics.gpu_percent.toFixed(1)}%
+                    </div>
+                    {(systemMetrics.gpu_memory_mb !== null &&
+                      systemMetrics.gpu_memory_mb !== undefined) ||
+                    (systemMetrics.gpu_temperature_celsius !== null &&
+                      systemMetrics.gpu_temperature_celsius !== undefined) ? (
+                      <div className="text-xs text-muted-foreground">
+                        {systemMetrics.gpu_memory_mb !== null &&
+                          systemMetrics.gpu_memory_mb !== undefined &&
+                          `${systemMetrics.gpu_memory_mb.toFixed(0)} MB`}
+                        {systemMetrics.gpu_memory_mb !== null &&
+                          systemMetrics.gpu_memory_mb !== undefined &&
+                          systemMetrics.gpu_temperature_celsius !== null &&
+                          systemMetrics.gpu_temperature_celsius !== undefined &&
+                          " · "}
+                        {systemMetrics.gpu_temperature_celsius !== null &&
+                          systemMetrics.gpu_temperature_celsius !== undefined &&
+                          `${systemMetrics.gpu_temperature_celsius.toFixed(0)}°C`}
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="text-2xl font-bold">
-                    {systemMetrics.gpu_percent.toFixed(1)}%
-                  </div>
-                </div>
-              )}
+                )}
             </div>
 
             {/* Low disk warning */}
-            {systemMetrics.available_disk_gb < 5 && (
-              <Alert variant="destructive">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>{t("statusDashboard.lowDiskSpace")}</AlertTitle>
-                <AlertDescription>
-                  {t("statusDashboard.lowDiskSpaceMessage")}
-                </AlertDescription>
-              </Alert>
-            )}
+            {systemMetrics.available_disk_gb >= 0 &&
+              systemMetrics.available_disk_gb < 5 && (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>{t("statusDashboard.lowDiskSpace")}</AlertTitle>
+                  <AlertDescription>
+                    {t("statusDashboard.lowDiskSpaceMessage")}
+                  </AlertDescription>
+                </Alert>
+              )}
           </div>
         </div>
       )}

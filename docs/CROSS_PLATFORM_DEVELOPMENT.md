@@ -2,6 +2,11 @@
 
 This document outlines the cross-platform implementation of LoLShorts, providing guidelines for developers working on the Windows, macOS, and Linux versions of the application.
 
+> **Support boundary:** the free public release currently supports only
+> Windows 11 x64 with NVIDIA NVENC. macOS, Linux, AMD, Intel, and CPU paths are
+> experimental development targets; their code and manual CI do not constitute
+> release support or replace the Windows/NVIDIA E5 field gates.
+
 ## Overview
 
 LoLShorts is built using a cross-platform architecture with:
@@ -95,8 +100,8 @@ platform/
 
 ### Prerequisites
 
-1. **Rust**: Latest stable version
-2. **Node.js**: Version 18 or later
+1. **Rust**: 1.94.1 (repository-pinned)
+2. **Node.js**: 24.2.0 with npm 11.6.3 (repository-pinned)
 3. **FFmpeg**: Version 4.4 or later
 4. **Platform-specific tools**:
 

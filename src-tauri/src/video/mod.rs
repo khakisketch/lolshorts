@@ -1,17 +1,48 @@
 pub mod auto_composer;
 pub mod commands;
+pub mod media_job_executor;
+pub mod output_validation;
 pub mod processor;
 pub mod statistics;
 pub mod thumbnail;
 
 pub use auto_composer::{
-    AutoComposer, AutoEditConfig, AutoEditProgress, AutoEditResult, CanvasTemplate,
+    AutoComposer, AutoEditConfig, AutoEditJobReceipt, AutoEditPlan, AutoEditProgress,
+    AutoEditResult, CanvasTemplate,
+};
+pub use output_validation::{
+    OutputValidationIssue, OutputValidationReport, OutputValidationSeverity,
+    OutputValidationStatus, OutputValidator,
 };
 pub use processor::VideoProcessor;
 pub use statistics::get_global_stats;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
+
+tokio::task_local! {
+    static AUTO_EDIT_CANCELLATION: CancellationToken;
+    static AUTO_EDIT_JOB_ID: String;
+}
+
+/// Scope all nested FFmpeg calls and temporary artifacts to one auto-edit job.
+pub async fn with_auto_edit_context<F, T>(
+    job_id: String,
+    cancellation: CancellationToken,
+    future: F,
+) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    AUTO_EDIT_JOB_ID
+        .scope(job_id, AUTO_EDIT_CANCELLATION.scope(cancellation, future))
+        .await
+}
+
+pub(crate) fn current_auto_edit_job_id() -> Option<String> {
+    AUTO_EDIT_JOB_ID.try_with(Clone::clone).ok()
+}
 
 /// Video processing errors with user-friendly messages
 #[derive(Debug, Error)]
@@ -75,6 +106,9 @@ pub enum VideoError {
 
     #[error("Video processing timeout\n\nOperation took longer than {timeout_secs}s\n\nTry:\n- Processing fewer clips\n- Reducing video duration\n- Closing other applications")]
     Timeout { timeout_secs: u64 },
+
+    #[error("Auto-edit cancelled")]
+    Cancelled,
 
     // Generic fallback
     #[error("Video processing failed: {message}")]
@@ -198,7 +232,7 @@ pub async fn execute_ffmpeg_command(command: &mut tokio::process::Command) -> Re
     // Bound the number of concurrent offline FFmpeg processes. Held for the
     // duration of this encode; released on drop. Realtime recording does not go
     // through this path, so it is never throttled.
-    let _pool_permit = crate::utils::ffmpeg_pool::global_ffmpeg_pool()
+    let mut pool_permit = crate::utils::ffmpeg_pool::global_ffmpeg_pool()
         .acquire()
         .await
         .map_err(|e| VideoError::ProcessingError {
@@ -209,15 +243,7 @@ pub async fn execute_ffmpeg_command(command: &mut tokio::process::Command) -> Re
     command.stdout(std::process::Stdio::null());
     command.kill_on_drop(true);
 
-    let output = timeout(
-        Duration::from_secs(FFMPEG_PROCESS_TIMEOUT_SECS),
-        command.output(),
-    )
-    .await
-    .map_err(|_| VideoError::Timeout {
-        timeout_secs: FFMPEG_PROCESS_TIMEOUT_SECS,
-    })?
-    .map_err(|e| {
+    let child = command.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             VideoError::FfmpegNotFound
         } else {
@@ -226,6 +252,48 @@ pub async fn execute_ffmpeg_command(command: &mut tokio::process::Command) -> Re
             }
         }
     })?;
+    let pid = child.id();
+    pool_permit.register_process(&child).await;
+    let wait = timeout(
+        Duration::from_secs(FFMPEG_PROCESS_TIMEOUT_SECS),
+        child.wait_with_output(),
+    );
+    tokio::pin!(wait);
+
+    let cancellation = AUTO_EDIT_CANCELLATION.try_with(Clone::clone).ok();
+    let wait_result = if let Some(token) = cancellation {
+        tokio::select! {
+            result = &mut wait => Some(result),
+            _ = token.cancelled() => {
+                if let Some(pid) = pid {
+                    terminate_process_tree(pid).await;
+                }
+                // A failed OS-level tree kill must not turn a user cancellation
+                // into a 30-minute wait. Dropping the still-running wait also
+                // triggers Tokio's kill_on_drop fallback for the direct child.
+                let _ = tokio::time::timeout(Duration::from_secs(5), &mut wait).await;
+                return Err(VideoError::Cancelled);
+            }
+        }
+    } else {
+        Some(wait.await)
+    };
+
+    let output = match wait_result {
+        Some(Ok(result)) => result,
+        Some(Err(_)) => {
+            if let Some(pid) = pid {
+                terminate_process_tree(pid).await;
+            }
+            return Err(VideoError::Timeout {
+                timeout_secs: FFMPEG_PROCESS_TIMEOUT_SECS,
+            });
+        }
+        None => unreachable!("cancellation branch returns immediately"),
+    }
+    .map_err(|e| VideoError::ProcessingError {
+        message: format!("Failed to wait for FFmpeg process: {}", e),
+    })?;
 
     if !output.status.success() {
         let stderr_output = String::from_utf8_lossy(&output.stderr);
@@ -233,6 +301,51 @@ pub async fn execute_ffmpeg_command(command: &mut tokio::process::Command) -> Re
     }
 
     Ok(())
+}
+
+pub(crate) async fn terminate_process_tree(pid: u32) {
+    #[cfg(windows)]
+    {
+        let mut command = tokio::process::Command::new("taskkill");
+        command
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        match tokio::time::timeout(std::time::Duration::from_secs(5), command.status()).await {
+            Ok(Ok(status)) if status.success() => {}
+            Ok(Ok(status)) => tracing::warn!(
+                "taskkill returned {} while terminating FFmpeg process tree {}",
+                status,
+                pid
+            ),
+            Ok(Err(error)) => {
+                tracing::warn!("Failed to terminate FFmpeg process tree {}: {}", pid, error)
+            }
+            Err(_) => tracing::warn!("Timed out while terminating FFmpeg process tree {}", pid),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = tokio::process::Command::new("kill");
+        command
+            .args(["-TERM", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        match tokio::time::timeout(std::time::Duration::from_secs(5), command.status()).await {
+            Ok(Ok(status)) if status.success() => {}
+            Ok(Ok(status)) => tracing::warn!(
+                "kill returned {} while terminating FFmpeg process {}",
+                status,
+                pid
+            ),
+            Ok(Err(error)) => {
+                tracing::warn!("Failed to terminate FFmpeg process {}: {}", pid, error)
+            }
+            Err(_) => tracing::warn!("Timed out while terminating FFmpeg process {}", pid),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,30 +1,12 @@
-import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { ResultsViewer } from '@/components/results/ResultsViewer';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Games } from '@/pages/Games';
-import { Replays } from '@/pages/Replays';
+import { useEffect } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useTranslation } from "react-i18next";
+import { ResultsViewer } from "@/components/results/ResultsViewer";
+import { ClipVault } from "@/components/results/ClipVault";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Replays } from "@/pages/Replays";
 
-const RESULTS_TABS = ['highlights', 'games', 'replays'] as const;
-type ResultsTab = (typeof RESULTS_TABS)[number];
-
-function isResultsTab(value: string | null): value is ResultsTab {
-  return value !== null && (RESULTS_TABS as readonly string[]).includes(value);
-}
-
-/**
- * Deep links and the redirects from the retired /games, /replays, /auto-edit and
- * /youtube routes carry `?tab=`. Anything else (including a bare /results) lands
- * on the highlights list, so the screen always opens with something to look at.
- */
-function getInitialTab(): ResultsTab {
-  try {
-    const tab = new URLSearchParams(window.location.search).get('tab');
-    return isResultsTab(tab) ? tab : 'highlights';
-  } catch {
-    return 'highlights';
-  }
-}
+type ResultsTab = "clips" | "highlights" | "games" | "replays";
 
 /**
  * "결과" — everything the user owns in one screen: the shorts made for them,
@@ -39,63 +21,82 @@ function getInitialTab(): ResultsTab {
  */
 export function Results() {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<ResultsTab>(getInitialTab);
+  const search = useSearch({ from: "/results" });
+  const navigate = useNavigate({ from: "/results" });
+  const requestedTab: ResultsTab = search.tab ?? "clips";
+  const tab = requestedTab === "games" ? "clips" : requestedTab;
+
+  useEffect(() => {
+    if (requestedTab !== "games") return;
+    void navigate({
+      search: { tab: "clips" },
+      replace: true,
+    });
+  }, [navigate, requestedTab]);
 
   return (
     <div data-testid="results-page" className="space-y-6">
-        <div>
-          <h1
-            className="text-2xl md:text-3xl font-bold"
-            data-autofocus
-            tabIndex={-1}
+      <div>
+        <h1
+          className="text-2xl md:text-3xl font-bold"
+          data-autofocus
+          tabIndex={-1}
+        >
+          {t("results.title")}
+        </h1>
+        <p
+          className="text-sm text-muted-foreground mt-1"
+          style={{ wordBreak: "keep-all" }}
+        >
+          {t("results.pageDescription")}
+        </p>
+      </div>
+
+      <Tabs
+        value={tab}
+        onValueChange={(value) =>
+          void navigate({
+            search: { tab: value as ResultsTab },
+            replace: false,
+          })
+        }
+      >
+        <TabsList className="grid w-full max-w-2xl grid-cols-3 h-auto">
+          <TabsTrigger
+            value="clips"
+            className="min-h-[44px]"
+            data-testid="results-tab-clips"
           >
-            {t('results.title')}
-          </h1>
-          <p
-            className="text-sm text-muted-foreground mt-1"
-            style={{ wordBreak: 'keep-all' }}
+            {t("results.tabs.clips")}
+          </TabsTrigger>
+          <TabsTrigger
+            value="highlights"
+            className="min-h-[44px]"
+            data-testid="results-tab-highlights"
           >
-            {t('results.pageDescription')}
-          </p>
-        </div>
+            {t("results.tabs.highlights")}
+          </TabsTrigger>
+          <TabsTrigger
+            value="replays"
+            className="min-h-[44px]"
+            data-testid="results-tab-replays"
+          >
+            {t("results.tabs.replays")}
+          </TabsTrigger>
+        </TabsList>
 
-        <Tabs value={tab} onValueChange={(value) => setTab(value as ResultsTab)}>
-          <TabsList className="grid w-full max-w-lg grid-cols-3 h-auto">
-            <TabsTrigger
-              value="highlights"
-              className="min-h-[44px]"
-              data-testid="results-tab-highlights"
-            >
-              {t('results.tabs.highlights')}
-            </TabsTrigger>
-            <TabsTrigger
-              value="games"
-              className="min-h-[44px]"
-              data-testid="results-tab-games"
-            >
-              {t('results.tabs.games')}
-            </TabsTrigger>
-            <TabsTrigger
-              value="replays"
-              className="min-h-[44px]"
-              data-testid="results-tab-replays"
-            >
-              {t('results.tabs.replays')}
-            </TabsTrigger>
-          </TabsList>
+        <TabsContent value="clips" className="mt-6">
+          <ClipVault />
+        </TabsContent>
 
-          <TabsContent value="highlights" className="mt-6">
-            <ResultsViewer />
-          </TabsContent>
+        <TabsContent value="highlights" className="mt-6">
+          <ResultsViewer />
+        </TabsContent>
 
-          <TabsContent value="games" className="mt-6">
-            <Games />
-          </TabsContent>
-
-          <TabsContent value="replays" className="mt-6">
-            <Replays />
-          </TabsContent>
-        </Tabs>
+        <TabsContent value="replays" className="mt-6">
+          <Replays />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

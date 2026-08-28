@@ -21,6 +21,7 @@ async function navigateToAutoEdit(page: Page) {
   await loginAsFreeUser(page);
   await page.reload({ waitUntil: 'commit' });
   await expect(page.getByRole('heading', { name: 'Auto-Edit' })).toBeVisible({ timeout: 90000 });
+  await page.locator('[data-testid="advanced-settings-button"]').click();
 }
 
 test.beforeAll(async ({ request }) => {
@@ -39,7 +40,7 @@ test.describe('Auto-Edit Configuration', () => {
 
   test('shows no games alert when game list is empty', async ({ page }) => {
     // Mock returns no games, so alert should be shown instead of grid
-    await expect(page.getByRole('alert').filter({ hasText: /No games available/i })).toBeVisible();
+    await expect(page.locator('[data-testid="quick-create"]').getByRole('alert').filter({ hasText: /No games available/i })).toBeVisible();
   });
 
   test('duration button 60s is visible', async ({ page }) => {

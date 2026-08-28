@@ -4,6 +4,51 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+/// Runtime classification of the input FFmpeg is actually capturing.
+///
+/// This is diagnostic state, not a persisted setting. Keep the serialized values
+/// stable because the settings dashboard consumes them directly.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureMode {
+    HwndDesktopRegion,
+    TitleWindow,
+    DesktopFallback,
+    MonitorDesktop,
+}
+
+/// Windows frame acquisition backend used by the current recording session.
+///
+/// `DesktopDuplication` keeps frames on the GPU through FFmpeg's `ddagrab` source and
+/// is the performance-first path for NVENC. `GdiGrab` remains the compatibility
+/// fallback for unsupported drivers, non-NVENC encoders and unusual monitor layouts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureBackend {
+    DesktopDuplication,
+    GdiGrab,
+}
+
+impl CaptureBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DesktopDuplication => "desktop_duplication",
+            Self::GdiGrab => "gdi_grab",
+        }
+    }
+}
+
+impl CaptureMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HwndDesktopRegion => "hwnd_desktop_region",
+            Self::TitleWindow => "title_window",
+            Self::DesktopFallback => "desktop_fallback",
+            Self::MonitorDesktop => "monitor_desktop",
+        }
+    }
+}
+
 /// Timeout for the one-shot FFmpeg encoder capability probes used by `HwAccel::Auto`.
 const ENCODER_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -43,7 +88,7 @@ impl Default for RecordingConfig {
         };
         Self {
             fps: 60,
-            bitrate: 15_000_000, // 15 Mbps
+            bitrate: 20_000_000, // 20 Mbps
             resolution: (1920, 1080),
             encoder: VideoEncoder::H264,
             hw_accel: HwAccel::Auto,
@@ -98,6 +143,30 @@ pub fn find_league_hwnd() -> Option<isize> {
     {
         let _ = (); // suppress unused warning
     }
+
+    None
+}
+
+/// Resolve an explicit compatibility capture title before asking gdigrab to use it.
+/// A missing title must become desktop fallback rather than an FFmpeg start failure.
+pub fn find_window_by_title(title: &str) -> Option<isize> {
+    #[cfg(target_os = "windows")]
+    {
+        #[link(name = "user32")]
+        extern "system" {
+            fn FindWindowW(lp_class_name: *const u16, lp_window_name: *const u16) -> isize;
+            fn IsWindow(hwnd: isize) -> i32;
+        }
+
+        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        let hwnd = unsafe { FindWindowW(std::ptr::null(), wide.as_ptr()) };
+        if hwnd != 0 && unsafe { IsWindow(hwnd) } != 0 {
+            return Some(hwnd);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    let _ = title;
 
     None
 }
@@ -428,6 +497,11 @@ pub struct VideoSettingsConfig {
     pub bitrate: u32,
     pub use_h265: bool,
     pub encoder_preference: String,
+    /// Optional monitor index for multi-monitor capture (0/None uses the
+    /// primary monitor). Keeping this in the initialization DTO ensures a
+    /// saved monitor choice is honoured from the first recording after app
+    /// startup, not only after the settings screen is opened.
+    pub monitor_index: Option<u32>,
 }
 
 impl Default for VideoSettingsConfig {
@@ -435,9 +509,10 @@ impl Default for VideoSettingsConfig {
         Self {
             resolution: (1920, 1080),
             fps: 60,
-            bitrate: 15_000_000,
+            bitrate: 20_000_000,
             use_h265: false,
             encoder_preference: "auto".to_string(),
+            monitor_index: None,
         }
     }
 }
@@ -457,7 +532,7 @@ mod tests {
     #[test]
     fn recording_config_default_has_expected_bitrate() {
         let config = RecordingConfig::default();
-        assert_eq!(config.bitrate, 15_000_000);
+        assert_eq!(config.bitrate, 20_000_000);
     }
 
     #[test]
@@ -650,6 +725,38 @@ mod tests {
         assert_eq!(status, RecordingStatus::Buffering);
     }
 
+    #[test]
+    fn capture_modes_serialize_to_the_frontend_contract() {
+        assert_eq!(
+            serde_json::to_string(&CaptureMode::HwndDesktopRegion).unwrap(),
+            "\"hwnd_desktop_region\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CaptureMode::TitleWindow).unwrap(),
+            "\"title_window\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CaptureMode::DesktopFallback).unwrap(),
+            "\"desktop_fallback\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CaptureMode::MonitorDesktop).unwrap(),
+            "\"monitor_desktop\""
+        );
+    }
+
+    #[test]
+    fn capture_backends_serialize_to_the_frontend_contract() {
+        assert_eq!(
+            serde_json::to_string(&CaptureBackend::DesktopDuplication).unwrap(),
+            "\"desktop_duplication\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CaptureBackend::GdiGrab).unwrap(),
+            "\"gdi_grab\""
+        );
+    }
+
     // ---- VideoSettingsConfig ----
 
     #[test]
@@ -665,9 +772,9 @@ mod tests {
     }
 
     #[test]
-    fn video_settings_config_default_bitrate_is_15mbps() {
+    fn video_settings_config_default_bitrate_is_20mbps() {
         let config = VideoSettingsConfig::default();
-        assert_eq!(config.bitrate, 15_000_000);
+        assert_eq!(config.bitrate, 20_000_000);
     }
 
     #[test]

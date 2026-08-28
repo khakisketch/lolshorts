@@ -2,6 +2,7 @@ pub mod commands;
 pub mod models;
 
 use crate::utils::security;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fs;
@@ -11,7 +12,9 @@ use thiserror::Error;
 
 // Re-export public types
 pub use models::{
-    AutoEditResultMetadata, AutoEditUsage, ClipMetadata, EventData, GameMetadata, StorageStats,
+    AutoEditResultGroup, AutoEditResultMetadata, AutoEditUsage, ClipMetadata, ClipVaultGameGroup,
+    ClipVaultPage, ClipVaultPageInput, ClipVaultSort, EventData, GameMetadata, MediaJobKind,
+    MediaJobPart, MediaJobSnapshot, MediaJobStatus, PlatformExportMetadata, StorageStats,
     UploadStatus, YouTubeUploadStatus,
 };
 
@@ -38,6 +41,16 @@ const SAFE_DELETE_MEDIA_EXTENSIONS: &[&str] = &[
 ];
 const JSON_TO_SQLITE_MIGRATION: &str = "json_to_sqlite_v1";
 const AUTO_EDIT_USAGE_USER_SCOPED_MIGRATION: &str = "auto_edit_usage_user_scoped_v1";
+
+#[derive(Serialize, Deserialize)]
+struct ClipVaultCursor {
+    sort: ClipVaultSort,
+    game_id: String,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    game_mode: Option<String>,
+}
 
 /// SQLite-backed local storage for app-owned metadata.
 ///
@@ -161,6 +174,70 @@ impl Storage {
 
             CREATE INDEX IF NOT EXISTS idx_auto_edit_results_created_at
                 ON auto_edit_results(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS media_jobs (
+                job_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                config_json TEXT NOT NULL,
+                current_stage TEXT NOT NULL,
+                progress_percentage REAL NOT NULL DEFAULT 0,
+                error_code TEXT,
+                error_message TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                quota_sync_pending INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_media_jobs_status_updated
+                ON media_jobs(status, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS media_job_parts (
+                job_id TEXT NOT NULL,
+                part_index INTEGER NOT NULL,
+                part_count INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                progress_percentage REAL NOT NULL DEFAULT 0,
+                trim_json TEXT NOT NULL,
+                partial_path TEXT,
+                output_path TEXT,
+                validation_json TEXT,
+                file_fingerprint TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(job_id, part_index),
+                FOREIGN KEY(job_id) REFERENCES media_jobs(job_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS platform_exports (
+                export_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                result_id TEXT NOT NULL,
+                preset TEXT NOT NULL,
+                output_path TEXT NOT NULL,
+                passthrough INTEGER NOT NULL,
+                owns_file INTEGER NOT NULL,
+                validation_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(result_id) REFERENCES auto_edit_results(result_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_platform_exports_result
+                ON platform_exports(result_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS quota_job_consumptions (
+                user_id TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                month TEXT NOT NULL,
+                server_synced INTEGER NOT NULL DEFAULT 0,
+                consumed_at TEXT NOT NULL,
+                PRIMARY KEY(user_id, job_id)
+            );
+
+            INSERT OR IGNORE INTO local_migrations(name, applied_at)
+                VALUES('media_jobs_v1', CURRENT_TIMESTAMP);
             "#,
         )?;
 
@@ -181,6 +258,13 @@ impl Storage {
                 "Failed to migrate legacy single-row auto-edit usage counter to the per-user table: {}",
                 err
             );
+        }
+
+        if let Err(err) = storage.recover_interrupted_media_jobs() {
+            tracing::warn!("Failed to mark interrupted media jobs recoverable: {}", err);
+        }
+        if let Err(err) = storage.expire_media_job_artifacts() {
+            tracing::warn!("Failed to expire old recoverable media artifacts: {}", err);
         }
 
         // Clear rows left behind by older builds that persisted a `pending/<id>.mp4`
@@ -494,6 +578,201 @@ impl Storage {
         }
 
         Ok(Vec::new())
+    }
+
+    /// Load a page of non-empty games for the clip vault without allowing one
+    /// malformed metadata row to make the whole library unavailable.
+    pub fn list_clip_vault_page(
+        &self,
+        sort: ClipVaultSort,
+        cursor: Option<&str>,
+        game_limit: usize,
+        query: Option<&str>,
+        game_mode: Option<&str>,
+    ) -> Result<ClipVaultPage> {
+        if !(1..=12).contains(&game_limit) {
+            return Err(StorageError::Lock(
+                "game_limit must be between 1 and 12".to_string(),
+            ));
+        }
+        let query = normalize_clip_vault_query(query);
+        let game_mode = normalize_clip_vault_game_mode(game_mode);
+        let after_game_id = match cursor {
+            Some(cursor) => {
+                let bytes = URL_SAFE_NO_PAD
+                    .decode(cursor)
+                    .map_err(|_| StorageError::Lock("invalid clip vault cursor".to_string()))?;
+                let decoded: ClipVaultCursor = serde_json::from_slice(&bytes)
+                    .map_err(|_| StorageError::Lock("invalid clip vault cursor".to_string()))?;
+                if decoded.sort != sort {
+                    return Err(StorageError::Lock(
+                        "clip vault cursor sort does not match request".to_string(),
+                    ));
+                }
+                if decoded.query != query || decoded.game_mode != game_mode {
+                    return Err(StorageError::Lock(
+                        "clip vault cursor filters do not match request".to_string(),
+                    ));
+                }
+                Some(decoded.game_id)
+            }
+            None => None,
+        };
+
+        let rows: Vec<(String, String, String)> = {
+            let conn = self.conn()?;
+            let mut stmt = conn.prepare(
+                "SELECT g.game_id, g.metadata_json, c.metadata_json FROM games g JOIN clips c ON c.game_id = g.game_id",
+            )?;
+            let mapped = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            mapped
+        };
+        let mut skipped = 0;
+        let mut corrupt_games = std::collections::HashSet::new();
+        let mut grouped =
+            std::collections::BTreeMap::<String, (Option<GameMetadata>, Vec<ClipMetadata>)>::new();
+        for (game_id, game_json, clip_json) in rows {
+            let game = match serde_json::from_str::<GameMetadata>(&game_json) {
+                Ok(game) => game,
+                Err(_) => {
+                    if corrupt_games.insert(game_id.clone()) {
+                        skipped += 1;
+                    }
+                    let entry = grouped.entry(game_id).or_insert_with(|| (None, Vec::new()));
+                    match serde_json::from_str::<ClipMetadata>(&clip_json) {
+                        Ok(clip) => entry.1.push(clip),
+                        Err(_) => skipped += 1,
+                    }
+                    continue;
+                }
+            };
+            let clip = match serde_json::from_str::<ClipMetadata>(&clip_json) {
+                Ok(clip) => clip,
+                Err(_) => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let entry = grouped
+                .entry(game_id)
+                .or_insert_with(|| (Some(game), Vec::new()));
+            entry.1.push(clip);
+        }
+        let mut games: Vec<ClipVaultGameGroup> = grouped
+            .into_iter()
+            .filter(|(_, (_, clips))| !clips.is_empty())
+            .filter(|(game_id, (game, _))| {
+                clip_vault_game_matches_filters(
+                    game_id,
+                    game.as_ref(),
+                    query.as_deref(),
+                    game_mode.as_deref(),
+                )
+            })
+            .map(|(game_id, (game, mut clips))| {
+                clips.sort_by(|a, b| match sort {
+                    ClipVaultSort::Best => clip_score(b)
+                        .total_cmp(&clip_score(a))
+                        .then_with(|| b.created_at.cmp(&a.created_at))
+                        .then_with(|| a.file_path.cmp(&b.file_path)),
+                    ClipVaultSort::Newest => b
+                        .created_at
+                        .cmp(&a.created_at)
+                        .then_with(|| a.file_path.cmp(&b.file_path)),
+                });
+                ClipVaultGameGroup {
+                    game_id,
+                    game,
+                    clip_count: clips.len(),
+                    clips,
+                }
+            })
+            .collect();
+        games.sort_by(|a, b| match sort {
+            ClipVaultSort::Best => game_best_score(b)
+                .total_cmp(&game_best_score(a))
+                .then_with(|| game_start_time(b).cmp(&game_start_time(a)))
+                .then_with(|| a.game_id.cmp(&b.game_id)),
+            ClipVaultSort::Newest => game_start_time(b)
+                .cmp(&game_start_time(a))
+                .then_with(|| a.game_id.cmp(&b.game_id)),
+        });
+        let start = after_game_id
+            .and_then(|id| {
+                games
+                    .iter()
+                    .position(|group| group.game_id == id)
+                    .map(|i| i + 1)
+            })
+            .unwrap_or(0);
+        let has_more = start.saturating_add(game_limit) < games.len();
+        let page_games = games
+            .into_iter()
+            .skip(start)
+            .take(game_limit)
+            .collect::<Vec<_>>();
+        let next_cursor = if has_more {
+            page_games.last().map(|group| {
+                URL_SAFE_NO_PAD.encode(
+                    serde_json::to_vec(&ClipVaultCursor {
+                        sort,
+                        game_id: group.game_id.clone(),
+                        query: query.clone(),
+                        game_mode: game_mode.clone(),
+                    })
+                    .expect("cursor serialization is infallible"),
+                )
+            })
+        } else {
+            None
+        };
+        Ok(ClipVaultPage {
+            groups: page_games,
+            next_cursor,
+            skipped_item_count: skipped,
+        })
+    }
+
+    /// Load the exact clip row belonging to `game_id`.
+    pub fn load_owned_clip_metadata(&self, game_id: &str, file_path: &str) -> Result<ClipMetadata> {
+        let conn = self.conn()?;
+        let json: String = conn
+            .query_row(
+                "SELECT metadata_json FROM clips WHERE game_id = ?1 AND file_path = ?2",
+                params![game_id, file_path],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::GameNotFound(game_id.to_string()))?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Atomically persist only the thumbnail field from the current database row.
+    pub fn update_owned_clip_thumbnail(
+        &self,
+        game_id: &str,
+        file_path: &str,
+        thumbnail_path: &str,
+    ) -> Result<ClipMetadata> {
+        let conn = self.conn()?;
+        let json: String = conn
+            .query_row(
+                "SELECT metadata_json FROM clips WHERE game_id = ?1 AND file_path = ?2",
+                params![game_id, file_path],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::GameNotFound(game_id.to_string()))?;
+        let mut clip: ClipMetadata = serde_json::from_str(&json)?;
+        clip.thumbnail_path = Some(thumbnail_path.to_string());
+        let updated = serde_json::to_string(&clip)?;
+        let changed = conn.execute("UPDATE clips SET metadata_json = ?1, updated_at = ?2 WHERE game_id = ?3 AND file_path = ?4", params![updated, chrono::Utc::now().to_rfc3339(), game_id, file_path])?;
+        if changed != 1 {
+            return Err(StorageError::GameNotFound(game_id.to_string()));
+        }
+        Ok(clip)
     }
 
     /// Load clip metadata for a game the way the editor should: like
@@ -963,6 +1242,416 @@ impl Storage {
     }
 
     // ========================================================================
+    // Durable media jobs and publication checkpoints
+    // ========================================================================
+
+    pub fn create_media_job(
+        &self,
+        job_id: &str,
+        user_id: &str,
+        kind: MediaJobKind,
+        config_json: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn()?.execute(
+            "INSERT INTO media_jobs(job_id,user_id,kind,status,config_json,current_stage,progress_percentage,created_at,updated_at) VALUES(?1,?2,?3,'queued',?4,'queued',0,?5,?5)",
+            params![job_id, user_id, enum_db_value(kind)?, config_json, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn initialize_media_job_parts(&self, job_id: &str, trims: &[String]) -> Result<()> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction()?;
+        transaction.execute(
+            "DELETE FROM media_job_parts WHERE job_id = ?1",
+            params![job_id],
+        )?;
+        let now = chrono::Utc::now().to_rfc3339();
+        for (index, trim_json) in trims.iter().enumerate() {
+            transaction.execute(
+                "INSERT INTO media_job_parts(job_id,part_index,part_count,status,progress_percentage,trim_json,attempt_count,updated_at) VALUES(?1,?2,?3,'queued',0,?4,0,?5)",
+                params![job_id, index + 1, trims.len(), trim_json, now],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn update_media_job_status(
+        &self,
+        job_id: &str,
+        next: MediaJobStatus,
+        stage: &str,
+        progress: f64,
+        error_code: Option<&str>,
+        error_message: Option<&str>,
+    ) -> Result<()> {
+        let current = self.load_media_job(job_id)?.status;
+        if !current.can_transition_to(next) {
+            return Err(StorageError::Lock(format!(
+                "invalid media job transition: {:?} -> {:?}",
+                current, next
+            )));
+        }
+        let changed = self.conn()?.execute(
+            "UPDATE media_jobs SET status=?1,current_stage=?2,progress_percentage=?3,error_code=?4,error_message=?5,updated_at=?6 WHERE job_id=?7",
+            params![enum_db_value(next)?, stage, progress.clamp(0.0, 100.0), error_code, error_message, chrono::Utc::now().to_rfc3339(), job_id],
+        )?;
+        if changed == 0 {
+            return Err(StorageError::Lock(format!("media job not found: {job_id}")));
+        }
+        Ok(())
+    }
+
+    pub fn update_media_job_part(&self, job_id: &str, part: &MediaJobPart) -> Result<()> {
+        let validation_json = part
+            .validation
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let changed = self.conn()?.execute(
+            r#"UPDATE media_job_parts SET status=?1,progress_percentage=?2,trim_json=?3,
+               partial_path=?4,output_path=?5,validation_json=?6,file_fingerprint=?7,
+               attempt_count=?8,updated_at=?9 WHERE job_id=?10 AND part_index=?11"#,
+            params![
+                enum_db_value(part.status)?,
+                part.progress_percentage.clamp(0.0, 100.0),
+                part.trim_json,
+                part.partial_path,
+                part.output_path,
+                validation_json,
+                part.file_fingerprint,
+                part.attempt_count,
+                chrono::Utc::now().to_rfc3339(),
+                job_id,
+                part.part_index,
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StorageError::Lock(format!(
+                "media job part not found: {job_id}/{}",
+                part.part_index
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn load_media_job(&self, job_id: &str) -> Result<MediaJobSnapshot> {
+        let conn = self.conn()?;
+        let row = conn
+            .query_row(
+                "SELECT user_id,kind,status,config_json,current_stage,progress_percentage,error_code,error_message,retry_count,quota_sync_pending,created_at,updated_at FROM media_jobs WHERE job_id=?1",
+                params![job_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, f64>(5)?,
+                        row.get::<_, Option<String>>(6)?, row.get::<_, Option<String>>(7)?,
+                        row.get::<_, u32>(8)?, row.get::<_, bool>(9)?, row.get::<_, String>(10)?,
+                        row.get::<_, String>(11)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::Lock(format!("media job not found: {job_id}")))?;
+        let mut statement = conn.prepare(
+            "SELECT part_index,part_count,status,progress_percentage,trim_json,partial_path,output_path,validation_json,file_fingerprint,attempt_count FROM media_job_parts WHERE job_id=?1 ORDER BY part_index",
+        )?;
+        let parts = statement
+            .query_map(params![job_id], |row| {
+                let status: String = row.get(2)?;
+                let validation: Option<String> = row.get(7)?;
+                Ok((
+                    row.get::<_, usize>(0)?,
+                    row.get::<_, usize>(1)?,
+                    status,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    validation,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, u32>(9)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|part| {
+                Ok(MediaJobPart {
+                    part_index: part.0,
+                    part_count: part.1,
+                    status: enum_from_db(&part.2)?,
+                    progress_percentage: part.3,
+                    trim_json: part.4,
+                    partial_path: part.5,
+                    output_path: part.6,
+                    validation: part
+                        .7
+                        .map(|value| serde_json::from_str(&value))
+                        .transpose()?,
+                    file_fingerprint: part.8,
+                    attempt_count: part.9,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let status: MediaJobStatus = enum_from_db(&row.2)?;
+        Ok(MediaJobSnapshot {
+            job_id: job_id.to_string(),
+            user_id: row.0,
+            kind: enum_from_db(&row.1)?,
+            status,
+            recoverable: status.is_recoverable(),
+            config_json: row.3,
+            current_stage: row.4,
+            progress_percentage: row.5,
+            parts,
+            error_code: row.6,
+            error_message: row.7,
+            retry_count: row.8,
+            quota_sync_pending: row.9,
+            created_at: chrono::DateTime::parse_from_rfc3339(&row.10)
+                .map_err(|e| StorageError::Lock(e.to_string()))?
+                .with_timezone(&chrono::Utc),
+            updated_at: chrono::DateTime::parse_from_rfc3339(&row.11)
+                .map_err(|e| StorageError::Lock(e.to_string()))?
+                .with_timezone(&chrono::Utc),
+        })
+    }
+
+    pub fn list_recoverable_media_jobs(&self, user_id: &str) -> Result<Vec<MediaJobSnapshot>> {
+        let ids = {
+            let conn = self.conn()?;
+            let mut statement = conn.prepare(
+                "SELECT job_id FROM media_jobs WHERE user_id=?1 AND status IN ('paused','recoverable') ORDER BY updated_at DESC",
+            )?;
+            let rows = statement
+                .query_map(params![user_id], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        ids.iter().map(|id| self.load_media_job(id)).collect()
+    }
+
+    /// Return whether any durable media job can still spawn or is currently
+    /// running. Updater installation must wait for these jobs; checking only
+    /// the legacy in-memory composer misses jobs resumed from SQLite or a
+    /// platform-export task.
+    pub fn has_active_media_jobs(&self) -> Result<bool> {
+        let conn = self.conn()?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM media_jobs WHERE status IN ('queued','running','validating'))",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(StorageError::from)
+    }
+
+    fn recover_interrupted_media_jobs(&self) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn()?.execute(
+            "UPDATE media_jobs SET status='recoverable',current_stage='interrupted',updated_at=?1 WHERE status IN ('running','validating')",
+            params![now],
+        )?;
+        self.conn()?.execute(
+            "UPDATE media_job_parts SET status='recoverable',updated_at=?1 WHERE status IN ('running','validating')",
+            params![now],
+        )?;
+        Ok(())
+    }
+
+    fn expire_media_job_artifacts(&self) -> Result<()> {
+        let artifact_cutoff = (chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339();
+        let record_cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        let ids = {
+            let conn = self.conn()?;
+            let mut statement = conn.prepare(
+                "SELECT job_id FROM media_jobs WHERE status IN ('paused','recoverable','failed') AND updated_at < ?1",
+            )?;
+            let rows = statement
+                .query_map(params![artifact_cutoff], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        let internal_root = self
+            .base_path
+            .join("exports")
+            .join("auto_edit")
+            .join("intermediate");
+        let canonical_root = internal_root.canonicalize().ok();
+        for job_id in ids {
+            if let Ok(snapshot) = self.load_media_job(&job_id) {
+                for part in snapshot.parts {
+                    for value in [part.partial_path, part.output_path].into_iter().flatten() {
+                        let path = PathBuf::from(value);
+                        if let (Some(root), Ok(candidate)) = (&canonical_root, path.canonicalize())
+                        {
+                            if candidate.starts_with(root) && candidate.is_file() {
+                                let _ = fs::remove_file(candidate);
+                            }
+                        }
+                    }
+                }
+                let job_dir = internal_root.join(&job_id);
+                if job_dir.is_dir() {
+                    let _ = fs::remove_dir_all(job_dir);
+                }
+                let _ = self.update_media_job_status(
+                    &job_id,
+                    MediaJobStatus::Discarded,
+                    "expired",
+                    snapshot.progress_percentage,
+                    Some("artifact_expired"),
+                    Some("Recoverable artifacts expired after 7 days"),
+                );
+            }
+        }
+        self.conn()?.execute(
+            "DELETE FROM media_jobs WHERE status='discarded' AND updated_at < ?1",
+            params![record_cutoff],
+        )?;
+        Ok(())
+    }
+
+    pub fn publish_auto_edit_series(
+        &self,
+        job_id: &str,
+        user_id: &str,
+        is_pro: bool,
+        server_synced: bool,
+        results: &[AutoEditResultMetadata],
+        clips: &[(String, String)],
+    ) -> Result<bool> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction()?;
+        let status: String = transaction.query_row(
+            "SELECT status FROM media_jobs WHERE job_id=?1",
+            params![job_id],
+            |row| row.get(0),
+        )?;
+        if status == "complete" {
+            return Ok(false);
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        for result in results {
+            let json = serde_json::to_string(result)?;
+            transaction.execute(
+                "INSERT INTO auto_edit_results(result_id,metadata_json,output_path,created_at,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(result_id) DO UPDATE SET metadata_json=excluded.metadata_json,output_path=excluded.output_path,updated_at=excluded.updated_at",
+                params![result.result_id, json, result.output_path, result.created_at.to_rfc3339(), now],
+            )?;
+        }
+        for (game_id, file_path) in clips {
+            let json: Option<String> = transaction
+                .query_row(
+                    "SELECT metadata_json FROM clips WHERE game_id=?1 AND file_path=?2",
+                    params![game_id, file_path],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(json) = json {
+                let mut clip: ClipMetadata = serde_json::from_str(&json)?;
+                clip.usage_count = clip.usage_count.saturating_add(1);
+                transaction.execute(
+                    "UPDATE clips SET metadata_json=?1,updated_at=?2 WHERE game_id=?3 AND file_path=?4",
+                    params![serde_json::to_string(&clip)?, now, game_id, file_path],
+                )?;
+            }
+        }
+        let mut quota_pending = false;
+        if !is_pro {
+            let inserted = transaction.execute(
+                "INSERT OR IGNORE INTO quota_job_consumptions(user_id,job_id,month,server_synced,consumed_at) VALUES(?1,?2,?3,?4,?5)",
+                params![user_id, job_id, AutoEditUsage::current_month(), server_synced, now],
+            )?;
+            if inserted > 0 {
+                let existing: Option<String> = transaction
+                    .query_row(
+                        "SELECT usage_json FROM auto_edit_usage_by_user WHERE user_id=?1",
+                        params![user_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let mut usage: AutoEditUsage = existing
+                    .map(|json| serde_json::from_str(&json))
+                    .transpose()?
+                    .unwrap_or_default();
+                if !usage.is_current_month() {
+                    usage = AutoEditUsage::reset_for_month(AutoEditUsage::current_month());
+                }
+                usage.usage_count = usage.usage_count.saturating_add(1);
+                usage.last_updated = chrono::Utc::now();
+                transaction.execute(
+                    "INSERT INTO auto_edit_usage_by_user(user_id,usage_json,updated_at) VALUES(?1,?2,?3) ON CONFLICT(user_id) DO UPDATE SET usage_json=excluded.usage_json,updated_at=excluded.updated_at",
+                    params![user_id, serde_json::to_string(&usage)?, now],
+                )?;
+            }
+            quota_pending = !server_synced;
+        }
+        transaction.execute(
+            "UPDATE media_jobs SET status='complete',current_stage='complete',progress_percentage=100,quota_sync_pending=?1,error_code=NULL,error_message=NULL,updated_at=?2 WHERE job_id=?3",
+            params![quota_pending, now, job_id],
+        )?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub fn pending_quota_job_ids(&self, user_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT job_id FROM quota_job_consumptions WHERE user_id=?1 AND server_synced=0 ORDER BY consumed_at",
+        )?;
+        let rows = statement
+            .query_map(params![user_id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn mark_quota_job_synced(&self, user_id: &str, job_id: &str) -> Result<()> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction()?;
+        transaction.execute(
+            "UPDATE quota_job_consumptions SET server_synced=1 WHERE user_id=?1 AND job_id=?2",
+            params![user_id, job_id],
+        )?;
+        transaction.execute(
+            "UPDATE media_jobs SET quota_sync_pending=0,updated_at=?1 WHERE job_id=?2",
+            params![chrono::Utc::now().to_rfc3339(), job_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn save_platform_export(&self, export: &PlatformExportMetadata) -> Result<()> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction()?;
+        let validation_json = serde_json::to_string(&export.validation)?;
+        transaction.execute(
+            "INSERT INTO platform_exports(export_id,job_id,result_id,preset,output_path,passthrough,owns_file,validation_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![export.export_id, export.job_id, export.result_id, enum_db_value(export.preset)?, export.output_path, export.passthrough, export.owns_file, validation_json, export.created_at.to_rfc3339()],
+        )?;
+        let json: String = transaction.query_row(
+            "SELECT metadata_json FROM auto_edit_results WHERE result_id=?1",
+            params![export.result_id],
+            |row| row.get(0),
+        )?;
+        let mut result: AutoEditResultMetadata = serde_json::from_str(&json)?;
+        result
+            .platform_exports
+            .retain(|item| item.preset != export.preset);
+        result.platform_exports.push(export.clone());
+        transaction.execute(
+            "UPDATE auto_edit_results SET metadata_json=?1,updated_at=?2 WHERE result_id=?3",
+            params![
+                serde_json::to_string(&result)?,
+                chrono::Utc::now().to_rfc3339(),
+                export.result_id
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    // ========================================================================
     // Auto-Edit Result Storage
     // ========================================================================
 
@@ -1029,6 +1718,73 @@ impl Storage {
         Ok(Vec::new())
     }
 
+    pub fn load_auto_edit_result_groups(&self) -> Result<Vec<AutoEditResultGroup>> {
+        use crate::video::auto_composer::AutoEditOutputIntent;
+        use crate::video::output_validation::OutputValidationStatus;
+        let mut grouped = std::collections::BTreeMap::<String, Vec<AutoEditResultMetadata>>::new();
+        for result in self.load_auto_edit_results()? {
+            let key = if result.series_id.is_empty() {
+                result.result_id.clone()
+            } else {
+                result.series_id.clone()
+            };
+            grouped.entry(key).or_default().push(result);
+        }
+        let mut groups = Vec::with_capacity(grouped.len());
+        for (series_id, mut outputs) in grouped {
+            outputs.sort_by_key(|result| result.part_index);
+            let output_intent = outputs
+                .first()
+                .and_then(|result| enum_from_db::<AutoEditOutputIntent>(&result.output_intent).ok())
+                .unwrap_or_default();
+            let validation_status =
+                outputs
+                    .iter()
+                    .fold(OutputValidationStatus::Valid, |state, result| {
+                        let next = result
+                            .validation
+                            .as_ref()
+                            .map(|report| report.status)
+                            .unwrap_or(OutputValidationStatus::Unknown);
+                        match (state, next) {
+                            (OutputValidationStatus::Invalid, _)
+                            | (_, OutputValidationStatus::Invalid) => {
+                                OutputValidationStatus::Invalid
+                            }
+                            (OutputValidationStatus::Unknown, _)
+                            | (_, OutputValidationStatus::Unknown) => {
+                                OutputValidationStatus::Unknown
+                            }
+                            (OutputValidationStatus::Warning, _)
+                            | (_, OutputValidationStatus::Warning) => {
+                                OutputValidationStatus::Warning
+                            }
+                            _ => OutputValidationStatus::Valid,
+                        }
+                    });
+            groups.push(AutoEditResultGroup {
+                series_id,
+                job_id: outputs
+                    .first()
+                    .map(|result| result.job_id.clone())
+                    .unwrap_or_default(),
+                output_intent,
+                total_duration: outputs.iter().map(|result| result.duration).sum(),
+                total_file_size_bytes: outputs.iter().map(|result| result.file_size_bytes).sum(),
+                validation_status,
+                outputs,
+            });
+        }
+        groups.sort_by(|left, right| {
+            right
+                .outputs
+                .first()
+                .map(|result| result.created_at)
+                .cmp(&left.outputs.first().map(|result| result.created_at))
+        });
+        Ok(groups)
+    }
+
     /// Load a specific auto-edit result by ID.
     pub fn load_auto_edit_result(&self, result_id: &str) -> Result<models::AutoEditResultMetadata> {
         let json: Option<String> = self
@@ -1078,6 +1834,48 @@ impl Storage {
         )?;
 
         tracing::info!("Deleted auto-edit result: {}", result_id);
+        Ok(())
+    }
+
+    pub fn delete_auto_edit_result_group(&self, series_id: &str, delete_files: bool) -> Result<()> {
+        let group = self
+            .load_auto_edit_result_groups()?
+            .into_iter()
+            .find(|group| group.series_id == series_id)
+            .ok_or_else(|| {
+                StorageError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Auto-edit result group not found: {series_id}"),
+                ))
+            })?;
+        if delete_files {
+            for result in &group.outputs {
+                self.safe_delete_media_file(&result.output_path)?;
+                if let Some(thumbnail) = &result.thumbnail_path {
+                    self.safe_delete_media_file(thumbnail)?;
+                }
+                for export in result
+                    .platform_exports
+                    .iter()
+                    .filter(|export| export.owns_file)
+                {
+                    self.safe_delete_media_file(&export.output_path)?;
+                }
+            }
+        }
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction()?;
+        for result in &group.outputs {
+            transaction.execute(
+                "DELETE FROM platform_exports WHERE result_id=?1",
+                params![result.result_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM auto_edit_results WHERE result_id=?1",
+                params![result.result_id],
+            )?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -1419,9 +2217,102 @@ fn validate_safe_delete_media_extension(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn clip_score(clip: &ClipMetadata) -> f64 {
+    clip.highlight_score
+        .filter(|score| score.is_finite())
+        .unwrap_or((clip.priority as f64) * 20.0)
+}
+
+fn normalize_clip_vault_query(query: Option<&str>) -> Option<String> {
+    query
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .map(|query| query.to_lowercase())
+}
+
+fn normalize_clip_vault_game_mode(game_mode: Option<&str>) -> Option<String> {
+    game_mode
+        .map(str::trim)
+        .filter(|game_mode| !game_mode.is_empty())
+        .map(str::to_owned)
+}
+
+fn clip_vault_game_matches_filters(
+    game_id: &str,
+    game: Option<&GameMetadata>,
+    query: Option<&str>,
+    game_mode: Option<&str>,
+) -> bool {
+    let Some(game) = game else {
+        return query.is_none() && game_mode.is_none();
+    };
+
+    if let Some(game_mode) = game_mode {
+        if game.game_mode != game_mode {
+            return false;
+        }
+    }
+
+    query.is_none_or(|query| {
+        game_id.to_lowercase().contains(query)
+            || game.champion.to_lowercase().contains(query)
+            || game.game_mode.to_lowercase().contains(query)
+    })
+}
+
+fn game_best_score(game: &ClipVaultGameGroup) -> f64 {
+    game.clips
+        .iter()
+        .map(clip_score)
+        .max_by(f64::total_cmp)
+        .unwrap_or(f64::NEG_INFINITY)
+}
+
+fn game_start_time(game: &ClipVaultGameGroup) -> chrono::DateTime<chrono::Utc> {
+    game.game
+        .as_ref()
+        .map(|metadata| metadata.start_time)
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC)
+}
+
+/// Select the event frame only when it is a finite position inside the clip.
+pub(crate) fn thumbnail_offset_secs(clip: &ClipMetadata) -> f64 {
+    if let Some(offset) = clip
+        .event_offset_secs
+        .filter(|offset| offset.is_finite() && *offset >= 0.0 && *offset <= clip.duration)
+    {
+        offset
+    } else if clip.duration.is_finite() && clip.duration > 0.0 {
+        clip.duration / 2.0
+    } else {
+        0.0
+    }
+}
+
+pub(crate) fn thumbnail_output_path(input: &Path) -> Result<PathBuf> {
+    let stem = input
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| StorageError::Lock("clip path must have a valid file name".to_string()))?;
+    Ok(input.with_file_name(format!("{}_thumbnail.jpg", stem)))
+}
+
 fn read_json_file<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let json = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&json)?)
+}
+
+fn enum_db_value<T: Serialize>(value: T) -> Result<String> {
+    serde_json::to_value(value)?
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| StorageError::Lock("enum did not serialize as a string".to_string()))
+}
+
+fn enum_from_db<T: DeserializeOwned>(value: &str) -> Result<T> {
+    Ok(serde_json::from_value(serde_json::Value::String(
+        value.to_string(),
+    ))?)
 }
 
 /// Whether a recorded clip path can never resolve to a real file.
@@ -1457,7 +2348,7 @@ fn is_ghost_clip_path(file_path: &str) -> bool {
 /// unreadable entries are treated as zero rather than an error -- this is a
 /// best-effort disk-usage figure for dashboard display, not a correctness
 /// boundary.
-fn dir_size_bytes(root: &Path) -> u64 {
+pub(crate) fn dir_size_bytes(root: &Path) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![root.to_path_buf()];
 
@@ -1720,6 +2611,19 @@ mod tests {
                     error: None,
                 }),
                 file_size_bytes: 5,
+                publish_title: String::new(),
+                publish_description: String::new(),
+                publish_tags: Vec::new(),
+                publish_privacy_status: "unlisted".to_string(),
+                output_intent: String::new(),
+                framing_mode: String::new(),
+                platform_preset: String::new(),
+                series_id: String::new(),
+                part_index: 1,
+                part_count: 1,
+                output_kind: String::new(),
+                validation: None,
+                platform_exports: Vec::new(),
             })
             .unwrap();
 
@@ -1754,6 +2658,19 @@ mod tests {
                 has_background_music: false,
                 youtube_status: None,
                 file_size_bytes: 5,
+                publish_title: String::new(),
+                publish_description: String::new(),
+                publish_tags: Vec::new(),
+                publish_privacy_status: "unlisted".to_string(),
+                output_intent: String::new(),
+                framing_mode: String::new(),
+                platform_preset: String::new(),
+                series_id: String::new(),
+                part_index: 1,
+                part_count: 1,
+                output_kind: String::new(),
+                validation: None,
+                platform_exports: Vec::new(),
             })
             .unwrap();
 
@@ -2168,5 +3085,500 @@ mod tests {
 
         // Idempotent: a second sweep has nothing left to remove.
         assert_eq!(storage.sweep_ghost_clip_metadata().unwrap(), 0);
+    }
+
+    fn vault_game(game_id: &str, start_time: chrono::DateTime<Utc>) -> GameMetadata {
+        vault_game_with_metadata(game_id, game_id, "CLASSIC", start_time)
+    }
+
+    fn vault_game_with_metadata(
+        game_id: &str,
+        champion: &str,
+        game_mode: &str,
+        start_time: chrono::DateTime<Utc>,
+    ) -> GameMetadata {
+        GameMetadata {
+            game_id: game_id.to_string(),
+            champion: champion.to_string(),
+            game_mode: game_mode.to_string(),
+            start_time,
+            end_time: None,
+            result: None,
+            kda: None,
+        }
+    }
+
+    fn vault_clip(
+        path: &str,
+        created_at: chrono::DateTime<Utc>,
+        priority: u8,
+        score: Option<f64>,
+    ) -> ClipMetadata {
+        ClipMetadata {
+            file_path: path.to_string(),
+            thumbnail_path: None,
+            event_type: models::EventType::ChampionKill,
+            event_time: 1.0,
+            priority,
+            duration: 10.0,
+            event_offset_secs: None,
+            created_at,
+            usage_count: 0,
+            highlight_score: score,
+            score_reasons: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn clip_vault_orders_best_and_continues_from_opaque_cursor() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        storage
+            .create_game("old", &vault_game("old", now - chrono::Duration::hours(2)))
+            .unwrap();
+        storage.create_game("new", &vault_game("new", now)).unwrap();
+        storage
+            .create_game("mid", &vault_game("mid", now - chrono::Duration::hours(1)))
+            .unwrap();
+        storage
+            .save_clip_metadata("old", &vault_clip("C:\\old.mp4", now, 5, None))
+            .unwrap();
+        storage
+            .save_clip_metadata("new", &vault_clip("C:\\new.mp4", now, 1, Some(101.0)))
+            .unwrap();
+        storage
+            .save_clip_metadata("mid", &vault_clip("C:\\mid.mp4", now, 4, Some(90.0)))
+            .unwrap();
+
+        let first = storage
+            .list_clip_vault_page(ClipVaultSort::Best, None, 2, None, None)
+            .unwrap();
+        assert_eq!(
+            first
+                .groups
+                .iter()
+                .map(|g| g.game_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new", "old"]
+        );
+        let second = storage
+            .list_clip_vault_page(
+                ClipVaultSort::Best,
+                first.next_cursor.as_deref(),
+                2,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            second
+                .groups
+                .iter()
+                .map(|g| g.game_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["mid"]
+        );
+        let newest = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 3, None, None)
+            .unwrap();
+        assert_eq!(newest.groups[0].game_id, "new");
+        assert!(newest.next_cursor.is_none());
+    }
+
+    #[test]
+    fn clip_vault_filters_by_query_and_exact_game_mode_before_pagination() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        let games = [
+            (
+                "ahri-classic",
+                "Ahri",
+                "CLASSIC",
+                now - chrono::Duration::hours(2),
+            ),
+            (
+                "ahri-aram",
+                "Ahri",
+                "ARAM",
+                now - chrono::Duration::hours(1),
+            ),
+            ("jinx-classic", "Jinx", "CLASSIC", now),
+        ];
+        for (game_id, champion, game_mode, start_time) in games {
+            storage
+                .create_game(
+                    game_id,
+                    &vault_game_with_metadata(game_id, champion, game_mode, start_time),
+                )
+                .unwrap();
+            storage
+                .save_clip_metadata(
+                    game_id,
+                    &vault_clip(&format!("C:\\{game_id}.mp4"), now, 1, None),
+                )
+                .unwrap();
+        }
+
+        let ahri = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 12, Some(" aHrI "), None)
+            .unwrap();
+        assert_eq!(
+            ahri.groups
+                .iter()
+                .map(|group| group.game_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ahri-aram", "ahri-classic"]
+        );
+
+        let aram = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 12, Some("aram"), Some("ARAM"))
+            .unwrap();
+        assert_eq!(aram.groups.len(), 1);
+        assert_eq!(aram.groups[0].game_id, "ahri-aram");
+
+        let game_id_match = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 12, Some("jinx-classic"), None)
+            .unwrap();
+        assert_eq!(game_id_match.groups.len(), 1);
+        assert_eq!(game_id_match.groups[0].game_id, "jinx-classic");
+
+        let classic = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 12, None, Some("CLASSIC"))
+            .unwrap();
+        assert_eq!(
+            classic
+                .groups
+                .iter()
+                .map(|group| group.game_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["jinx-classic", "ahri-classic"]
+        );
+    }
+
+    #[test]
+    fn clip_vault_filter_cursor_preserves_order_and_rejects_different_filters() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        for (game_id, start_time) in [
+            ("ahri-old", now - chrono::Duration::hours(2)),
+            ("ahri-mid", now - chrono::Duration::hours(1)),
+            ("ahri-new", now),
+        ] {
+            storage
+                .create_game(
+                    game_id,
+                    &vault_game_with_metadata(game_id, "Ahri", "CLASSIC", start_time),
+                )
+                .unwrap();
+            storage
+                .save_clip_metadata(
+                    game_id,
+                    &vault_clip(&format!("C:\\{game_id}.mp4"), now, 1, None),
+                )
+                .unwrap();
+        }
+
+        let first = storage
+            .list_clip_vault_page(
+                ClipVaultSort::Newest,
+                None,
+                2,
+                Some("ahri"),
+                Some("CLASSIC"),
+            )
+            .unwrap();
+        assert_eq!(
+            first
+                .groups
+                .iter()
+                .map(|group| group.game_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ahri-new", "ahri-mid"]
+        );
+        let second = storage
+            .list_clip_vault_page(
+                ClipVaultSort::Newest,
+                first.next_cursor.as_deref(),
+                2,
+                Some("ahri"),
+                Some("CLASSIC"),
+            )
+            .unwrap();
+        assert_eq!(
+            second
+                .groups
+                .iter()
+                .map(|group| group.game_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ahri-old"]
+        );
+        assert!(storage
+            .list_clip_vault_page(
+                ClipVaultSort::Newest,
+                first.next_cursor.as_deref(),
+                2,
+                Some("ahri-new"),
+                Some("CLASSIC"),
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn clip_vault_blank_filters_match_unfiltered_legacy_results() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        storage
+            .create_game("game", &vault_game("game", now))
+            .unwrap();
+        storage
+            .save_clip_metadata("game", &vault_clip("C:\\game.mp4", now, 1, None))
+            .unwrap();
+
+        let unfiltered = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 1, None, None)
+            .unwrap();
+        let blank_filters = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 1, Some("  "), Some("  "))
+            .unwrap();
+        assert_eq!(unfiltered.groups.len(), blank_filters.groups.len());
+        assert_eq!(
+            unfiltered.groups[0].game_id,
+            blank_filters.groups[0].game_id
+        );
+        assert_eq!(unfiltered.next_cursor, blank_filters.next_cursor);
+    }
+
+    #[test]
+    fn clip_vault_sorts_clips_inside_each_game() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        storage
+            .create_game("game", &vault_game("game", now))
+            .unwrap();
+        storage
+            .save_clip_metadata(
+                "game",
+                &vault_clip(
+                    "C:\\old-best.mp4",
+                    now - chrono::Duration::minutes(1),
+                    1,
+                    Some(90.0),
+                ),
+            )
+            .unwrap();
+        storage
+            .save_clip_metadata("game", &vault_clip("C:\\new-low.mp4", now, 1, Some(10.0)))
+            .unwrap();
+
+        let best = storage
+            .list_clip_vault_page(ClipVaultSort::Best, None, 1, None, None)
+            .unwrap();
+        assert_eq!(best.groups[0].clips[0].file_path, "C:\\old-best.mp4");
+        let newest = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 1, None, None)
+            .unwrap();
+        assert_eq!(newest.groups[0].clips[0].file_path, "C:\\new-low.mp4");
+    }
+
+    #[test]
+    fn clip_vault_skips_a_corrupt_clip_row() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        storage
+            .create_game("game", &vault_game("game", now))
+            .unwrap();
+        storage
+            .save_clip_metadata("game", &vault_clip("C:\\valid.mp4", now, 1, None))
+            .unwrap();
+        storage.conn().unwrap().execute(
+            "INSERT INTO clips (game_id, file_path, metadata_json, event_time, priority, created_at, updated_at) VALUES (?1, ?2, ?3, 0, 1, ?4, ?4)",
+            params!["game", "C:\\corrupt.mp4", "{not-json", now.to_rfc3339()],
+        ).unwrap();
+        let page = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 1, None, None)
+            .unwrap();
+        assert_eq!(page.groups[0].clips.len(), 1);
+        assert_eq!(page.skipped_item_count, 1);
+    }
+
+    #[test]
+    fn clip_vault_keeps_valid_clips_when_game_metadata_is_corrupt() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        storage
+            .create_game("game", &vault_game("game", now))
+            .unwrap();
+        storage
+            .save_clip_metadata("game", &vault_clip("C:\\valid.mp4", now, 1, None))
+            .unwrap();
+        storage
+            .conn()
+            .unwrap()
+            .execute(
+                "UPDATE games SET metadata_json = ?1 WHERE game_id = ?2",
+                params!["{not-json", "game"],
+            )
+            .unwrap();
+
+        let page = storage
+            .list_clip_vault_page(ClipVaultSort::Newest, None, 1, None, None)
+            .unwrap();
+        assert_eq!(page.groups[0].game_id, "game");
+        assert!(page.groups[0].game.is_none());
+        assert_eq!(page.groups[0].clip_count, 1);
+        assert_eq!(page.skipped_item_count, 1);
+    }
+
+    #[test]
+    fn thumbnail_helpers_and_owned_update_preserve_other_metadata() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        let now = Utc::now();
+        storage
+            .create_game("owner", &vault_game("owner", now))
+            .unwrap();
+        storage
+            .create_game("other", &vault_game("other", now))
+            .unwrap();
+        let mut clip = vault_clip("C:\\clip.mp4", now, 3, Some(77.0));
+        clip.event_offset_secs = Some(4.0);
+        storage.save_clip_metadata("owner", &clip).unwrap();
+        assert_eq!(thumbnail_offset_secs(&clip), 4.0);
+        clip.event_offset_secs = Some(20.0);
+        assert_eq!(thumbnail_offset_secs(&clip), 5.0);
+        assert_eq!(
+            thumbnail_output_path(Path::new("C:\\videos\\clip.mp4")).unwrap(),
+            PathBuf::from("C:\\videos\\clip_thumbnail.jpg")
+        );
+        assert!(storage
+            .load_owned_clip_metadata("other", "C:\\clip.mp4")
+            .is_err());
+        let updated = storage
+            .update_owned_clip_thumbnail("owner", "C:\\clip.mp4", "C:\\clip.jpg")
+            .unwrap();
+        assert_eq!(updated.thumbnail_path.as_deref(), Some("C:\\clip.jpg"));
+        assert_eq!(updated.highlight_score, Some(77.0));
+    }
+
+    #[test]
+    fn media_job_publication_and_quota_are_idempotent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+        storage
+            .create_media_job("job-1", "user-1", MediaJobKind::AutoEdit, "{}")
+            .unwrap();
+        storage
+            .update_media_job_status(
+                "job-1",
+                MediaJobStatus::Running,
+                "rendering",
+                50.0,
+                None,
+                None,
+            )
+            .unwrap();
+        storage
+            .update_media_job_status(
+                "job-1",
+                MediaJobStatus::Validating,
+                "publishing",
+                99.0,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(storage
+            .publish_auto_edit_series("job-1", "user-1", false, false, &[], &[])
+            .unwrap());
+        assert!(!storage
+            .publish_auto_edit_series("job-1", "user-1", false, false, &[], &[])
+            .unwrap());
+        assert_eq!(
+            storage.load_auto_edit_usage("user-1").unwrap().usage_count,
+            1
+        );
+        let snapshot = storage.load_media_job("job-1").unwrap();
+        assert_eq!(snapshot.status, MediaJobStatus::Complete);
+        assert!(snapshot.quota_sync_pending);
+    }
+
+    #[test]
+    fn active_media_job_probe_covers_queued_running_and_validating_states() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path()).unwrap();
+
+        assert!(!storage.has_active_media_jobs().unwrap());
+        storage
+            .create_media_job("job-active", "user-active", MediaJobKind::AutoEdit, "{}")
+            .unwrap();
+        assert!(storage.has_active_media_jobs().unwrap());
+
+        storage
+            .update_media_job_status(
+                "job-active",
+                MediaJobStatus::Running,
+                "rendering",
+                20.0,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(storage.has_active_media_jobs().unwrap());
+
+        storage
+            .update_media_job_status(
+                "job-active",
+                MediaJobStatus::Validating,
+                "validating",
+                90.0,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(storage.has_active_media_jobs().unwrap());
+
+        storage
+            .update_media_job_status(
+                "job-active",
+                MediaJobStatus::Complete,
+                "complete",
+                100.0,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(!storage.has_active_media_jobs().unwrap());
+    }
+
+    #[test]
+    fn startup_marks_interrupted_jobs_recoverable() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        {
+            let storage = Storage::new(temp_dir.path()).unwrap();
+            storage
+                .create_media_job("job-2", "user-2", MediaJobKind::AutoEdit, "{}")
+                .unwrap();
+            storage
+                .update_media_job_status(
+                    "job-2",
+                    MediaJobStatus::Running,
+                    "rendering",
+                    25.0,
+                    None,
+                    None,
+                )
+                .unwrap();
+        }
+        let reopened = Storage::new(temp_dir.path()).unwrap();
+        let snapshot = reopened.load_media_job("job-2").unwrap();
+        assert_eq!(snapshot.status, MediaJobStatus::Recoverable);
+        assert!(snapshot.recoverable);
     }
 }

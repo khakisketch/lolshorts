@@ -193,7 +193,53 @@
     "generate": "Gerar vídeo",
     "generating": "Gerando...",
     "preview": "Visualizar",
-    "export": "Exportar"
+    "export": "Exportar",
+    "pinnedClips": {
+      "title": "Using the {{count}} clips you picked",
+      "summary": "{{clips}} clips from {{games}} games · about {{duration}}",
+      "description": "Your picks replace auto-selection and lock the game list. Every clip you picked goes in.",
+      "rationale": "The {{count}} clips you picked, ordered by highlight score across all selected games.",
+      "useAutomatic": "Switch to auto-selection",
+      "overTargetWarning": "Your picks are about {{estimated}} for a {{target}} target. Every selected scene will be included, so the finished video will be longer.",
+      "overrunTitle": "Include every selected clip?",
+      "overrunDescription": "You selected {{clips}} clips (about {{estimated}}) for a {{target}} target. The finished video will be longer because none of your picks will be removed.",
+      "includeAll": "Include all clips"
+    },
+    "quick": {
+      "title": "Criação rápida",
+      "description": "Escolha as partidas e a duração e revise cada cena antes de renderizar.",
+      "framing": "Enquadramento do LoL",
+      "preset": "Predefinição de exportação",
+      "advanced": "Configurações avançadas",
+      "review": "Revisar clipes"
+    },
+    "storyboard": {
+      "title": "Revise seus clipes",
+      "summary": "{{clips}} clipes · {{duration}} · {{parts}} saída(s)",
+      "reset": "Restaurar recomendação",
+      "over180Title": "A seleção é maior que um Short",
+      "over180Body": "Todas as cenas selecionadas serão mantidas. Escolha uma série de Shorts ou um vídeo vertical comum.",
+      "output": "Saída",
+      "timeline": "Linha do tempo do storyboard",
+      "moveUp": "Mover clipe para cima",
+      "moveDown": "Mover clipe para baixo",
+      "remove": "Excluir clipe",
+      "start": "Início (segundos)",
+      "end": "Fim (segundos)",
+      "clipDuration": "{{duration}} selecionados de {{source}}",
+      "generateSeries": "Gerar série"
+    },
+    "output": {
+      "single": "Um Short",
+      "series": "Série de Shorts",
+      "vertical": "Vídeo vertical comum"
+    },
+    "framing": {
+      "focus": "HUD + foco no combate",
+      "safe": "Quadro completo",
+      "crop": "Corte central"
+    },
+    "cancelJob": "Cancelar geração"
   },
   "youtube": {
     "title": "YouTube",
@@ -443,5 +489,119 @@
     "uploadComplete": "Envio completo: {{title}}",
     "uploadFailed": "Falha no envio: {{error}}",
     "updateAvailable": "Atualização disponível: v{{version}}"
+  },
+  "results": {
+    "tabs": {
+      "clips": "Clip vault"
+    },
+    "clips": {
+      "title": "Recommended clips",
+      "description": "Original game clips, ranked by the moments most worth watching.",
+      "sortLabel": "Sort clips",
+      "sortRecommended": "Best highlights",
+      "sortNewest": "Newest",
+      "game": "Game",
+      "select": "Select clip",
+      "play": "Play clip",
+      "loading": "Loading recorded clips...",
+      "loadingMore": "Loading more...",
+      "loadMore": "Load more games",
+      "loadError": "Could not load recorded clips.",
+      "skippedItems": "{{count}} damaged clip items were skipped.",
+      "emptyTitle": "No recorded clips yet",
+      "emptyDescription": "Play a game and your strongest moments will appear here.",
+      "unknownDate": "Date unavailable",
+      "clipCount": "{{count}} clips",
+      "selectGame": "Select all",
+      "clearGameSelection": "Clear game",
+      "gameRank": "This game #{{rank}}",
+      "selectionActions": "Selected clip actions",
+      "selectionSummary": "{{clips}} clips · {{games}} games · about {{duration}}",
+      "clearAll": "Clear all",
+      "createMontage": "Create montage",
+      "overTargetWarning": "Every selected scene will be included, so the finished video will be longer than the target."
+    }
+  },
+  "mediaJobs": {
+    "title": "Tarefas de mídia",
+    "queued": "Na fila",
+    "processing": "Processando",
+    "completed": "Concluída",
+    "failed": "Falhou",
+    "cancelled": "Cancelada",
+    "paused": "Pausada",
+    "recoverable": "Pode ser retomada",
+    "resume": "Retomar tarefa",
+    "discard": "Descartar tarefa",
+    "cancel": "Cancelar tarefa",
+    "retry": "Tentar tarefa novamente",
+    "empty": "Ainda não há tarefas de mídia"
+  },
+  "outputValidation": {
+    "title": "Verificações de saída",
+    "duration": "Duração",
+    "clipCount": "Quantidade de clipes",
+    "outputFile": "Arquivo de saída",
+    "fileSize": "Dados do arquivo",
+    "verified": "Verificado",
+    "valid": "Válido",
+    "warning": "Aviso",
+    "invalid": "Inválido",
+    "unknown": "Desconhecido",
+    "revalidate": "Verificar novamente",
+    "needsReview": "Precisa de revisão",
+    "missing": "Ausente"
+  },
+  "resultSeries": {
+    "title": "Resultados da série",
+    "part": "Parte {{current}} de {{total}}",
+    "parts": "{{count}} partes",
+    "totalDuration": "Duração total: {{duration}}",
+    "totalSize": "Tamanho total: {{size}}",
+    "deleteGroup": "Excluir série",
+    "deletePart": "Excluir parte {{part}}",
+    "sharePart": "Compartilhar parte"
+  },
+  "platformExport": {
+    "title": "Exportar para outra plataforma",
+    "tiktok": "Exportar para TikTok",
+    "instagramReels": "Exportar para Instagram Reels",
+    "exporting": "Exportando…",
+    "passthrough": "Usar arquivo original",
+    "convert": "Converter para a plataforma",
+    "cancel": "Cancelar exportação",
+    "busy": "Outra exportação está em andamento",
+    "confirmWarning": "Exportar uma cópia separada para a plataforma?",
+    "success": "Cópia para plataforma exportada",
+    "failed": "Não foi possível exportar a cópia para plataforma"
+  },
+  "appUpdater": {
+    "title": "Há uma atualização do LoLShorts",
+    "description": "A versão {{available}} está pronta. Você está usando {{current}}.",
+    "releaseNotes": "Novidades",
+    "later": "Mais tarde",
+    "install": "Instalar atualização",
+    "retry": "Tentar novamente",
+    "working": "Aguarde…",
+    "downloading": "Baixando atualização",
+    "installing": "Iniciando instalador",
+    "progressLabel": "Progresso do download da atualização",
+    "windowsExitNotice": "O LoLShorts será fechado enquanto o Windows instala a atualização. Salve seu trabalho antes de continuar.",
+    "settingsTitle": "Atualizações do aplicativo",
+    "currentVersion": "Versão atual: {{version}}",
+    "upToDate": "A versão {{version}} está atualizada.",
+    "disabled": "As atualizações estão desativadas nesta compilação de desenvolvimento sem assinatura.",
+    "check": "Verificar atualizações",
+    "checking": "Verificando…",
+    "errors": {
+      "updater_disabled": "As atualizações estão desativadas para esta compilação.",
+      "update_busy": "Pare a gravação e aguarde os trabalhos de mídia terminarem antes de instalar.",
+      "update_check_failed": "Não foi possível verificar atualizações. Tente novamente.",
+      "update_check_timeout": "O servidor de atualização não respondeu em 30 segundos. Tente novamente.",
+      "update_download_timeout": "O download excedeu 15 minutos. A versão atual foi mantida.",
+      "update_signature_invalid": "A assinatura da atualização é inválida. A versão atual foi mantida.",
+      "update_install_failed": "Não foi possível instalar a atualização. A versão atual foi mantida.",
+      "unknown": "Não foi possível concluir a atualização. Tente novamente."
+    }
   }
 }

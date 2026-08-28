@@ -1,7 +1,11 @@
-import { create } from 'zustand';
-import { recordingApi, RecordingStatus as ApiRecordingStatus, isRecording as apiIsRecording } from '../api/recording';
-import { RecordingSettings, RecordingReadiness } from '@/types';
-import { EVENT_FILTER_DEFAULTS } from '@/components/settings/highlightPreset';
+import { create } from "zustand";
+import {
+  recordingApi,
+  RecordingStatus as ApiRecordingStatus,
+  isRecording as apiIsRecording,
+} from "../api/recording";
+import { RecordingSettings, RecordingReadiness } from "@/types";
+import { EVENT_FILTER_DEFAULTS } from "@/components/settings/highlightPreset";
 
 export interface RecordingStatus {
   isRecording: boolean;
@@ -9,7 +13,7 @@ export interface RecordingStatus {
   duration: number;
   gameProcessDetected: boolean;
   lcuConnected: boolean;
-  state: ApiRecordingStatus['status'];
+  state: ApiRecordingStatus["status"];
 }
 
 export interface RecordingStore {
@@ -29,6 +33,7 @@ export interface RecordingStore {
    */
   micActive: boolean | null;
   _pollInterval: number | null;
+  _readinessPollInterval: number | null;
 
   // Actions
   startRecording: () => Promise<void>;
@@ -38,18 +43,28 @@ export interface RecordingStore {
 
   // Synchronization
   syncStatus: () => Promise<void>;
+  /**
+   * Refresh the slower environment checks used by onboarding and diagnostics.
+   * This intentionally stays separate from the one-second recording-status poll:
+   * readiness can start FFmpeg probes and enumerate audio devices on the backend.
+   */
+  syncReadiness: () => Promise<void>;
   startStatusPolling: () => void;
   stopStatusPolling: () => void;
 }
 
+export const RECORDING_STATUS_POLL_INTERVAL_MS = 1_000;
+export const RECORDING_READINESS_POLL_INTERVAL_MS = 30_000;
+
 // Default settings matching Rust backend defaults
 const DEFAULT_SETTINGS: RecordingSettings = {
+  schema_version: 4,
   video: {
     resolution: "r1920x1080",
     frame_rate: "fps60",
-    bitrate_preset: "high",
+    bitrate_preset: "medium",
     codec: "h264",
-    encoder: "auto"
+    encoder: "auto",
   },
   audio: {
     record_microphone: false,
@@ -59,7 +74,7 @@ const DEFAULT_SETTINGS: RecordingSettings = {
     system_audio_device: "default",
     system_audio_volume: 100,
     sample_rate: "hz48000",
-    bitrate: "kbps192"
+    bitrate: "kbps192",
   },
   // 백엔드 `EventFilterSettings::default()` 미러를 그대로 쓴다.
   //
@@ -76,7 +91,7 @@ const DEFAULT_SETTINGS: RecordingSettings = {
     record_arena: true,
     record_special: true,
     record_custom: false,
-    record_practice: false
+    record_practice: false,
   },
   clip_timing: {
     default_pre_duration: 15,
@@ -85,25 +100,25 @@ const DEFAULT_SETTINGS: RecordingSettings = {
     merge_consecutive_events: true,
     // 백엔드 `ClipTimingSettings::default()` 와 같아야 한다 — 설정이 도착하기 전
     // 잠깐 보이는 값이지만, 다르면 그 잠깐 동안 화면이 다른 숫자를 말한다.
-    merge_time_threshold: 15
+    merge_time_threshold: 15,
   },
   hotkeys: {
     manual_save_clip: "F9",
     toggle_recording: "F8",
-    delete_last_clip: "F10"
+    delete_last_clip: "F10",
   },
   storage: {
     auto_delete_enabled: false,
     auto_delete_days: 30,
     max_storage_gb: 50,
-    delete_exported_clips: false
+    delete_exported_clips: false,
   },
-  auto_start_with_league: true,
+  launch_on_windows_startup: false,
   minimize_to_tray: true,
   show_notifications: true,
   show_replay_popup: true,
   crash_reporting_enabled: false,
-  overlay_enabled: true
+  overlay_enabled: true,
 };
 
 export const useRecordingStore = create<RecordingStore>((set, get) => ({
@@ -113,7 +128,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
     duration: 0,
     gameProcessDetected: false,
     lcuConnected: false,
-    state: 'idle',
+    state: "idle",
   },
   readiness: null,
   settings: DEFAULT_SETTINGS,
@@ -121,6 +136,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
   audioActive: null,
   micActive: null,
   _pollInterval: null,
+  _readinessPollInterval: null,
 
   startRecording: async () => {
     try {
@@ -128,8 +144,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
       await recordingApi.start();
       // Status will be updated by the next poll or sync
       await get().syncStatus();
+      await get().syncReadiness();
     } catch (e) {
-      const errorMessage = e instanceof Error ? e.message : 'Failed to start recording';
+      const errorMessage =
+        e instanceof Error ? e.message : "Failed to start recording";
       set({ error: errorMessage });
       throw e;
     }
@@ -141,21 +159,21 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
       await recordingApi.stop();
       // Status will be updated by the next poll or sync
       await get().syncStatus();
+      await get().syncReadiness();
     } catch (e) {
-      const errorMessage = e instanceof Error ? e.message : 'Failed to stop recording';
+      const errorMessage =
+        e instanceof Error ? e.message : "Failed to stop recording";
       set({ error: errorMessage });
       throw e;
     }
   },
-
-
 
   updateSettings: (newSettings) => {
     set((state) => ({
       settings: {
         ...state.settings,
         ...newSettings,
-      }
+      },
     }));
   },
 
@@ -167,7 +185,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
         duration: 0,
         gameProcessDetected: false,
         lcuConnected: false,
-        state: 'idle',
+        state: "idle",
       },
       readiness: null,
       error: null,
@@ -178,10 +196,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
 
   syncStatus: async () => {
     try {
-      const [backendStatus, readiness] = await Promise.all([
-        recordingApi.getStatus(),
-        recordingApi.getRecordingReadiness(),
-      ]);
+      const backendStatus = await recordingApi.getStatus();
 
       const recording = apiIsRecording(backendStatus);
 
@@ -203,7 +218,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
 
       set((state) => ({
         error: null,
-        readiness,
         audioActive,
         micActive,
         status: {
@@ -212,10 +226,11 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
           state: backendStatus.status,
           // Note: start_time not available from backend, keep existing value
           duration: backendStatus.buffer_duration_secs,
-        }
+        },
       }));
     } catch (e) {
-      const errorMessage = e instanceof Error ? e.message : 'Failed to sync recording status';
+      const errorMessage =
+        e instanceof Error ? e.message : "Failed to sync recording status";
       set((state) => ({
         error: errorMessage,
         audioActive: null,
@@ -223,27 +238,43 @@ export const useRecordingStore = create<RecordingStore>((set, get) => ({
         status: {
           ...state.status,
           isRecording: false,
-          state: 'error',
-        }
+          state: "error",
+        },
       }));
     }
   },
 
+  syncReadiness: async () => {
+    try {
+      const readiness = await recordingApi.getRecordingReadiness();
+      set({ readiness, error: null });
+    } catch (e) {
+      const errorMessage =
+        e instanceof Error ? e.message : "Failed to check recording readiness";
+      set({ error: errorMessage });
+    }
+  },
 
   startStatusPolling: () => {
     if (get()._pollInterval) return;
-    get().syncStatus(); // Initial sync
-    const id = window.setInterval(() => {
-      get().syncStatus();
-    }, 1000);
-    set({ _pollInterval: id });
+    void get().syncStatus(); // Initial cheap sync
+    void get().syncReadiness(); // Initial environment check
+    const statusId = window.setInterval(() => {
+      void get().syncStatus();
+    }, RECORDING_STATUS_POLL_INTERVAL_MS);
+    const readinessId = window.setInterval(() => {
+      void get().syncReadiness();
+    }, RECORDING_READINESS_POLL_INTERVAL_MS);
+    set({ _pollInterval: statusId, _readinessPollInterval: readinessId });
   },
 
   stopStatusPolling: () => {
     const id = get()._pollInterval;
     if (id) {
       clearInterval(id);
-      set({ _pollInterval: null });
     }
-  }
+    const readinessId = get()._readinessPollInterval;
+    if (readinessId) clearInterval(readinessId);
+    set({ _pollInterval: null, _readinessPollInterval: null });
+  },
 }));

@@ -9,13 +9,14 @@ use super::super::{execute_ffmpeg_command, ClipInfo, Result, VideoError};
 use super::composer::AutoComposer;
 use super::types::{AudioLevels, BackgroundLayer, BackgroundMusic, CanvasElement, CanvasTemplate};
 use crate::utils::ffmpeg::get_ffmpeg_path;
-use crate::video::processor::types::{CaptionSpec, ClipSpec, ComposeOptions};
+use crate::video::processor::types::{CaptionSpec, ClipSpec, ComposeOptions, VerticalFraming};
 
 impl AutoComposer {
     pub(super) async fn prepare_clips(
         &self,
         clips: &[ClipInfo],
         target_duration: u32,
+        preserve_full: bool,
     ) -> Result<Vec<ClipSpec>> {
         let total_duration: f64 = clips.iter().map(|c| c.duration.unwrap_or(10.0)).sum();
         let target = target_duration as f64;
@@ -38,7 +39,7 @@ impl AutoComposer {
             }
         }
 
-        if total_duration <= buffer_target {
+        if preserve_full || total_duration <= buffer_target {
             info!("총 길이가 목표 범위 내이므로 원본 클립 전체 사용(트림 없음)");
             return Ok(clips
                 .iter()
@@ -78,11 +79,8 @@ impl AutoComposer {
                 continue;
             }
 
-            let start_time = trim_start_around_event(
-                clip_duration,
-                trimmed_duration,
-                clip.event_offset_secs,
-            );
+            let start_time =
+                trim_start_around_event(clip_duration, trimmed_duration, clip.event_offset_secs);
             info!(
                 "클립 {} 트림 구간: {:.1}초 -> {:.1}초 (시작점={:.1}초, 이벤트={:?})",
                 idx, clip_duration, trimmed_duration, start_time, clip.event_offset_secs
@@ -106,6 +104,7 @@ impl AutoComposer {
         clip_specs: &[ClipSpec],
         event_times: Option<&[f64]>,
         captions: Option<Vec<Option<CaptionSpec>>>,
+        framing: super::types::AutoEditFramingMode,
     ) -> Result<PathBuf> {
         let output_dir = self.stage_dir();
         tokio::fs::create_dir_all(&output_dir)
@@ -128,6 +127,11 @@ impl AutoComposer {
             // 라우드니스 정규화는 오디오 믹싱까지 끝난 최종 단계에서 별도 수행.
             normalize_audio: None,
             captions,
+            framing: match framing {
+                super::types::AutoEditFramingMode::LolFocusStack => VerticalFraming::LolFocusStack,
+                super::types::AutoEditFramingMode::SafeFullFrame => VerticalFraming::SafeFullFrame,
+                super::types::AutoEditFramingMode::CenterCrop => VerticalFraming::CenterCrop,
+            },
         };
 
         self.video_processor
@@ -686,7 +690,6 @@ fn map_known_font_name(name: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-
 
 #[cfg(test)]
 mod trim_window_tests {

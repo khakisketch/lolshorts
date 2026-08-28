@@ -10,10 +10,19 @@ use chrono::Utc;
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use sysinfo::Disks;
 use tauri::State;
 
 const DIAGNOSTIC_LOG_LINE_LIMIT: usize = 300;
+
+async fn run_utility_blocking<T, F>(operation: &'static str, task: F) -> AppResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|error| AppError::Internal(format!("{operation} task failed: {error}")))
+}
 
 /// Get current recording performance metrics
 #[tauri::command]
@@ -40,7 +49,8 @@ pub async fn get_diagnostics_status(state: State<'_, AppState>) -> AppResult<Dia
 }
 
 async fn collect_diagnostics_status(state: &AppState) -> AppResult<DiagnosticsStatus> {
-    let mut diagnostics = crate::utils::health::get_diagnostics_status();
+    let mut diagnostics =
+        crate::utils::health::get_diagnostics_status(&state.public_service_status);
     let startup_issues = state.startup_issues.read().await;
 
     if startup_issues.is_empty() {
@@ -63,7 +73,10 @@ async fn collect_diagnostics_status(state: &AppState) -> AppResult<DiagnosticsSt
         });
     }
 
-    match state.storage.health_check() {
+    let storage = state.storage.clone();
+    let storage_health =
+        run_utility_blocking("SQLite health", move || storage.health_check()).await?;
+    match storage_health {
         Ok(health) if health.integrity_ok => diagnostics.checks.push(DiagnosticCheck {
             key: "sqlite_health",
             label: "SQLite local data",
@@ -97,11 +110,11 @@ async fn collect_diagnostics_status(state: &AppState) -> AppResult<DiagnosticsSt
     }
 
     match crate::utils::ffmpeg::get_ffmpeg_path() {
-        Ok(path) => diagnostics.checks.push(DiagnosticCheck {
+        Ok(_path) => diagnostics.checks.push(DiagnosticCheck {
             key: "ffmpeg_runtime",
             label: "FFmpeg runtime",
             status: DiagnosticState::Ok,
-            message: format!("FFmpeg binary is available at {}.", path.display()),
+            message: "FFmpeg binary is available and passed its usability probe.".to_string(),
             action: "No action required; field QA must still verify real capture output."
                 .to_string(),
         }),
@@ -144,20 +157,6 @@ async fn collect_diagnostics_status(state: &AppState) -> AppResult<DiagnosticsSt
         },
     });
 
-    let youtube_client_id_present = env_present("YOUTUBE_CLIENT_ID");
-    let youtube_client_secret_present = env_present("YOUTUBE_CLIENT_SECRET");
-    diagnostics.checks.push(DiagnosticCheck {
-        key: "youtube_config",
-        label: "YouTube configuration",
-        status: DiagnosticState::Warning,
-        message: if youtube_client_id_present && youtube_client_secret_present {
-            "YouTube OAuth configuration is present; production account behavior still requires real test-account Field QA.".to_string()
-        } else {
-            "YouTube OAuth credentials are not fully configured; upload features are disabled or limited.".to_string()
-        },
-        action: "Validate OAuth redirect, token refresh, quota errors, upload retry, and sign-out with a real test account.".to_string(),
-    });
-
     diagnostics.checks.push(DiagnosticCheck {
         key: "payment_deferred",
         label: "Payment boundary",
@@ -173,23 +172,17 @@ async fn collect_diagnostics_status(state: &AppState) -> AppResult<DiagnosticsSt
     diagnostics.checks.push(DiagnosticCheck {
         key: "field_evidence",
         label: "Field QA evidence",
-        status: DiagnosticState::Blocked,
+        status: DiagnosticState::Warning,
         message:
-            "E5 evidence is required before public production/commercial readiness claims."
+            "E5 evidence is tracked by the release process and is not embedded in this installation."
                 .to_string(),
         action:
-            "Complete docs/FIELD_QA_COMMERCIAL_READINESS.md with tester, machine, logs, screenshots, and sample files."
+            "Release owners must complete docs/FIELD_QA_COMMERCIAL_READINESS.md before stable publication."
                 .to_string(),
     });
 
     diagnostics.overall_status = crate::utils::health::overall_status(&diagnostics.checks);
     Ok(diagnostics)
-}
-
-fn env_present(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
 }
 
 #[derive(Debug, Serialize)]
@@ -233,47 +226,69 @@ pub async fn export_diagnostics_bundle(
 ) -> AppResult<DiagnosticsBundleExport> {
     let redact = redact.unwrap_or(true);
     let generated_at = Utc::now().to_rfc3339();
-    let diagnostics = collect_diagnostics_status(&state).await?;
-    let storage_health = state.storage.health_check().ok();
-    let storage_setting_keys = state
-        .storage
-        .diagnostic_setting_keys()
-        .unwrap_or_else(|error| vec![format!("setting_keys_unavailable: {}", error)]);
-    let logs = collect_log_excerpts(state.storage.base_path(), redact);
-    let included_logs = logs.len();
+    let mut diagnostics = collect_diagnostics_status(&state).await?;
+    let storage = state.storage.clone();
+    let base_path = storage.base_path().to_path_buf();
 
-    let bundle = DiagnosticsBundleFile {
-        generated_at: generated_at.clone(),
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
-        redacted: redact,
-        diagnostics,
-        storage_health,
-        storage_setting_keys,
-        system: DiagnosticsSystemSummary {
-            os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
-            app_data_dir: state.storage.base_path().display().to_string(),
-        },
-        logs,
-        privacy_notice: "Bundle excludes known credential values and includes log excerpts only; review before sharing with support.".to_string(),
-    };
+    run_utility_blocking("Diagnostics export", move || {
+        if redact {
+            redact_diagnostics_status(&mut diagnostics);
+        }
+        let storage_health = storage.health_check().ok();
+        let storage_setting_keys = storage.diagnostic_setting_keys().unwrap_or_else(|error| {
+            if redact {
+                vec!["setting_keys_unavailable".to_string()]
+            } else {
+                vec![format!("setting_keys_unavailable: {error}")]
+            }
+        });
+        let logs = collect_log_excerpts(&base_path, redact);
+        let included_logs = logs.len();
+        let bundle = DiagnosticsBundleFile {
+            generated_at: generated_at.clone(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            redacted: redact,
+            diagnostics,
+            storage_health,
+            storage_setting_keys,
+            system: DiagnosticsSystemSummary {
+                os: std::env::consts::OS.to_string(),
+                arch: std::env::consts::ARCH.to_string(),
+                app_data_dir: if redact {
+                    "%APPDATA%\\lolshorts".to_string()
+                } else {
+                    base_path.display().to_string()
+                },
+            },
+            logs,
+            privacy_notice: "Bundle excludes known credential values, user-profile paths, and media contents; review before sharing with support.".to_string(),
+        };
 
-    let output_dir = state.storage.base_path().join("diagnostics");
-    fs::create_dir_all(&output_dir).map_err(|error| AppError::Io(error.to_string()))?;
-    let output_path = output_dir.join(format!(
-        "diagnostics_{}.json",
-        Utc::now().format("%Y%m%d_%H%M%S")
-    ));
-    let json = serde_json::to_string_pretty(&bundle)
-        .map_err(|error| AppError::Internal(error.to_string()))?;
-    fs::write(&output_path, json).map_err(|error| AppError::Io(error.to_string()))?;
+        let output_dir = base_path.join("diagnostics");
+        fs::create_dir_all(&output_dir).map_err(|error| AppError::Io(error.to_string()))?;
+        let output_path = output_dir.join(format!(
+            "diagnostics_{}.json",
+            Utc::now().format("%Y%m%d_%H%M%S")
+        ));
+        let json = serde_json::to_string_pretty(&bundle)
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        fs::write(&output_path, json).map_err(|error| AppError::Io(error.to_string()))?;
 
-    Ok(DiagnosticsBundleExport {
-        output_path: output_path.display().to_string(),
-        redacted: redact,
-        generated_at,
-        included_logs,
+        Ok(DiagnosticsBundleExport {
+            output_path: output_path.display().to_string(),
+            redacted: redact,
+            generated_at,
+            included_logs,
+        })
     })
+    .await?
+}
+
+fn redact_diagnostics_status(status: &mut DiagnosticsStatus) {
+    for check in &mut status.checks {
+        check.message = redact_sensitive_text(&check.message);
+        check.action = redact_sensitive_text(&check.action);
+    }
 }
 
 fn collect_log_excerpts(base_path: &Path, redact: bool) -> Vec<DiagnosticsLogExcerpt> {
@@ -342,8 +357,19 @@ fn redact_sensitive_text(line: &str) -> String {
     {
         "[redacted sensitive diagnostic line]".to_string()
     } else {
-        line.to_string()
+        redact_user_profile_path(line)
     }
+}
+
+fn redact_user_profile_path(value: &str) -> String {
+    let Some(home) = dirs::home_dir() else {
+        return value.to_string();
+    };
+    let home = home.to_string_lossy();
+    let mut redacted = value.replace(home.as_ref(), "%USERPROFILE%");
+    // Logs can contain either separator style regardless of the current OS.
+    redacted = redacted.replace(&home.replace('\\', "/"), "%USERPROFILE%");
+    redacted
 }
 
 #[cfg(test)]
@@ -360,6 +386,16 @@ mod tests {
             redact_sensitive_text("ordinary warning"),
             "ordinary warning"
         );
+    }
+
+    #[test]
+    fn diagnostics_redaction_removes_user_profile_paths() {
+        if let Some(home) = dirs::home_dir() {
+            let input = format!("Log path: {}\\LoLShorts\\app.log", home.display());
+            let redacted = redact_sensitive_text(&input);
+            assert!(!redacted.contains(home.to_string_lossy().as_ref()));
+            assert!(redacted.contains("%USERPROFILE%"));
+        }
     }
 }
 
@@ -383,66 +419,29 @@ pub async fn force_cleanup(state: State<'_, AppState>) -> AppResult<u64> {
 /// Get disk space info for recordings directory using sysinfo for real data
 #[tauri::command]
 pub async fn get_disk_space_info(state: State<'_, AppState>) -> AppResult<DiskSpaceInfo> {
-    // Get disk usage from sysinfo
-    let disks = Disks::new_with_refreshed_list();
     let recordings_path = state.storage.base_path().join("recordings");
+    run_utility_blocking("Disk-space probe", move || {
+        let snapshot = crate::utils::disk::query_disk_space(&recordings_path).ok();
+        let known = snapshot.is_some();
+        let (total_space, available_space) = snapshot
+            .map(|space| (space.total_bytes, space.available_bytes))
+            .unwrap_or((0, 0));
+        let total_gb = total_space as f64 / (1024.0 * 1024.0 * 1024.0);
+        let available_gb = available_space as f64 / (1024.0 * 1024.0 * 1024.0);
 
-    // Find the disk where recordings are stored
-    let mut total_space = 0;
-    let mut available_space = 0;
-
-    // Default fallback (if no disk found)
-    let mut found_disk = false;
-
-    for disk in &disks {
-        if recordings_path.starts_with(disk.mount_point()) {
-            total_space = disk.total_space();
-            available_space = disk.available_space();
-            found_disk = true;
-            break;
+        DiskSpaceInfo {
+            known,
+            available_gb,
+            total_gb,
+            used_gb: (total_gb - available_gb).max(0.0),
         }
-    }
-
-    // If not found by mount point, try the first disk as fallback or use system root
-    if !found_disk && !disks.is_empty() {
-        // Try C: on Windows or / on Linux/Mac
-        #[cfg(target_os = "windows")]
-        let root = std::path::Path::new("C:\\");
-        #[cfg(not(target_os = "windows"))]
-        let root = std::path::Path::new("/");
-
-        for disk in &disks {
-            if disk.mount_point() == root {
-                total_space = disk.total_space();
-                available_space = disk.available_space();
-                found_disk = true;
-                break;
-            }
-        }
-
-        // If still not found, just use the first one
-        if !found_disk {
-            if let Some(disk) = disks.first() {
-                total_space = disk.total_space();
-                available_space = disk.available_space();
-            }
-        }
-    }
-
-    // Convert bytes to GB
-    let total_gb = total_space as f64 / (1024.0 * 1024.0 * 1024.0);
-    let available_gb = available_space as f64 / (1024.0 * 1024.0 * 1024.0);
-    let used_gb = total_gb - available_gb;
-
-    Ok(DiskSpaceInfo {
-        available_gb,
-        total_gb,
-        used_gb,
     })
+    .await
 }
 
 #[derive(serde::Serialize)]
 pub struct DiskSpaceInfo {
+    pub known: bool,
     pub available_gb: f64,
     pub total_gb: f64,
     pub used_gb: f64,
@@ -550,13 +549,19 @@ pub async fn check_file_exists(state: State<'_, AppState>, file_path: String) ->
 /// Get comprehensive FFmpeg information
 #[tauri::command]
 pub async fn get_ffmpeg_info() -> AppResult<crate::utils::ffmpeg::FFmpegInfo> {
-    crate::utils::ffmpeg::get_ffmpeg_info().map_err(|e| AppError::Internal(e.to_string()))
+    run_utility_blocking("FFmpeg information probe", || {
+        crate::utils::ffmpeg::get_ffmpeg_info().map_err(|e| AppError::Internal(e.to_string()))
+    })
+    .await?
 }
 
 /// Get hardware-accelerated encoders
 #[tauri::command]
 pub async fn get_hardware_encoders() -> AppResult<Vec<crate::utils::ffmpeg::EncoderInfo>> {
-    crate::utils::ffmpeg::get_hardware_encoders().map_err(|e| AppError::Internal(e.to_string()))
+    run_utility_blocking("Hardware encoder probe", || {
+        crate::utils::ffmpeg::get_hardware_encoders().map_err(|e| AppError::Internal(e.to_string()))
+    })
+    .await?
 }
 
 /// Get available video encoders

@@ -35,6 +35,8 @@ pub enum AppError {
     RateLimited(String),
     #[error("Service unavailable: {0}")]
     ServiceUnavailable(String),
+    #[error("Updater error ({code}): {message}")]
+    Updater { code: String, message: String },
 }
 
 // Serialize implementation to provide structured error response to Frontend
@@ -60,6 +62,7 @@ impl Serialize for AppError {
             AppError::DeviceDisconnected(msg) => ("DEVICE_DISCONNECTED", msg.clone()),
             AppError::RateLimited(msg) => ("RATE_LIMITED", msg.clone()),
             AppError::ServiceUnavailable(msg) => ("SERVICE_UNAVAILABLE", msg.clone()),
+            AppError::Updater { code, message } => (code.as_str(), message.clone()),
         };
 
         let response = ErrorResponse {
@@ -165,6 +168,10 @@ mod tests {
             AppError::DeviceDisconnected("test".into()),
             AppError::RateLimited("test".into()),
             AppError::ServiceUnavailable("test".into()),
+            AppError::Updater {
+                code: "update_check_failed".into(),
+                message: "test".into(),
+            },
         ];
         for err in &variants {
             let json = serde_json::to_value(err).unwrap();

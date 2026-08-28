@@ -1,7 +1,8 @@
-use super::models::RecordingSettings;
+use super::models::{RecordingSettings, SETTINGS_SCHEMA_VERSION};
 use super::platform_config::{PlatformConfig, PlatformConfigError};
 use serde_json;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -12,7 +13,10 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
         "{}.tmp",
         path.extension().unwrap_or_default().to_string_lossy()
     ));
-    fs::write(&tmp_path, data)?;
+    let mut file = fs::File::create(&tmp_path)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    drop(file);
     fs::rename(&tmp_path, path)?;
     Ok(())
 }
@@ -46,62 +50,70 @@ impl RecordingSettings {
     pub fn load() -> Result<Self> {
         let settings_path = Self::get_settings_path()?;
 
-        if settings_path.exists() {
-            match fs::read_to_string(&settings_path)
-                .map_err(SettingsError::from)
-                .and_then(|json| serde_json::from_str::<Self>(&json).map_err(SettingsError::from))
-            {
-                Ok(mut settings) => {
-                    tracing::info!("Loaded settings from: {:?}", settings_path);
-                    if let Err(e) = settings.validate() {
-                        tracing::error!("Settings validation failed: {}. Using defaults.", e);
-                        return Ok(Self::default());
+        if !settings_path.exists() {
+            tracing::info!("Settings file not found, using defaults");
+            return Ok(Self::default());
+        }
+
+        match Self::load_candidate(&settings_path) {
+            Ok((settings, upgraded)) => {
+                tracing::info!("Loaded settings from: {:?}", settings_path);
+                if upgraded {
+                    settings.save()?;
+                    tracing::info!(
+                        schema_version = SETTINGS_SCHEMA_VERSION,
+                        "Persisted settings schema v4 upgrade"
+                    );
+                }
+                return Ok(settings);
+            }
+            Err(error) => {
+                // Validation failures are recovery failures just like malformed
+                // JSON. Treating them differently used to skip the backup and
+                // reset every preference because of one out-of-range field.
+                tracing::warn!("Settings load failed: {}. Trying backup.", error);
+            }
+        }
+
+        let backup_path = settings_path.with_extension("json.bak");
+        if backup_path.exists() {
+            match Self::load_candidate(&backup_path) {
+                Ok((settings, _upgraded)) => {
+                    tracing::warn!("Loaded settings from backup: {:?}", backup_path);
+                    // Restore the valid candidate without routing through
+                    // `save()`: that method first copies the invalid primary
+                    // over the good .bak file. Keeping the backup intact gives
+                    // the next startup a second known-good copy as well.
+                    match serde_json::to_vec_pretty(&settings)
+                        .map_err(SettingsError::from)
+                        .and_then(|json| atomic_write(&settings_path, &json).map_err(Into::into))
+                    {
+                        Ok(()) => tracing::info!("Restored primary settings from backup"),
+                        Err(error) => tracing::warn!(
+                            "Could not restore primary settings from backup: {}",
+                            error
+                        ),
                     }
-                    // 부모가 켜진 하위 상황은 함께 켠다. 설정 화면이 그 스위치를
-                    // 감추므로(강등 때문에 결과를 못 바꾼다) 예전 파일의 조합은
-                    // 사용자가 되돌릴 수 없는 상태로 남는다 — 이유는
-                    // `EventFilterSettings::reconcile_hierarchy` 에 적어 두었다.
-                    settings.event_filter.reconcile_hierarchy();
                     return Ok(settings);
                 }
-                Err(e) => {
-                    tracing::warn!("Settings load failed: {}. Trying backup.", e);
-                    let backup_path = settings_path.with_extension("json.bak");
-                    if backup_path.exists() {
-                        match fs::read_to_string(&backup_path)
-                            .map_err(SettingsError::from)
-                            .and_then(|json| {
-                                serde_json::from_str::<Self>(&json).map_err(SettingsError::from)
-                            }) {
-                            Ok(mut settings) => {
-                                tracing::warn!("Loaded settings from backup: {:?}", backup_path);
-                                if let Err(e2) = settings.validate() {
-                                    tracing::error!(
-                                        "Backup settings validation failed: {}. Using defaults.",
-                                        e2
-                                    );
-                                    return Ok(Self::default());
-                                }
-                                settings.event_filter.reconcile_hierarchy();
-                                return Ok(settings);
-                            }
-                            Err(e2) => {
-                                tracing::warn!(
-                                    "Backup settings also failed: {}. Using defaults.",
-                                    e2
-                                );
-                            }
-                        }
-                    } else {
-                        tracing::warn!("No backup settings file found. Using defaults.");
-                    }
+                Err(error) => {
+                    tracing::warn!("Backup settings also failed: {}. Using defaults.", error)
                 }
             }
         } else {
-            tracing::info!("Settings file not found, using defaults");
+            tracing::warn!("No backup settings file found. Using defaults.");
         }
 
         Ok(Self::default())
+    }
+
+    fn load_candidate(path: &Path) -> Result<(Self, bool)> {
+        let json = fs::read_to_string(path)?;
+        let mut settings: Self = serde_json::from_str(&json)?;
+        let upgraded = Self::migrate_from_v3_to_v4(&mut settings);
+        settings.validate().map_err(SettingsError::Validation)?;
+        settings.event_filter.reconcile_hierarchy();
+        Ok((settings, upgraded))
     }
 
     /// Save settings to file
@@ -205,28 +217,61 @@ impl RecordingSettings {
     ///
     /// Detects platform hardware and applies optimizations
     pub async fn load_with_platform_optimization() -> Result<Self> {
+        let settings_path = Self::get_settings_path()?;
+        let is_new_profile = !settings_path.exists();
         let mut settings = Self::load()?;
 
-        // Detect platform configuration
-        let platform_config = PlatformConfig::detect().await?;
+        // Hardware discovery is advisory. A transient WMI/audio/FFmpeg probe
+        // failure must never replace an existing user profile with defaults or
+        // prevent the app from starting.
+        let platform_config = match PlatformConfig::detect().await {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(
+                    "Platform detection unavailable; preserving recording settings: {}",
+                    error
+                );
+                if is_new_profile {
+                    settings.save()?;
+                }
+                return Ok(settings);
+            }
+        };
 
-        // Apply platform-specific defaults for new settings
-        settings.apply_platform_defaults(&platform_config);
-
-        // Optimize settings based on hardware
-        platform_config.optimize_settings(&mut settings);
-
-        // Validate settings against platform capabilities
-        platform_config.validate_settings(&settings)?;
-
-        // Save optimized settings
-        settings.save()?;
+        if settings.apply_detected_platform_config(&platform_config, is_new_profile)? {
+            settings.save()?;
+        }
 
         tracing::info!(
-            "Settings loaded and optimized for platform: {:?}",
-            platform_config.platform
+            "Settings loaded for platform {:?} (new_profile={})",
+            platform_config.platform,
+            is_new_profile
         );
         Ok(settings)
+    }
+
+    /// Apply detected defaults only while creating a profile. Existing
+    /// profiles are validation-only: hardware probes can change between boots,
+    /// but the user's encoder, audio and privacy choices must not.
+    fn apply_detected_platform_config(
+        &mut self,
+        platform_config: &PlatformConfig,
+        is_new_profile: bool,
+    ) -> Result<bool> {
+        if !is_new_profile {
+            if let Err(error) = platform_config.validate_settings(self) {
+                tracing::warn!(
+                    "Persisted settings are outside current hardware recommendations: {}",
+                    error
+                );
+            }
+            return Ok(false);
+        }
+
+        self.apply_platform_defaults(platform_config);
+        platform_config.optimize_settings(self);
+        platform_config.validate_settings(self)?;
+        Ok(true)
     }
 
     /// Apply platform-specific defaults
@@ -277,8 +322,18 @@ impl RecordingSettings {
 
     /// Get migration status for settings version upgrades
     pub fn needs_migration() -> Result<bool> {
-        let migration_path = Self::get_migration_path()?;
-        Ok(!migration_path.exists())
+        let settings_path = Self::get_settings_path()?;
+        if !settings_path.exists() {
+            return Ok(false);
+        }
+
+        let json = fs::read_to_string(settings_path)?;
+        let value: serde_json::Value = serde_json::from_str(&json)?;
+        Ok(value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            < SETTINGS_SCHEMA_VERSION as u64)
     }
 
     /// Perform settings migration from previous version
@@ -294,16 +349,27 @@ impl RecordingSettings {
         // Perform version-specific migrations
         settings = Self::migrate_from_v1_to_v2(settings);
         settings = Self::migrate_from_v2_to_v3(settings);
+        Self::migrate_from_v3_to_v4(&mut settings);
 
-        // Apply platform optimization after migration
-        let platform_config = PlatformConfig::detect().await?;
-        platform_config.optimize_settings(&mut settings);
+        // Migration is schema-only. Hardware discovery may warn, but must not
+        // rewrite an existing user's recording or privacy choices.
+        match PlatformConfig::detect().await {
+            Ok(platform_config) => {
+                if let Err(error) = platform_config.validate_settings(&settings) {
+                    tracing::warn!(
+                        "Migrated settings are outside current hardware recommendations: {}",
+                        error
+                    );
+                }
+            }
+            Err(error) => tracing::warn!(
+                "Platform detection unavailable during settings migration: {}",
+                error
+            ),
+        }
 
         // Save migrated settings
         settings.save()?;
-
-        // Mark migration as complete
-        Self::mark_migration_complete()?;
 
         tracing::info!("Settings migration completed successfully");
         Ok(settings)
@@ -335,23 +401,21 @@ impl RecordingSettings {
         settings
     }
 
-    /// Get migration marker file path
-    fn get_migration_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir().ok_or(SettingsError::ConfigDirNotFound)?;
-        let lolshorts_dir = config_dir.join("LoLShorts");
-        Ok(lolshorts_dir.join(".migrated_v3"))
-    }
-
-    /// Mark migration as complete
-    fn mark_migration_complete() -> Result<()> {
-        let migration_path = Self::get_migration_path()?;
-
-        if let Some(parent) = migration_path.parent() {
-            fs::create_dir_all(parent)?;
+    /// Upgrade an older on-disk profile to schema v4.
+    ///
+    /// Only the untouched legacy defaults are replaced. A custom timing value
+    /// is user intent, even when the file predates the schema version field.
+    /// Returns whether the persisted document should be rewritten.
+    fn migrate_from_v3_to_v4(settings: &mut Self) -> bool {
+        if settings.schema_version >= SETTINGS_SCHEMA_VERSION {
+            return false;
         }
 
-        fs::write(&migration_path, "migrated")?;
-        Ok(())
+        if settings.clip_timing.is_legacy_default_profile() {
+            settings.clip_timing = RecordingSettings::default().clip_timing;
+        }
+        settings.schema_version = SETTINGS_SCHEMA_VERSION;
+        true
     }
 
     /// Export settings to file for backup
@@ -446,7 +510,7 @@ impl RecordingSettings {
             self.clip_timing.default_pre_duration,
             self.clip_timing.default_post_duration,
             self.clip_timing.merge_consecutive_events,
-            self.auto_start_with_league,
+            self.launch_on_windows_startup,
             self.minimize_to_tray,
             self.show_notifications,
         )
@@ -478,8 +542,35 @@ fn test_config_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::models::EventTiming;
     use std::fs;
     use tempfile::tempdir;
+
+    fn settings_file_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn detected_hardware_never_rewrites_an_existing_profile() {
+        let mut detected_defaults = RecordingSettings::default();
+        detected_defaults.video.encoder = crate::settings::models::EncoderPreference::Nvenc;
+        detected_defaults.audio.record_microphone = false;
+        let config = PlatformConfig::test_fixture(detected_defaults);
+
+        let mut existing = RecordingSettings::default();
+        existing.video.encoder = crate::settings::models::EncoderPreference::Software;
+        existing.audio.record_microphone = true;
+        existing.audio.microphone_device = Some("User microphone".to_string());
+        let before = serde_json::to_value(&existing).unwrap();
+
+        assert!(!existing
+            .apply_detected_platform_config(&config, false)
+            .unwrap());
+        assert_eq!(serde_json::to_value(&existing).unwrap(), before);
+    }
 
     #[test]
     fn settings_tests_never_touch_the_real_config_directory() {
@@ -503,8 +594,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Ignored due to race condition with test_reset_to_default (both use same settings file)
     fn test_save_and_load() {
+        let _guard = settings_file_test_lock();
         // Cleanup any existing settings file first
         let path = RecordingSettings::get_settings_path().unwrap();
         if path.exists() {
@@ -555,6 +646,7 @@ mod tests {
 
     #[test]
     fn test_reset_to_default() {
+        let _guard = settings_file_test_lock();
         // Cleanup any existing settings file first
         let path = RecordingSettings::get_settings_path().unwrap();
         if path.exists() {
@@ -606,5 +698,114 @@ mod tests {
         std::fs::write(&path, "old").unwrap();
         atomic_write(&path, b"new").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    }
+
+    #[test]
+    fn load_candidate_rejects_semantically_invalid_json() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut settings = RecordingSettings::default();
+        settings.storage.auto_delete_days = 0;
+        std::fs::write(&path, serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+
+        assert!(matches!(
+            RecordingSettings::load_candidate(&path),
+            Err(SettingsError::Validation(_))
+        ));
+    }
+
+    fn legacy_default_settings() -> RecordingSettings {
+        let mut settings = RecordingSettings {
+            schema_version: 3,
+            ..Default::default()
+        };
+        settings.clip_timing.default_pre_duration = 10;
+        settings.clip_timing.default_post_duration = 3;
+        settings.clip_timing.merge_consecutive_events = true;
+        settings.clip_timing.merge_time_threshold = 15.0;
+        settings.clip_timing.event_timings.clear();
+        settings.clip_timing.event_timings.insert(
+            "kill".to_string(),
+            EventTiming {
+                pre_duration: 10,
+                post_duration: 3,
+            },
+        );
+        settings.clip_timing.event_timings.insert(
+            "multikill".to_string(),
+            EventTiming {
+                pre_duration: 15,
+                post_duration: 5,
+            },
+        );
+        settings.clip_timing.event_timings.insert(
+            "steal".to_string(),
+            EventTiming {
+                pre_duration: 20,
+                post_duration: 5,
+            },
+        );
+        settings
+    }
+
+    #[test]
+    fn v4_migrates_the_exact_legacy_default_profile() {
+        let mut settings = legacy_default_settings();
+
+        assert!(RecordingSettings::migrate_from_v3_to_v4(&mut settings));
+        assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(settings.clip_timing.default_pre_duration, 8);
+        assert_eq!(settings.clip_timing.default_post_duration, 5);
+        assert_eq!(
+            settings
+                .clip_timing
+                .get_timing_for_event("multikill")
+                .pre_duration,
+            12
+        );
+        assert_eq!(
+            settings
+                .clip_timing
+                .get_timing_for_event("steal")
+                .post_duration,
+            10
+        );
+        assert_eq!(settings.clip_timing.merge_time_threshold, 10.0);
+    }
+
+    #[test]
+    fn v4_preserves_a_customized_timing_profile() {
+        let mut settings = legacy_default_settings();
+        settings
+            .clip_timing
+            .event_timings
+            .get_mut("kill")
+            .unwrap()
+            .pre_duration = 9;
+
+        assert!(RecordingSettings::migrate_from_v3_to_v4(&mut settings));
+        assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(settings.clip_timing.default_pre_duration, 10);
+        assert_eq!(
+            settings
+                .clip_timing
+                .get_timing_for_event("kill")
+                .pre_duration,
+            9
+        );
+        assert_eq!(settings.clip_timing.merge_time_threshold, 15.0);
+    }
+
+    #[test]
+    fn v4_migration_is_idempotent() {
+        let mut settings = legacy_default_settings();
+
+        assert!(RecordingSettings::migrate_from_v3_to_v4(&mut settings));
+        let timings = serde_json::to_value(&settings.clip_timing).unwrap();
+        assert!(!RecordingSettings::migrate_from_v3_to_v4(&mut settings));
+        assert_eq!(
+            serde_json::to_value(&settings.clip_timing).unwrap(),
+            timings
+        );
     }
 }

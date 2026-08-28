@@ -70,7 +70,9 @@ impl Platform {
 // Note: Use initialize_recording_backend_full for complete initialization with all options
 pub use integration_backend::initialize_recording_backend_full;
 pub use integration_backend::VideoSettingsConfig;
-pub use integration_backend::{HwAccel, RecordingConfig, RecordingStatus, VideoEncoder};
+pub use integration_backend::{
+    CaptureBackend, CaptureMode, HwAccel, RecordingConfig, RecordingStatus, VideoEncoder,
+};
 
 #[cfg(test)]
 mod tests {

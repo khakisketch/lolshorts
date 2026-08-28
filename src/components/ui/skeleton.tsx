@@ -1,4 +1,4 @@
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/utils";
 
 interface SkeletonProps extends React.HTMLAttributes<HTMLDivElement> {
   variant?: "default" | "circular" | "text";
@@ -25,11 +25,11 @@ function Skeleton({
           "animate-shimmer bg-gradient-to-r from-muted via-muted-foreground/10 to-muted bg-[length:200%_100%]":
             animation === "shimmer",
         },
-        className
+        className,
       )}
       {...props}
     />
-  )
+  );
 }
 
 // Pre-built skeleton patterns for common use cases
@@ -40,15 +40,15 @@ function SkeletonCard({ className }: { className?: string }) {
       <Skeleton variant="text" className="h-4 w-3/4" />
       <Skeleton variant="text" className="h-4 w-1/2" />
     </div>
-  )
+  );
 }
 
 function SkeletonList({
   count = 3,
-  className
+  className,
 }: {
   count?: number;
-  className?: string
+  className?: string;
 }) {
   return (
     <div className={cn("space-y-4", className)}>
@@ -62,17 +62,17 @@ function SkeletonList({
         </div>
       ))}
     </div>
-  )
+  );
 }
 
 function SkeletonTable({
   rows = 5,
   columns = 4,
-  className
+  className,
 }: {
   rows?: number;
   columns?: number;
-  className?: string
+  className?: string;
 }) {
   return (
     <div className={cn("space-y-3", className)}>
@@ -91,7 +91,7 @@ function SkeletonTable({
         </div>
       ))}
     </div>
-  )
+  );
 }
 
 function SkeletonStats({ className }: { className?: string }) {
@@ -104,13 +104,7 @@ function SkeletonStats({ className }: { className?: string }) {
         </div>
       ))}
     </div>
-  )
+  );
 }
 
-export {
-  Skeleton,
-  SkeletonCard,
-  SkeletonList,
-  SkeletonTable,
-  SkeletonStats
-}
+export { Skeleton, SkeletonCard, SkeletonList, SkeletonTable, SkeletonStats };

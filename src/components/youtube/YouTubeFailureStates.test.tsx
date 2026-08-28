@@ -122,7 +122,7 @@ describe("YouTube visible failure states", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows an upload queue alert when scheduled upload loading fails", async () => {
+  it("does not expose legacy scheduled uploads in the free public edition", () => {
     mockedUseYouTube.mockReturnValue(
       makeUseYouTube({
         queueError: "Queue backend down",
@@ -131,9 +131,11 @@ describe("YouTube visible failure states", () => {
 
     render(<YouTubeUpload />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Queue backend down",
-    );
+    expect(screen.queryByText("Queue backend down")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("youtube.schedule.scheduleButton"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("youtube.upload.uploadButton")).toBeInTheDocument();
   });
 
   it("does not load scheduled uploads before YouTube authentication", () => {

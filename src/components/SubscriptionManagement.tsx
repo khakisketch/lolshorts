@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useTranslation } from 'react-i18next';
+import { useTranslation } from "react-i18next";
 import { paymentApi, SubscriptionDetails } from "@/api/payment";
 import {
   Dialog,
@@ -19,10 +19,10 @@ import {
   CheckCircle2,
   XCircle,
   Calendar,
-  Loader2
+  Loader2,
 } from "lucide-react";
 import { getErrorMessage } from "@/lib/utils";
-import { logger } from '@/lib/logger';
+import { logger } from "@/lib/logger";
 
 interface SubscriptionManagementProps {
   isOpen: boolean;
@@ -37,10 +37,12 @@ export function SubscriptionManagement({
   isOpen,
   onClose,
   currentTier,
-  expiresAt
+  expiresAt,
 }: SubscriptionManagementProps) {
   const { t } = useTranslation();
-  const [subscription, setSubscription] = useState<SubscriptionDetails | null>(null);
+  const [subscription, setSubscription] = useState<SubscriptionDetails | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -81,7 +83,7 @@ export function SubscriptionManagement({
       setShowCancelConfirm(false);
 
       // Show success message
-      alert(t('settings.account.cancelSuccess'));
+      alert(t("settings.account.cancelSuccess"));
     } catch (err) {
       logger.error("Failed to cancel subscription:", err);
       setError(getErrorMessage(err));
@@ -96,7 +98,7 @@ export function SubscriptionManagement({
     return date.toLocaleDateString(locale, {
       year: "numeric",
       month: "long",
-      day: "numeric"
+      day: "numeric",
     });
   };
 
@@ -105,21 +107,19 @@ export function SubscriptionManagement({
       <Dialog open={isOpen} onOpenChange={onClose}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{t('subscription.noActive')}</DialogTitle>
-            <DialogDescription>
-              {t('subscription.freePlan')}
-            </DialogDescription>
+            <DialogTitle>{t("subscription.noActive")}</DialogTitle>
+            <DialogDescription>{t("subscription.freePlan")}</DialogDescription>
           </DialogHeader>
 
           <div className="text-center py-6">
             <XCircle className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
             <p className="text-sm text-muted-foreground">
-              {t('subscription.upgradePrompt')}
+              {t("subscription.upgradePrompt")}
             </p>
           </div>
 
           <DialogFooter>
-            <Button onClick={onClose}>{t('common.close')}</Button>
+            <Button onClick={onClose}>{t("common.close")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -133,10 +133,10 @@ export function SubscriptionManagement({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CreditCard className="w-5 h-5" />
-              {t('subscription.management')}
+              {t("subscription.management")}
             </DialogTitle>
             <DialogDescription>
-              {t('subscription.managementDesc')}
+              {t("subscription.managementDesc")}
             </DialogDescription>
           </DialogHeader>
 
@@ -150,7 +150,9 @@ export function SubscriptionManagement({
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-8 h-8 animate-spin text-primary" />
-              <span className="ml-2 text-sm text-muted-foreground">{t('subscription.loadingDetails')}</span>
+              <span className="ml-2 text-sm text-muted-foreground">
+                {t("subscription.loadingDetails")}
+              </span>
             </div>
           ) : subscription ? (
             <div className="space-y-4">
@@ -165,10 +167,20 @@ export function SubscriptionManagement({
 
               {/* Subscription Status */}
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">{t('subscription.status')}</span>
-                <Badge variant={subscription.is_active ? "default" : "destructive"}>
-                  {subscription.is_active ? <CheckCircle2 className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
-                  {subscription.is_active ? t('subscription.active') : t('subscription.inactive')}
+                <span className="text-sm text-muted-foreground">
+                  {t("subscription.status")}
+                </span>
+                <Badge
+                  variant={subscription.is_active ? "default" : "destructive"}
+                >
+                  {subscription.is_active ? (
+                    <CheckCircle2 className="w-3 h-3 mr-1" />
+                  ) : (
+                    <XCircle className="w-3 h-3 mr-1" />
+                  )}
+                  {subscription.is_active
+                    ? t("subscription.active")
+                    : t("subscription.inactive")}
                 </Badge>
               </div>
 
@@ -177,7 +189,9 @@ export function SubscriptionManagement({
               {/* Plan Details */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">{t('subscription.plan')}</span>
+                  <span className="text-sm text-muted-foreground">
+                    {t("subscription.plan")}
+                  </span>
                   <span className="font-medium">{subscription.tier}</span>
                 </div>
 
@@ -185,9 +199,11 @@ export function SubscriptionManagement({
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground flex items-center gap-1">
                       <Calendar className="w-4 h-4" />
-                      {t('subscription.accessUntil')}
+                      {t("subscription.accessUntil")}
                     </span>
-                    <span className="font-medium">{formatDate(subscription.expires_at)}</span>
+                    <span className="font-medium">
+                      {formatDate(subscription.expires_at)}
+                    </span>
                   </div>
                 )}
               </div>
@@ -199,13 +215,17 @@ export function SubscriptionManagement({
                 <Alert>
                   <AlertCircle className="w-4 h-4" />
                   <AlertDescription>
-                    {expiresAt ? t('subscription.cancelledNotice', { date: formatDate(expiresAt) }) : t('subscription.cancelledNoticeNoDate')}
+                    {expiresAt
+                      ? t("subscription.cancelledNotice", {
+                          date: formatDate(expiresAt),
+                        })
+                      : t("subscription.cancelledNoticeNoDate")}
                   </AlertDescription>
                 </Alert>
               ) : (
                 <div className="text-sm text-muted-foreground space-y-2">
-                  <p>• {t('subscription.autoRenewInfo1')}</p>
-                  <p>• {t('subscription.autoRenewInfo2')}</p>
+                  <p>• {t("subscription.autoRenewInfo1")}</p>
+                  <p>• {t("subscription.autoRenewInfo2")}</p>
                 </div>
               )}
             </div>
@@ -213,14 +233,14 @@ export function SubscriptionManagement({
             <div className="text-center py-6">
               <AlertCircle className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
               <p className="text-sm text-muted-foreground">
-                {t('subscription.loadFailed')}
+                {t("subscription.loadFailed")}
               </p>
             </div>
           )}
 
           <DialogFooter className="flex gap-2">
             <Button variant="outline" onClick={onClose}>
-              {t('common.close')}
+              {t("common.close")}
             </Button>
 
             {subscription && subscription.auto_renew && (
@@ -228,7 +248,7 @@ export function SubscriptionManagement({
                 variant="destructive"
                 onClick={() => setShowCancelConfirm(true)}
               >
-                {t('subscription.cancelSubscription')}
+                {t("subscription.cancelSubscription")}
               </Button>
             )}
           </DialogFooter>
@@ -239,27 +259,29 @@ export function SubscriptionManagement({
       <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-destructive">{t('subscription.cancelConfirmTitle')}</DialogTitle>
+            <DialogTitle className="text-destructive">
+              {t("subscription.cancelConfirmTitle")}
+            </DialogTitle>
             <DialogDescription>
-              {t('subscription.cancelConfirmDesc')}
+              {t("subscription.cancelConfirmDesc")}
             </DialogDescription>
           </DialogHeader>
 
           <Alert>
             <AlertCircle className="w-4 h-4" />
             <AlertDescription>
-              {t('subscription.cancelNotice')}
+              {t("subscription.cancelNotice")}
             </AlertDescription>
           </Alert>
 
           <div className="space-y-2 text-sm">
-            <p className="font-semibold">{t('subscription.loseAccess')}</p>
+            <p className="font-semibold">{t("subscription.loseAccess")}</p>
             <ul className="list-disc list-inside text-muted-foreground space-y-1">
-              <li>{t('subscription.loseUnlimitedClips')}</li>
-              <li>{t('subscription.loseAdvancedEditor')}</li>
-              <li>{t('subscription.lose1080p60')}</li>
-              <li>{t('subscription.losePrioritySupport')}</li>
-              <li>{t('subscription.loseNoWatermarks')}</li>
+              <li>{t("subscription.loseUnlimitedClips")}</li>
+              <li>{t("subscription.loseAdvancedEditor")}</li>
+              <li>{t("subscription.lose1080p60")}</li>
+              <li>{t("subscription.losePrioritySupport")}</li>
+              <li>{t("subscription.loseNoWatermarks")}</li>
             </ul>
           </div>
 
@@ -269,7 +291,7 @@ export function SubscriptionManagement({
               onClick={() => setShowCancelConfirm(false)}
               disabled={isCancelling}
             >
-              {t('subscription.keepSubscription')}
+              {t("subscription.keepSubscription")}
             </Button>
 
             <Button
@@ -280,10 +302,10 @@ export function SubscriptionManagement({
               {isCancelling ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  {t('subscription.cancelling')}
+                  {t("subscription.cancelling")}
                 </>
               ) : (
-                t('subscription.confirmCancel')
+                t("subscription.confirmCancel")
               )}
             </Button>
           </DialogFooter>

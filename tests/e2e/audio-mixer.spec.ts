@@ -28,6 +28,7 @@ import { Page } from '@playwright/test';
 async function navigateToAudioMixer(page: Page) {
   await loginAsProUser(page);
   await page.goto(`${BASE_URL}/auto-edit`);
+  await page.locator('[data-testid="advanced-settings-button"]').click();
   // `networkidle` 을 쓰지 않는다: vite dev 서버는 HMR 소켓과 지연 로딩 청크로
   // 요청이 끊기지 않아서, 이 describe 의 **첫 테스트만** 90초 타임아웃으로
   // 죽곤 했다(따로 돌리면 통과). 붙어야 할 것을 직접 기다리는 편이 빠르고

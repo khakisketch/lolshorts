@@ -11,55 +11,45 @@
  *    which Jest can handle without ESM support.
  */
 
-// ── Part 1: Mock logger (always logs) ───────────────────────────────────────
+// ── Part 1: Mock logger (records without polluting test output) ─────────────
 
-import { logger } from '@/lib/logger'; // resolves to __mocks__/loggerMock.ts
+import { logger } from "@/lib/logger"; // resolves to __mocks__/loggerMock.ts
 
-describe('logger mock API contract', () => {
-  let errorSpy: jest.SpyInstance;
-  let warnSpy: jest.SpyInstance;
-  let infoSpy: jest.SpyInstance;
-
+describe("logger mock API contract", () => {
   beforeEach(() => {
-    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    warnSpy  = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    infoSpy  = jest.spyOn(console, 'info').mockImplementation(() => {});
+    jest.clearAllMocks();
   });
 
-  afterEach(() => {
-    jest.restoreAllMocks();
+  it("exposes error, warn, and info methods", () => {
+    expect(typeof logger.error).toBe("function");
+    expect(typeof logger.warn).toBe("function");
+    expect(typeof logger.info).toBe("function");
   });
 
-  it('exposes error, warn, and info methods', () => {
-    expect(typeof logger.error).toBe('function');
-    expect(typeof logger.warn).toBe('function');
-    expect(typeof logger.info).toBe('function');
+  it("logger.error records all arguments", () => {
+    logger.error("msg", { detail: 1 });
+    expect(logger.error).toHaveBeenCalledWith("msg", { detail: 1 });
   });
 
-  it('logger.error forwards all arguments to console.error', () => {
-    logger.error('msg', { detail: 1 });
-    expect(errorSpy).toHaveBeenCalledWith('msg', { detail: 1 });
+  it("logger.warn records all arguments", () => {
+    logger.warn("warning", 42);
+    expect(logger.warn).toHaveBeenCalledWith("warning", 42);
   });
 
-  it('logger.warn forwards all arguments to console.warn', () => {
-    logger.warn('warning', 42);
-    expect(warnSpy).toHaveBeenCalledWith('warning', 42);
+  it("logger.info records all arguments", () => {
+    logger.info("info msg", [1, 2, 3]);
+    expect(logger.info).toHaveBeenCalledWith("info msg", [1, 2, 3]);
   });
 
-  it('logger.info forwards all arguments to console.info', () => {
-    logger.info('info msg', [1, 2, 3]);
-    expect(infoSpy).toHaveBeenCalledWith('info msg', [1, 2, 3]);
-  });
-
-  it('logger.error can be called with no arguments', () => {
+  it("logger.error can be called with no arguments", () => {
     expect(() => logger.error()).not.toThrow();
   });
 
-  it('logger.warn can be called with no arguments', () => {
+  it("logger.warn can be called with no arguments", () => {
     expect(() => logger.warn()).not.toThrow();
   });
 
-  it('logger.info can be called with no arguments', () => {
+  it("logger.info can be called with no arguments", () => {
     expect(() => logger.info()).not.toThrow();
   });
 });
@@ -85,66 +75,66 @@ function makeConditionalLogger(isDev: () => boolean) {
   };
 }
 
-describe('conditional logger in development mode', () => {
+describe("conditional logger in development mode", () => {
   const devLogger = makeConditionalLogger(() => true);
   let errorSpy: jest.SpyInstance;
   let warnSpy: jest.SpyInstance;
   let infoSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    warnSpy  = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    infoSpy  = jest.spyOn(console, 'info').mockImplementation(() => {});
+    errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    infoSpy = jest.spyOn(console, "info").mockImplementation(() => {});
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
   });
 
-  it('calls console.error when isDev returns true', () => {
-    devLogger.error('dev error');
-    expect(errorSpy).toHaveBeenCalledWith('dev error');
+  it("calls console.error when isDev returns true", () => {
+    devLogger.error("dev error");
+    expect(errorSpy).toHaveBeenCalledWith("dev error");
   });
 
-  it('calls console.warn when isDev returns true', () => {
-    devLogger.warn('dev warn');
-    expect(warnSpy).toHaveBeenCalledWith('dev warn');
+  it("calls console.warn when isDev returns true", () => {
+    devLogger.warn("dev warn");
+    expect(warnSpy).toHaveBeenCalledWith("dev warn");
   });
 
-  it('calls console.info when isDev returns true', () => {
-    devLogger.info('dev info');
-    expect(infoSpy).toHaveBeenCalledWith('dev info');
+  it("calls console.info when isDev returns true", () => {
+    devLogger.info("dev info");
+    expect(infoSpy).toHaveBeenCalledWith("dev info");
   });
 });
 
-describe('conditional logger in production mode', () => {
+describe("conditional logger in production mode", () => {
   const prodLogger = makeConditionalLogger(() => false);
   let errorSpy: jest.SpyInstance;
   let warnSpy: jest.SpyInstance;
   let infoSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    warnSpy  = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    infoSpy  = jest.spyOn(console, 'info').mockImplementation(() => {});
+    errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    infoSpy = jest.spyOn(console, "info").mockImplementation(() => {});
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
   });
 
-  it('does not call console.error when isDev returns false', () => {
-    prodLogger.error('should be silent');
+  it("does not call console.error when isDev returns false", () => {
+    prodLogger.error("should be silent");
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it('does not call console.warn when isDev returns false', () => {
-    prodLogger.warn('should be silent');
+  it("does not call console.warn when isDev returns false", () => {
+    prodLogger.warn("should be silent");
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('does not call console.info when isDev returns false', () => {
-    prodLogger.info('should be silent');
+  it("does not call console.info when isDev returns false", () => {
+    prodLogger.info("should be silent");
     expect(infoSpy).not.toHaveBeenCalled();
   });
 });

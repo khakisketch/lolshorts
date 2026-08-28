@@ -1,384 +1,223 @@
-name: Release
+name: Production Release
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'  # Trigger on version tags (e.g., v0.1.0, v1.2.3)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact package version to release
+        required: true
+        type: string
+      confirmation:
+        description: Type RELEASE after reviewing readiness and field evidence
+        required: true
+        type: string
+      channel:
+        description: Release channel matching the package version suffix
+        required: true
+        type: choice
+        options:
+          - beta
+          - rc
+          - stable
+
+permissions:
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  # Create GitHub Release
-  create-release:
-    name: Create Release
+  release-windows:
+    name: Approved signed Windows release
+    if: ${{ inputs.confirmation == 'RELEASE' }}
     runs-on: windows-latest
-
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-      release_version: ${{ steps.get_version.outputs.version }}
-
+    timeout-minutes: 120
+    environment: production-release
+    env:
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+      YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+      YOUTUBE_REDIRECT_URI: ${{ secrets.YOUTUBE_REDIRECT_URI }}
+      TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+      # Optional: omit these secrets to ship without remote crash reporting.
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Get version from tag
-        id: get_version
-        run: |
-          $version = "${{ github.ref }}".Replace("refs/tags/v", "")
-          Write-Output "version=$version" >> $env:GITHUB_OUTPUT
-          Write-Host "Release version: $version"
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
         with:
-          tag_name: ${{ github.ref }}
-          release_name: LoLShorts ${{ steps.get_version.outputs.version }}
-          body: |
-            ## LoLShorts ${{ steps.get_version.outputs.version }}
+          node-version: 24.2.0
+          cache: npm
 
-            ### Release Candidate Scope
+      - name: Pin npm
+        run: npm install --global npm@11.6.3
 
-            This automated release is a non-payment Windows release-candidate artifact until Field QA evidence is attached and the release owner explicitly promotes it. Do not treat this build as production-ready, commercially ready, payment-ready, or support-ready from CI success alone.
-
-            ### Downloads
-
-            - **Windows Installer (MSI)**: Field QA candidate
-            - **Windows Installer (NSIS)**: Field QA candidate
-
-            ### Installation
-
-            1. Download the MSI or NSIS installer
-            2. Run the installer
-            3. Follow the installation wizard
-            4. Launch LoLShorts from the Start Menu
-
-            ### Required Before Public Promotion
-
-            - Requires Windows 10+ (64-bit)
-            - FFmpeg is bundled (no separate installation needed)
-            - League of Legends must be installed
-            - Complete `docs/FIELD_QA_COMMERCIAL_READINESS.md` with real Windows, LoL/LCU, replay, YouTube, installer/updater, recovery, and support evidence
-            - Keep Toss/live billing, paid PRO sales, payment webhooks, and subscription enforcement disabled
-
-            ### Legal
-
-            - See [Terms of Service](https://github.com/LoLShorts/lolshorts/blob/main/TERMS_OF_SERVICE.md)
-            - See [Privacy Policy](https://github.com/LoLShorts/lolshorts/blob/main/PRIVACY_POLICY.md)
-            - See [Riot Compliance](https://github.com/LoLShorts/lolshorts/blob/main/RIOT_COMPLIANCE.md)
-
-            ### Support
-
-            - [Report Issues](https://github.com/LoLShorts/lolshorts/issues)
-
-            ---
-
-            **Full Changelog**: https://github.com/LoLShorts/lolshorts/compare/${{ github.ref }}
-          draft: true
-          prerelease: true
-
-  # Build and upload Windows installers
-  build-windows:
-    name: Build Windows Installers
-    runs-on: windows-latest
-    needs: create-release
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.94.1
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install WiX Toolset
+      - name: Validate requested version and release secrets
+        shell: powershell
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          choco install wixtoolset -y
-          $env:PATH += ";C:\Program Files (x86)\WiX Toolset v3.14\bin"
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($package.version -ne '${{ inputs.version }}') {
+            throw "Requested version ${{ inputs.version }} does not match package version $($package.version)"
+          }
+          $version = '${{ inputs.version }}'
+          $channel = '${{ inputs.channel }}'
+          $patterns = @{
+            beta = '^\d+\.\d+\.\d+-beta\.\d+$'
+            rc = '^\d+\.\d+\.\d+-rc\.\d+$'
+            stable = '^\d+\.\d+\.\d+$'
+          }
+          if ($version -notmatch $patterns[$channel]) {
+            throw "Version $version does not match release channel $channel"
+          }
+          foreach ($name in @(
+            'VITE_SUPABASE_URL','VITE_SUPABASE_ANON_KEY','SUPABASE_URL','SUPABASE_ANON_KEY',
+            'YOUTUBE_CLIENT_ID','YOUTUBE_CLIENT_SECRET','YOUTUBE_REDIRECT_URI',
+            'TAURI_SIGNING_PRIVATE_KEY','TAURI_SIGNING_PRIVATE_KEY_PASSWORD','TAURI_UPDATER_PUBKEY',
+            'WINDOWS_CERTIFICATE','WINDOWS_CERTIFICATE_PASSWORD'
+          )) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) { throw "Missing required production secret: $name" }
+          }
+          if ($env:SUPABASE_URL -ne $env:VITE_SUPABASE_URL -or $env:SUPABASE_ANON_KEY -ne $env:VITE_SUPABASE_ANON_KEY) {
+            throw 'Rust and Vite Supabase public configuration must match'
+          }
+          if ($env:SUPABASE_URL -notmatch '^https://[^/\s]+(?:/.*)?$') {
+            throw 'SUPABASE_URL must use HTTPS in a production artifact'
+          }
+          if ($env:SUPABASE_ANON_KEY -match '(?i)service[_-]?role|sb_secret_|your-anon-key') {
+            throw 'SUPABASE_ANON_KEY must be a public anon/publishable key, never a service-role or secret key'
+          }
+          if ($env:YOUTUBE_CLIENT_ID -notmatch '\.apps\.googleusercontent\.com$') {
+            throw 'YOUTUBE_CLIENT_ID must be a Google desktop OAuth client id'
+          }
+          if ($env:YOUTUBE_REDIRECT_URI -notmatch '^http://(localhost|127\.0\.0\.1):[1-9]\d{0,4}/[^?#/]+(?:/[^?#]*)?$') {
+            throw 'YOUTUBE_REDIRECT_URI must use an HTTP loopback address with an explicit port and callback path'
+          }
+          $redirectUri = [Uri]$env:YOUTUBE_REDIRECT_URI
+          if ($redirectUri.Port -gt 65535 -or $redirectUri.Query -or $redirectUri.Fragment) {
+            throw 'YOUTUBE_REDIRECT_URI must use a valid port and may not contain a query or fragment'
+          }
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Prepare FFmpeg binaries
+      - name: Install dependencies and browsers
         run: |
-          cd src-tauri/build_scripts
-          .\prepare_ffmpeg.ps1
+          npm ci
+          npx playwright install --with-deps chromium firefox msedge
 
-      - name: Run tests
+      - name: Prepare FFmpeg sidecars
+        shell: powershell
+        run: ./src-tauri/build_scripts/prepare_ffmpeg.ps1 -Source Download
+
+      - name: Run complete release gate
+        shell: powershell
+        run: ./scripts/verify-non-game-readiness.ps1
+
+      - name: Import Authenticode certificate
+        id: cert
+        shell: powershell
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --verbose
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'lolshorts-release.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $secure = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $secure
+          if (-not $cert.Thumbprint) { throw 'Authenticode certificate import failed' }
+          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
 
-      - name: Validate release signing configuration
+      - name: Build signed production installers
+        shell: powershell
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
-            Write-Error "Missing TAURI_PRIVATE_KEY secret"
-            exit 1
+          $channel = '${{ inputs.channel }}'
+          $endpoint = if ($channel -eq 'stable') {
+            'https://github.com/${{ github.repository }}/releases/latest/download/latest.json'
+          } else {
+            'https://github.com/${{ github.repository }}/releases/download/updater-preview/latest.json'
           }
+          @{
+            bundle = @{ windows = @{ certificateThumbprint = '${{ steps.cert.outputs.thumbprint }}' } }
+            plugins = @{ updater = @{ endpoints = @($endpoint) } }
+          } | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath release-signing-config.json -Encoding utf8
+          npx tauri build --bundles msi,nsis --config release-signing-config.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
-            Write-Error "Missing TAURI_KEY_PASSWORD secret"
-            exit 1
-          }
-
-          if ([string]::IsNullOrWhiteSpace($env:TAURI_UPDATER_PUBKEY)) {
-            Write-Error "Missing TAURI_UPDATER_PUBKEY secret"
-            exit 1
-          }
-
-      - name: Build application (Release)
-        run: cargo tauri build --verbose
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
-
-      - name: Verify build artifacts
+      - name: Validate signed installers and sidecars fail-closed
+        shell: powershell
         run: |
-          Write-Host "Checking for build artifacts..."
+          ./scripts/verify-release-contract.ps1 -BundleDir src-tauri/target/release/bundle
+          $msi = Get-ChildItem src-tauri/target/release/bundle/msi -Filter *.msi | Select-Object -First 1
+          $nsis = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
+          ./tests/installer/validate-installer.ps1 -InstallerPath $msi.FullName -InstallerType MSI -NonInteractive -RunSilentInstall -ReleaseChannel
+          ./tests/installer/validate-installer.ps1 -InstallerPath $nsis.FullName -InstallerType NSIS -NonInteractive -RunSilentInstall -ReleaseChannel
 
-          $msiPath = Get-ChildItem -Path "src-tauri/target/release/bundle/msi" -Filter "*.msi" | Select-Object -First 1
-          $nsisPath = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1
-
-          if (-not $msiPath) {
-            Write-Error "MSI installer not found"
-            exit 1
-          }
-
-          if (-not $nsisPath) {
-            Write-Error "NSIS installer not found"
-            exit 1
-          }
-
-          Write-Host "✅ MSI: $($msiPath.FullName)"
-          Write-Host "✅ NSIS: $($nsisPath.FullName)"
-
-      - name: Get installer paths
-        id: get_paths
+      - name: Generate signed updater manifest
+        shell: powershell
         run: |
-          $msiPath = (Get-ChildItem -Path "src-tauri/target/release/bundle/msi" -Filter "*.msi" | Select-Object -First 1).FullName
-          $nsisPath = (Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1).FullName
-          $nsisSigPath = "$nsisPath.sig"
-
-          if (-not (Test-Path $nsisSigPath)) {
-            Write-Error "Updater signature file not found: $nsisSigPath"
-            exit 1
+          $nsis = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
+          $signaturePath = "$($nsis.FullName).sig"
+          if (-not (Test-Path -LiteralPath $signaturePath)) { throw "Missing updater signature: $signaturePath" }
+          $artifactUrl = if ('${{ inputs.channel }}' -eq 'stable') {
+            "https://github.com/${{ github.repository }}/releases/download/v${{ inputs.version }}/$($nsis.Name)"
+          } else {
+            "https://github.com/${{ github.repository }}/releases/download/updater-preview/$($nsis.Name)"
           }
+          $manifest = @{
+            version = '${{ inputs.version }}'
+            notes = 'See the GitHub release notes for this version.'
+            pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            platforms = @{
+              'windows-x86_64' = @{
+                signature = (Get-Content -LiteralPath $signaturePath -Raw).Trim()
+                url = $artifactUrl
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath latest.json -Encoding utf8
 
-          Write-Output "msi_path=$msiPath" >> $env:GITHUB_OUTPUT
-          Write-Output "nsis_path=$nsisPath" >> $env:GITHUB_OUTPUT
-          Write-Output "nsis_sig_path=$nsisSigPath" >> $env:GITHUB_OUTPUT
-
-          $msiName = Split-Path $msiPath -Leaf
-          $nsisName = Split-Path $nsisPath -Leaf
-
-          Write-Output "msi_name=$msiName" >> $env:GITHUB_OUTPUT
-          Write-Output "nsis_name=$nsisName" >> $env:GITHUB_OUTPUT
-
-      - name: Upload MSI installer
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create approved draft release and upload assets
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ${{ steps.get_paths.outputs.msi_path }}
-          asset_name: ${{ steps.get_paths.outputs.msi_name }}
-          asset_content_type: application/x-msi
-
-      - name: Upload NSIS installer
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ${{ steps.get_paths.outputs.nsis_path }}
-          asset_name: ${{ steps.get_paths.outputs.nsis_name }}
-          asset_content_type: application/x-msdownload
-
-      - name: Generate checksums
-        id: checksums
-        run: |
-          $msiPath = "${{ steps.get_paths.outputs.msi_path }}"
-          $nsisPath = "${{ steps.get_paths.outputs.nsis_path }}"
-
-          $msiHash = (Get-FileHash $msiPath -Algorithm SHA256).Hash
-          $nsisHash = (Get-FileHash $nsisPath -Algorithm SHA256).Hash
-
-          $checksumFile = "checksums.txt"
-
-          @"
-          SHA256 Checksums for LoLShorts ${{ needs.create-release.outputs.release_version }}
-
-          $($msiHash)  $(Split-Path $msiPath -Leaf)
-          $($nsisHash)  $(Split-Path $nsisPath -Leaf)
-          "@ | Out-File -FilePath $checksumFile -Encoding UTF8
-
-          Write-Output "checksum_file=$checksumFile" >> $env:GITHUB_OUTPUT
-
-      - name: Upload checksums
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ${{ steps.checksums.outputs.checksum_file }}
-          asset_name: checksums.txt
-          asset_content_type: text/plain
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: installers-${{ github.sha }}
-          path: |
+          tag_name: v${{ inputs.version }}
+          name: LoLShorts ${{ inputs.version }}
+          draft: ${{ inputs.channel == 'stable' }}
+          prerelease: ${{ inputs.channel != 'stable' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
             src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.sig
             src-tauri/target/release/bundle/nsis/*-setup.exe
             src-tauri/target/release/bundle/nsis/*.sig
-          retention-days: 7
+            latest.json
 
-  # Update Tauri auto-updater manifest
-  update-manifest:
-    name: Update Auto-Updater Manifest
-    runs-on: windows-latest
-    needs: [create-release, build-windows]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download release artifacts
-        uses: actions/download-artifact@v4
+      - name: Publish beta/RC updater preview feed
+        if: ${{ inputs.channel != 'stable' }}
+        uses: softprops/action-gh-release@v2
         with:
-          name: installers-${{ github.sha }}
-          path: ./release-artifacts
-
-      - name: Generate updater manifest
-        run: |
-          $version = "${{ needs.create-release.outputs.release_version }}"
-          $nsisPath = (Get-ChildItem -Path "./release-artifacts" -Filter "*-setup.exe" -Recurse | Select-Object -First 1).FullName
-          $nsisSigPath = (Get-ChildItem -Path "./release-artifacts" -Filter "*.sig" -Recurse | Select-Object -First 1).FullName
-
-          if (-not $nsisPath) {
-            Write-Error "NSIS updater artifact not found"
-            exit 1
-          }
-
-          if (-not $nsisSigPath) {
-            Write-Error "Updater signature artifact not found"
-            exit 1
-          }
-
-          $signature = (Get-Content $nsisSigPath -Raw).Trim()
-          $nsisName = Split-Path $nsisPath -Leaf
-
-          $manifest = @{
-              version = $version
-              notes = "See release notes at https://github.com/LoLShorts/lolshorts/releases/tag/v$version"
-              pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-              platforms = @{
-                  "windows-x86_64" = @{
-                      signature = $signature
-                      url = "https://github.com/LoLShorts/lolshorts/releases/download/v$version/$nsisName"
-                  }
-              }
-          } | ConvertTo-Json -Depth 10
-
-          $manifest | Out-File -FilePath "latest.json" -Encoding UTF8
-
-          Write-Host "Generated updater manifest:"
-          Get-Content "latest.json"
-
-      - name: Upload updater manifest to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: latest.json
-          asset_name: latest.json
-          asset_content_type: application/json
-
-      - name: Upload manifest artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: updater-manifest
-          path: latest.json
-
-  # Post-release validation
-  validate-release:
-    name: Validate Release
-    runs-on: windows-latest
-    needs: [create-release, build-windows]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download release assets
-        uses: actions/download-artifact@v4
-        with:
-          name: installers-${{ github.sha }}
-          path: ./release-artifacts
-
-      - name: Validate installers
-        run: |
-          Write-Host "Validating release installers..."
-
-          $msi = Get-ChildItem -Path "./release-artifacts" -Filter "*.msi" -Recurse | Select-Object -First 1
-          $nsis = Get-ChildItem -Path "./release-artifacts" -Filter "*-setup.exe" -Recurse | Select-Object -First 1
-
-          if (-not $msi) {
-            Write-Error "MSI installer not found in artifacts"
-            exit 1
-          }
-
-          if (-not $nsis) {
-            Write-Error "NSIS installer not found in artifacts"
-            exit 1
-          }
-
-          # Check file sizes (should be >100MB with FFmpeg)
-          $msiSize = $msi.Length / 1MB
-          $nsisSize = $nsis.Length / 1MB
-
-          if ($msiSize -lt 100) {
-            Write-Warning "MSI size is smaller than expected: $([math]::Round($msiSize, 2)) MB"
-          }
-          else {
-            Write-Host "✅ MSI size: $([math]::Round($msiSize, 2)) MB" -ForegroundColor Green
-          }
-
-          if ($nsisSize -lt 100) {
-            Write-Warning "NSIS size is smaller than expected: $([math]::Round($nsisSize, 2)) MB"
-          }
-          else {
-            Write-Host "✅ NSIS size: $([math]::Round($nsisSize, 2)) MB" -ForegroundColor Green
-          }
-
-          Write-Host "✅ Release validation complete" -ForegroundColor Green
-
-  # Notification (optional)
-  notify-release:
-    name: Notify Release
-    runs-on: windows-latest
-    needs: [create-release, build-windows, validate-release]
-    if: success()
-
-    steps:
-      - name: Release completed
-        run: |
-          Write-Host "🎉 Release ${{ needs.create-release.outputs.release_version }} completed successfully!" -ForegroundColor Green
-          Write-Host "Download: https://github.com/LoLShorts/lolshorts/releases/tag/v${{ needs.create-release.outputs.release_version }}"
+          tag_name: updater-preview
+          name: LoLShorts updater preview feed
+          prerelease: true
+          draft: false
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          files: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*.sig
+            latest.json

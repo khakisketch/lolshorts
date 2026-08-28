@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { LoginForm } from "./LoginForm";
 import { SignupForm } from "./SignupForm";
 
@@ -9,7 +14,11 @@ interface AuthModalProps {
   defaultMode?: "login" | "signup";
 }
 
-export function AuthModal({ open, onClose, defaultMode = "login" }: AuthModalProps) {
+export function AuthModal({
+  open,
+  onClose,
+  defaultMode = "login",
+}: AuthModalProps) {
   const [mode, setMode] = useState<"login" | "signup">(defaultMode);
 
   const handleClose = () => {
@@ -25,7 +34,9 @@ export function AuthModal({ open, onClose, defaultMode = "login" }: AuthModalPro
           {mode === "login" ? "Sign In" : "Create Account"}
         </DialogTitle>
         <DialogDescription className="sr-only">
-          {mode === "login" ? "Enter your credentials to access your account" : "Fill in the details to create a new account"}
+          {mode === "login"
+            ? "Enter your credentials to access your account"
+            : "Fill in the details to create a new account"}
         </DialogDescription>
         {mode === "login" ? (
           <LoginForm

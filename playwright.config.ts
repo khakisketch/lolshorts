@@ -30,7 +30,7 @@ export default defineConfig({
 
   // Reporter to use
   reporter: [
-    ["html", { outputFolder: "playwright-report" }],
+    ["html", { outputFolder: "playwright-report", open: "never" }],
     ["json", { outputFile: "test-results/results.json" }],
     ["junit", { outputFile: "test-results/junit.xml" }],
   ],
@@ -57,6 +57,7 @@ export default defineConfig({
   projects: [
     {
       name: "Desktop Chrome",
+      testIgnore: /cross-browser-english\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1280, height: 720 },
@@ -65,6 +66,7 @@ export default defineConfig({
 
     {
       name: "Desktop Firefox",
+      testMatch: /cross-browser-english\.spec\.ts/,
       use: {
         ...devices["Desktop Firefox"],
         viewport: { width: 1280, height: 720 },
@@ -73,6 +75,7 @@ export default defineConfig({
 
     {
       name: "Desktop Edge",
+      testMatch: /cross-browser-english\.spec\.ts/,
       use: {
         ...devices["Desktop Edge"],
         viewport: { width: 1280, height: 720 },

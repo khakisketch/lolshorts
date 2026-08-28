@@ -1,8 +1,8 @@
-import { useTranslation } from 'react-i18next';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Progress } from '@/components/ui/progress';
-import { Video, Clock, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
-import { AutoEditProgress as AutoEditProgressType } from '@/types/autoEdit';
+import { useTranslation } from "react-i18next";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Progress } from "@/components/ui/progress";
+import { Video, Clock, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { AutoEditProgress as AutoEditProgressType } from "@/types/autoEdit";
 
 interface AutoEditProgressProps {
   progress: AutoEditProgressType;
@@ -23,15 +23,20 @@ export function AutoEditProgressView({ progress }: AutoEditProgressProps) {
   const { t } = useTranslation();
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6" data-testid="progress-section">
+    <div
+      className="max-w-2xl mx-auto space-y-6"
+      data-testid="progress-section"
+      role="status"
+      aria-live="polite"
+    >
       <div className="gaming-panel p-6">
         <div className="mb-4">
           <h3 className="text-lg font-semibold flex items-center gap-2">
             <Loader2 className="w-5 h-5 animate-spin" />
-            {t('autoEdit.generatingYourShort')}
+            {t("autoEdit.generatingYourShort")}
           </h3>
           <p className="text-sm text-muted-foreground">
-            {t('autoEdit.pleaseWait')}
+            {t("autoEdit.pleaseWait")}
           </p>
         </div>
         <div className="space-y-6">
@@ -39,11 +44,18 @@ export function AutoEditProgressView({ progress }: AutoEditProgressProps) {
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
               <span className="font-medium">{progress.current_stage}</span>
-              <span className="text-muted-foreground" data-testid="progress-percentage">
+              <span
+                className="text-muted-foreground"
+                data-testid="progress-percentage"
+              >
                 {Math.round(progress.progress_percentage)}%
               </span>
             </div>
-            <Progress value={progress.progress_percentage} className="h-2" data-testid="progress-bar" />
+            <Progress
+              value={progress.progress_percentage}
+              className="h-2"
+              data-testid="progress-bar"
+            />
           </div>
 
           {/* Status Details */}
@@ -51,7 +63,7 @@ export function AutoEditProgressView({ progress }: AutoEditProgressProps) {
             <div className="flex items-center gap-2">
               <Video className="w-4 h-4 text-muted-foreground" />
               <span>
-                {t('autoEdit.clipsProgress', {
+                {t("autoEdit.clipsProgress", {
                   selected: progress.clips_selected,
                   total: progress.total_clips,
                 })}
@@ -61,7 +73,7 @@ export function AutoEditProgressView({ progress }: AutoEditProgressProps) {
               <div className="flex items-center gap-2">
                 <Clock className="w-4 h-4 text-muted-foreground" />
                 <span>
-                  {t('autoEdit.timeRemaining', {
+                  {t("autoEdit.timeRemaining", {
                     seconds: Math.ceil(progress.estimated_completion_seconds),
                   })}
                 </span>
@@ -72,21 +84,33 @@ export function AutoEditProgressView({ progress }: AutoEditProgressProps) {
           {/* Stage Indicators */}
           <div className="space-y-2">
             {[
-              { stage: 'SelectingClips', label: t('autoEdit.stages.selectingClips') },
-              { stage: 'PreparingClips', label: t('autoEdit.stages.preparingClips') },
-              { stage: 'Concatenating', label: t('autoEdit.stages.concatenating') },
-              { stage: 'ApplyingCanvas', label: t('autoEdit.stages.applyingCanvas') },
-              { stage: 'MixingAudio', label: t('autoEdit.stages.mixingAudio') },
+              {
+                stage: "SelectingClips",
+                label: t("autoEdit.stages.selectingClips"),
+              },
+              {
+                stage: "PreparingClips",
+                label: t("autoEdit.stages.preparingClips"),
+              },
+              {
+                stage: "Concatenating",
+                label: t("autoEdit.stages.concatenating"),
+              },
+              {
+                stage: "ApplyingCanvas",
+                label: t("autoEdit.stages.applyingCanvas"),
+              },
+              { stage: "MixingAudio", label: t("autoEdit.stages.mixingAudio") },
             ].map(({ stage, label }) => (
               <div
                 key={stage}
                 data-testid={`stage-${stage.toLowerCase()}`}
                 className={`flex items-center gap-2 text-sm ${
                   progress.status === stage
-                    ? 'text-primary font-medium'
+                    ? "text-primary font-medium"
                     : progress.progress_percentage > getStageProgress(stage)
-                    ? 'text-green-600'
-                    : 'text-muted-foreground'
+                      ? "text-green-600"
+                      : "text-muted-foreground"
                 }`}
               >
                 {progress.status === stage ? (
@@ -104,7 +128,7 @@ export function AutoEditProgressView({ progress }: AutoEditProgressProps) {
           <Alert>
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              {t('autoEdit.generationWarning')}
+              {t("autoEdit.generationWarning")}
             </AlertDescription>
           </Alert>
         </div>

@@ -16,20 +16,36 @@ interface PaymentSuccessSearchParams {
 export function PaymentSuccess() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const searchParams = useSearch({ from: "/payment/success" }) as PaymentSuccessSearchParams;
+  const searchParams = useSearch({
+    from: "/payment/success",
+  }) as PaymentSuccessSearchParams;
   const refreshEntitlement = useAuthStore((state) => state.refreshEntitlement);
-  const [status, setStatus] = useState<"confirming" | "confirmed" | "missing" | "failed">("confirming");
-  const [message, setMessage] = useState("Confirming payment with the billing server.");
+  const [status, setStatus] = useState<
+    "confirming" | "confirmed" | "missing" | "failed"
+  >("confirming");
+  const [message, setMessage] = useState(
+    "Confirming payment with the billing server.",
+  );
 
-  const amount = useMemo(() => Number(searchParams.amount), [searchParams.amount]);
+  const amount = useMemo(
+    () => Number(searchParams.amount),
+    [searchParams.amount],
+  );
 
   useEffect(() => {
     let cancelled = false;
 
     const confirm = async () => {
-      if (!searchParams.paymentKey || !searchParams.orderId || !Number.isFinite(amount) || amount <= 0) {
+      if (
+        !searchParams.paymentKey ||
+        !searchParams.orderId ||
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
         setStatus("missing");
-        setMessage("Payment redirect did not include the required Toss confirmation parameters.");
+        setMessage(
+          "Payment redirect did not include the required Toss confirmation parameters.",
+        );
         return;
       }
 
@@ -37,18 +53,28 @@ export function PaymentSuccess() {
       setMessage("Confirming payment with the billing server.");
 
       try {
-        await paymentApi.confirmPayment(searchParams.paymentKey, searchParams.orderId, amount);
+        await paymentApi.confirmPayment(
+          searchParams.paymentKey,
+          searchParams.orderId,
+          amount,
+        );
         if (typeof refreshEntitlement === "function") {
           await refreshEntitlement();
         }
         if (!cancelled) {
           setStatus("confirmed");
-          setMessage("Payment was confirmed by the server. PRO status will appear only after Supabase user_licenses is active.");
+          setMessage(
+            "Payment was confirmed by the server. PRO status will appear only after Supabase user_licenses is active.",
+          );
         }
       } catch (error) {
         if (!cancelled) {
           setStatus("failed");
-          setMessage(error instanceof Error ? error.message : "Payment confirmation failed.");
+          setMessage(
+            error instanceof Error
+              ? error.message
+              : "Payment confirmation failed.",
+          );
         }
       }
     };
@@ -58,7 +84,12 @@ export function PaymentSuccess() {
     return () => {
       cancelled = true;
     };
-  }, [amount, refreshEntitlement, searchParams.orderId, searchParams.paymentKey]);
+  }, [
+    amount,
+    refreshEntitlement,
+    searchParams.orderId,
+    searchParams.paymentKey,
+  ]);
 
   const isConfirmed = status === "confirmed";
   const isConfirming = status === "confirming";
@@ -75,18 +106,22 @@ export function PaymentSuccess() {
             <AlertCircle className="w-6 h-6 text-gaming-magenta" />
           )}
           <h2 className="text-lg font-semibold text-gaming-magenta">
-            {isConfirming ? "Confirming payment" : isConfirmed ? "Payment confirmed" : "Payment not activated"}
+            {isConfirming
+              ? "Confirming payment"
+              : isConfirmed
+                ? "Payment confirmed"
+                : "Payment not activated"}
           </h2>
         </div>
-        <p className="text-sm text-muted-foreground mb-6">
-          {message}
-        </p>
+        <p className="text-sm text-muted-foreground mb-6">{message}</p>
 
         <div className="space-y-4">
           <Alert variant={isConfirmed ? "default" : "destructive"}>
             <AlertCircle className="w-4 h-4" />
             <AlertDescription>
-              The app never grants PRO from redirect parameters alone. Access is refreshed from Supabase user_licenses after server-side Toss confirmation.
+              The app never grants PRO from redirect parameters alone. Access is
+              refreshed from Supabase user_licenses after server-side Toss
+              confirmation.
             </AlertDescription>
           </Alert>
 
@@ -96,7 +131,7 @@ export function PaymentSuccess() {
               disabled={isConfirming}
               className="w-full"
             >
-              {t('paymentSuccess.error.goToSettings')}
+              {t("paymentSuccess.error.goToSettings")}
             </Button>
           </div>
         </div>

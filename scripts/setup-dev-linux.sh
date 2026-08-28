@@ -149,7 +149,7 @@ cargo install tauri-cli --locked
 
 # Install useful Rust development tools
 cargo install cargo-watch
-cargo install cargo-audit
+cargo install cargo-audit --version 0.22.2 --locked
 cargo install cargo-deny
 cargo install cargo-expand
 
@@ -364,7 +364,7 @@ echo "🔧 Useful commands:" $'\033[0;36m'
 echo "- Build project: npm run tauri build"
 echo "- Run tests: npm run test"
 echo "- Format code: npm run format"
-echo "- Check for security vulnerabilities: cargo audit"
+echo "- Check for security vulnerabilities: cargo audit --file Cargo.lock"
 echo "- Install desktop entry: cp lolshorts-dev.desktop ~/.local/share/applications/"
 echo ""
 echo "⚠️  Important Notes:" $'\033[0;33m'

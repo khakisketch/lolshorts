@@ -1,8 +1,14 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { youtubeApi, UploadHistoryEntry } from '@/api/youtube';
-import { getErrorMessage } from '@/lib/utils';
-import { AuthStatus, QuotaInfo, UploadProgress, YouTubeVideo, ScheduledUpload } from '@/types/youtube';
-import { listenToEvent } from '@/api/client';
+import { useState, useCallback, useEffect, useRef } from "react";
+import { youtubeApi, UploadHistoryEntry } from "@/api/youtube";
+import { getErrorMessage } from "@/lib/utils";
+import {
+  AuthStatus,
+  QuotaInfo,
+  UploadProgress,
+  YouTubeVideo,
+  ScheduledUpload,
+} from "@/types/youtube";
+import { listenToEvent } from "@/api/client";
 
 export interface UploadMetadata {
   title: string;
@@ -15,14 +21,16 @@ export function useYouTube() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>({
     authenticated: false,
     expires_at: null,
-    has_refresh_token: false
+    has_refresh_token: false,
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [queueError, setQueueError] = useState<string | null>(null);
   const [uploadHistory, setUploadHistory] = useState<UploadHistoryEntry[]>([]);
   const [uploadQueue, setUploadQueue] = useState<ScheduledUpload[]>([]);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(
+    null,
+  );
   const [authEventError, setAuthEventError] = useState<string | null>(null);
 
   const pollingInterval = useRef<NodeJS.Timeout | null>(null);
@@ -79,25 +87,37 @@ export function useYouTube() {
     let unlistenAuthFailed: (() => void) | null = null;
 
     const setupListeners = async () => {
-      unlistenCompleted = await listenToEvent<unknown>('scheduled-upload-completed', async () => {
-        await loadQueue();
-        await loadHistory();
-        await getQuotaInfo();
-      });
-      unlistenFailed = await listenToEvent<unknown>('scheduled-upload-failed', async () => {
-        await loadQueue();
-        await loadHistory();
-        await getQuotaInfo();
-      });
+      unlistenCompleted = await listenToEvent<unknown>(
+        "scheduled-upload-completed",
+        async () => {
+          await loadQueue();
+          await loadHistory();
+          await getQuotaInfo();
+        },
+      );
+      unlistenFailed = await listenToEvent<unknown>(
+        "scheduled-upload-failed",
+        async () => {
+          await loadQueue();
+          await loadHistory();
+          await getQuotaInfo();
+        },
+      );
       // youtube_start_auth_with_server's background OAuth callback task emits
       // these once the browser flow finishes (no payload on success).
-      unlistenAuthCompleted = await listenToEvent<unknown>('youtube-auth-completed', async () => {
-        setAuthEventError(null);
-        await checkAuthStatus();
-      });
-      unlistenAuthFailed = await listenToEvent<{ error: string }>('youtube-auth-failed', (payload) => {
-        setAuthEventError(payload?.error || 'YouTube authentication failed.');
-      });
+      unlistenAuthCompleted = await listenToEvent<unknown>(
+        "youtube-auth-completed",
+        async () => {
+          setAuthEventError(null);
+          await checkAuthStatus();
+        },
+      );
+      unlistenAuthFailed = await listenToEvent<{ error: string }>(
+        "youtube-auth-failed",
+        (payload) => {
+          setAuthEventError(payload?.error || "YouTube authentication failed.");
+        },
+      );
     };
 
     setupListeners();
@@ -111,7 +131,6 @@ export function useYouTube() {
   }, [loadQueue, loadHistory, getQuotaInfo, checkAuthStatus]);
 
   const startAuthWithServer = useCallback(async () => {
-
     setIsLoading(true);
     setError(null);
     try {
@@ -125,20 +144,23 @@ export function useYouTube() {
     }
   }, []);
 
-  const completeAuth = useCallback(async (code: string, state: string) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      await youtubeApi.completeAuth(code, state);
-      await checkAuthStatus();
-      await loadHistory();
-    } catch (err) {
-      setError(getErrorMessage(err));
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [checkAuthStatus, loadHistory]);
+  const completeAuth = useCallback(
+    async (code: string, state: string) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        await youtubeApi.completeAuth(code, state);
+        await checkAuthStatus();
+        await loadHistory();
+      } catch (err) {
+        setError(getErrorMessage(err));
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [checkAuthStatus, loadHistory],
+  );
 
   const logout = useCallback(async () => {
     setIsLoading(true);
@@ -147,7 +169,7 @@ export function useYouTube() {
       setAuthStatus({
         authenticated: false,
         expires_at: null,
-        has_refresh_token: false
+        has_refresh_token: false,
       });
       setUploadHistory([]);
     } catch (err) {
@@ -158,34 +180,37 @@ export function useYouTube() {
     }
   }, []);
 
-  const uploadVideo = useCallback(async (
-    filePath: string,
-    metadata: UploadMetadata,
-    thumbnailPath?: string
-  ): Promise<YouTubeVideo> => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await youtubeApi.uploadVideo(
-        filePath,
-        metadata.title,
-        metadata.description,
-        metadata.tags ?? [],
-        metadata.privacy_status,
-        thumbnailPath
-      );
+  const uploadVideo = useCallback(
+    async (
+      filePath: string,
+      metadata: UploadMetadata,
+      thumbnailPath?: string,
+    ): Promise<YouTubeVideo> => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const result = await youtubeApi.uploadVideo(
+          filePath,
+          metadata.title,
+          metadata.description,
+          metadata.tags ?? [],
+          metadata.privacy_status,
+          thumbnailPath,
+        );
 
-      // Reload history after successful upload
-      await loadHistory();
+        // Reload history after successful upload
+        await loadHistory();
 
-      return result;
-    } catch (err) {
-      setError(getErrorMessage(err));
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [loadHistory]);
+        return result;
+      } catch (err) {
+        setError(getErrorMessage(err));
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [loadHistory],
+  );
 
   const getUploadHistory = useCallback(async () => {
     await loadHistory();
@@ -216,14 +241,17 @@ export function useYouTube() {
     setUploadProgress(null);
   }, []);
 
-  const addToHistory = useCallback(async (video: YouTubeVideo) => {
-    try {
-      await youtubeApi.addToHistory(video);
-      await loadHistory();
-    } catch {
-      // History addition failure is non-critical
-    }
-  }, [loadHistory]);
+  const addToHistory = useCallback(
+    async (video: YouTubeVideo) => {
+      try {
+        await youtubeApi.addToHistory(video);
+        await loadHistory();
+      } catch {
+        // History addition failure is non-critical
+      }
+    },
+    [loadHistory],
+  );
 
   useEffect(() => {
     return () => stopProgressPolling();

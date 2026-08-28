@@ -33,15 +33,15 @@ LoLShorts uses a sophisticated CI/CD pipeline designed for cross-platform develo
 ### Required Tools
 
 1. **Git**: Version control system
-2. **Node.js**: Version 20+ (frontend development)
-3. **Rust**: Latest stable version (backend development)
+2. **Node.js**: 24.2.0 with npm 11.6.3 (frontend development and CI)
+3. **Rust**: 1.94.1 (backend development and CI)
 4. **FFmpeg**: Video processing (bundled with builds)
 
 ### Platform-Specific Requirements
 
 #### Windows
 
-- Windows 10+ (64-bit)
+- Windows 11 x64 for the formally supported release target
 - Visual Studio Build Tools 2022
 - WiX Toolset (for MSI installers)
 - Windows SDK
@@ -573,11 +573,15 @@ npm ci
 
 **Solution**:
 
+```powershell
+# Windows release/CI, from the repository root
+.\src-tauri\build_scripts\prepare_ffmpeg.ps1 -Source Download
+```
+
 ```bash
-# Prepare FFmpeg binaries
+# Experimental Linux/macOS jobs
 cd src-tauri/build_scripts
-./prepare_ffmpeg.sh  # Linux/macOS
-./prepare_ffmpeg.ps1 # Windows
+./prepare_ffmpeg.sh
 ```
 
 #### 4. Code Signing Issues

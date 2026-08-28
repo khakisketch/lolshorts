@@ -144,7 +144,11 @@ export function useEditor() {
               typeof clip.trimEnd === "number" && clip.trimEnd < clip.duration
                 ? clip.duration - clip.trimEnd
                 : undefined;
-            return { path: clip.file_path, trim_start: trimStart, trim_end: trimEnd };
+            return {
+              path: clip.file_path,
+              trim_start: trimStart,
+              trim_end: trimEnd,
+            };
           });
 
         if (clips.length === 0) {

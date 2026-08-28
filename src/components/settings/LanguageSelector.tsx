@@ -1,37 +1,37 @@
-import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { languages } from '@/i18n';
-import { Label } from '@/components/ui/label';
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { languages } from "@/i18n";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Globe, Loader2 } from 'lucide-react';
-import { logger } from '@/lib/logger';
+} from "@/components/ui/select";
+import { Globe, Loader2 } from "lucide-react";
+import { logger } from "@/lib/logger";
 
 // LoL Region to flag mapping
 const regionFlags: Record<string, string> = {
-  'NA': '🇺🇸',
-  'EUW': '🇪🇺',
-  'EUNE': '🇪🇺',
-  'OCE': '🇦🇺',
-  'KR': '🇰🇷',
-  'JP': '🇯🇵',
-  'CN': '🇨🇳',
-  'TW': '🇹🇼',
-  'HK': '🇭🇰',
-  'MO': '🇲🇴',
-  'BR': '🇧🇷',
-  'LAN': '🇲🇽',
-  'LAS': '🇦🇷',
-  'TR': '🇹🇷',
-  'RU': '🇷🇺',
-  'VN': '🇻🇳',
-  'TH': '🇹🇭',
-  'PH': '🇵🇭',
+  NA: "🇺🇸",
+  EUW: "🇪🇺",
+  EUNE: "🇪🇺",
+  OCE: "🇦🇺",
+  KR: "🇰🇷",
+  JP: "🇯🇵",
+  CN: "🇨🇳",
+  TW: "🇹🇼",
+  HK: "🇭🇰",
+  MO: "🇲🇴",
+  BR: "🇧🇷",
+  LAN: "🇲🇽",
+  LAS: "🇦🇷",
+  TR: "🇹🇷",
+  RU: "🇷🇺",
+  VN: "🇻🇳",
+  TH: "🇹🇭",
+  PH: "🇵🇭",
 };
 
 export function LanguageSelector() {
@@ -49,20 +49,21 @@ export function LanguageSelector() {
       await i18n.changeLanguage(languageCode);
 
       // Persist selection
-      localStorage.setItem('selectedLanguage', languageCode);
+      localStorage.setItem("selectedLanguage", languageCode);
     } catch (error) {
-      logger.error('Failed to change language:', error);
+      logger.error("Failed to change language:", error);
       // Could show a toast notification here
     } finally {
       setIsChanging(false);
     }
   };
 
-  const currentLanguage = languages.find(lang => lang.code === i18n.language) || languages[0];
+  const currentLanguage =
+    languages.find((lang) => lang.code === i18n.language) || languages[0];
 
   // Get unique region flags for current language
   const getRegionFlags = (regions: string[]) => {
-    return regions.map(region => regionFlags[region] || '🌍').join(' ');
+    return regions.map((region) => regionFlags[region] || "🌍").join(" ");
   };
 
   return (
@@ -70,16 +71,16 @@ export function LanguageSelector() {
       <div className="mb-4">
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <Globe className="w-6 h-6" aria-hidden="true" />
-          {t('settings.general.language')}
+          {t("settings.general.language")}
         </h3>
         <p className="text-sm text-muted-foreground">
-          {t('settings.general.languageSelectDescription')}
+          {t("settings.general.languageSelectDescription")}
         </p>
       </div>
       <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="language-select">
-            {t('settings.general.selectLanguage')}
+            {t("settings.general.selectLanguage")}
           </Label>
           <Select
             value={i18n.language}
@@ -92,7 +93,9 @@ export function LanguageSelector() {
                   {isChanging ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-muted-foreground">{t('common.loading')}</span>
+                      <span className="text-muted-foreground">
+                        {t("common.loading")}
+                      </span>
                     </>
                   ) : (
                     <>
@@ -130,13 +133,22 @@ export function LanguageSelector() {
           </Select>
         </div>
 
-        <div className="text-sm text-muted-foreground bg-muted p-3 rounded-md" role="note" aria-label={t('settings.general.autoDetectionNote')}>
-          <p className="font-medium mb-1">🌍 {t('settings.general.language')} - {t('settings.general.autoDetection')}</p>
-          <p>{t('settings.general.autoDetectionDescription')}</p>
+        <div
+          className="text-sm text-muted-foreground bg-muted p-3 rounded-md"
+          role="note"
+          aria-label={t("settings.general.autoDetectionNote")}
+        >
+          <p className="font-medium mb-1">
+            🌍 {t("settings.general.language")} -{" "}
+            {t("settings.general.autoDetection")}
+          </p>
+          <p>{t("settings.general.autoDetectionDescription")}</p>
         </div>
 
         <div className="text-xs text-muted-foreground flex items-center gap-2">
-          <span>{currentLanguage.flag} <strong>{currentLanguage.nativeName}</strong></span>
+          <span>
+            {currentLanguage.flag} <strong>{currentLanguage.nativeName}</strong>
+          </span>
           <span>•</span>
           <span>LoL: {getRegionFlags(currentLanguage.regions)}</span>
         </div>

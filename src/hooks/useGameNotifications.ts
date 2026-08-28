@@ -1,7 +1,7 @@
-import { useRef, useEffect } from 'react';
-import { UnifiedGameStatus } from '@/api/lcu';
-import { notifyGameStarted, notifyGameEnded } from '@/lib/notifications';
-import { useRecordingStore } from '@/stores/recordingStore';
+import { useRef, useEffect } from "react";
+import { UnifiedGameStatus } from "@/api/lcu";
+import { notifyGameStarted, notifyGameEnded } from "@/lib/notifications";
+import { useRecordingStore } from "@/stores/recordingStore";
 
 /**
  * 게임 상태 변경을 감지하여 데스크톱 알림을 보내는 훅

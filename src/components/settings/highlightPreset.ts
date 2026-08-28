@@ -12,7 +12,11 @@
  */
 
 /** `#[serde(rename_all = "snake_case")]` 가 만드는 와이어 값. */
-export type HighlightPreset = "everything" | "balanced" | "best_only" | "custom";
+export type HighlightPreset =
+  | "everything"
+  | "balanced"
+  | "best_only"
+  | "custom";
 
 /** 사용자가 직접 고를 수 있는 프리셋(= `Custom` 제외). */
 export type SelectableHighlightPreset = Exclude<HighlightPreset, "custom">;
@@ -25,11 +29,8 @@ export const DEFAULT_HIGHLIGHT_PRESET: SelectableHighlightPreset = "balanced";
  * (`from_filters` 의 탐색 순서와는 별개다 — 프리셋끼리 겹치지 않으므로 순서가
  * 판정에 영향을 주지 않는다.)
  */
-export const SELECTABLE_HIGHLIGHT_PRESETS: readonly SelectableHighlightPreset[] = [
-  "everything",
-  "balanced",
-  "best_only",
-];
+export const SELECTABLE_HIGHLIGHT_PRESETS: readonly SelectableHighlightPreset[] =
+  ["everything", "balanced", "best_only"];
 
 /**
  * `EventFilterSettings` 전체 필드. `@/types` 의 `EventFilterSettings` 는 화면에
@@ -146,9 +147,9 @@ export function filtersToPreset(filters: EventFilterLike): HighlightPreset {
 
   for (const preset of searchOrder) {
     const canonical = HIGHLIGHT_PRESET_FILTERS[preset];
-    const matches = (Object.keys(canonical) as (keyof CanonicalEventFilter)[]).every(
-      (key) => filters[key] === canonical[key],
-    );
+    const matches = (
+      Object.keys(canonical) as (keyof CanonicalEventFilter)[]
+    ).every((key) => filters[key] === canonical[key]);
     if (matches) return preset;
   }
 
