@@ -216,7 +216,34 @@ R001을 새 goal로: `G013 언어 선택기 ko/en 축소`.
 6. **YouTube:** G010(토큰 회전 영속화)
 7. **관측:** G011(OBS 진단·측정 export) — 마지막, E5 직전에 준비되면 됨
 
-각 항목 완료 시 `.ksi` 원장 `attempt`/`gate` 갱신은 Claude가.
+각 항목 완료 시 갱신은 Claude가.
+
+> **참고 (2026-09-03):** ksi-harness 스탠드얼론 스크립트(`ksi-goals.py` 등)가 세션 중
+> 제거됨(백업: `~/.claude/backups/ksi-removal-20260903/`). `.ksi/` 원장은 repo에 남아
+> 있으나 CLI로 갱신 불가 — 진행 추적은 이 문서 + git 커밋이 SSOT.
+
+## 진행 (2026-09-03)
+
+| ID | 상태 | 커밋 |
+|---|---|---|
+| G001 저체력 죽은 감지 | ✅ 리뷰됨 (+HP0% 가드) | `213a619`, `bb66c25` |
+| G002 이벤트 배치 파싱 | ✅ 리뷰됨 (+로그 1회제한) | `b42d1fb`, `bb66c25` |
+| G003 Ace 팀 판정 | ✅ 리뷰됨 | `213a619` |
+| G004 종료 에지 디바운스 | ✅ 구현 (reviewer 미검증) | `bb66c25` |
+| G005 로딩→리플레이 오분류 | ✅ 구현 (메인 spot-verify) | `bb66c25` |
+| G006 in-flight 레이스 | ✅ 구현 (reviewer 미검증) | `bb66c25` |
+| G007 video onError | ✅ 리뷰됨 (+videoWidth·VideoModal) | `3f8c537`, `f0fda8b` |
+| G008 AV1 가짜 스위치 | ✅ 리뷰됨 | `3f8c537` |
+| G012 MatchPoint 배선 | ✅ 리뷰됨 (+post-flush·lost-update) | `98d848e`, `bb66c25` |
+| G013 언어 ko/en | ✅ 리뷰됨 | `3f8c537` |
+| G009 assetProtocol 폴백 | ⏳ | |
+| G010 YouTube 토큰 회전 | ⏳ | |
+| G011 OBS 진단·측정 export | ⏳ | |
+
+**리뷰 후속 (별도 처리 필요):**
+- G008 minor: 구 av1 사용자가 설정 펼칠 때 무단 저장 토스트
+- G013 follow-up: `mediaWorkflowLocales.test.ts`·`clipVaultLocales.test.ts`가 20개 로케일 키 패리티 강제 → 트리밍 or 테스트 완화 결정
+- G004/G006 reviewer 미검증 — 최종 배치 리뷰에 포함
 
 ---
 
