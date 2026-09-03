@@ -21,7 +21,6 @@ type BitratePreset = "low" | "medium" | "high" | "very_high";
 // the safe default before display.
 type VideoCodec = "h264" | "h265" | "av1";
 type SelectableCodec = "h264" | "h265";
-const SELECTABLE_CODECS: readonly SelectableCodec[] = ["h264", "h265"];
 
 const normalizeCodec = (codec: VideoCodec): SelectableCodec =>
   codec === "h265" ? "h265" : "h264";
@@ -94,18 +93,11 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
     onChange({ ...settings, [key]: value });
   };
 
+  // A settings blob from an older build may still carry the now-removed "av1"
+  // codec. It has no encoder mapping (records H.264 anyway) so it is displayed
+  // as H.264 and normalized on the next real codec change — no unsolicited save
+  // (and its "settings saved" toast) just for opening this panel.
   const selectedCodec = normalizeCodec(settings.codec);
-
-  // Heal settings persisted by an older build that stored the now-removed "av1"
-  // codec — it has no encoder mapping and silently falls back to H.264, so make
-  // that explicit rather than leaving a phantom value in the saved settings.
-  useEffect(() => {
-    if (!SELECTABLE_CODECS.includes(settings.codec as SelectableCodec)) {
-      onChange({ ...settings, codec: selectedCodec });
-    }
-    // Only react to a change in the stored codec value.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.codec]);
 
   const getResolutionLabel = (res: Resolution): string => {
     const labels: Record<Resolution, string> = {

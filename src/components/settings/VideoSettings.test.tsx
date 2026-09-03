@@ -101,7 +101,7 @@ describe("VideoSettings", () => {
     expect(await screen.findByText(CODEC.warning)).toBeInTheDocument();
   });
 
-  it("falls back a legacy AV1 setting to H.264 (G008)", async () => {
+  it("displays a legacy AV1 setting as H.264 without an unsolicited save (G008)", async () => {
     const onChange = jest.fn();
     render(
       <VideoSettings
@@ -110,14 +110,34 @@ describe("VideoSettings", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(onChange).toHaveBeenCalledWith(
-        expect.objectContaining({ codec: "h264" }),
-      ),
-    );
-    // The removed AV1 label must never reach the screen.
+    // Shown as H.264, and the removed AV1 label never reaches the screen.
+    expect(await screen.findByText(CODEC.h264)).toBeInTheDocument();
     expect(screen.queryByText(CODEC.av1)).not.toBeInTheDocument();
     // The H.265-only preview warning is not shown for the H.264 fallback.
     expect(screen.queryByText(CODEC.warning)).not.toBeInTheDocument();
+    // Opening the panel must not persist anything (no "settings saved" toast).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("normalizes a legacy AV1 setting on the next real codec change (G008)", async () => {
+    const onChange = jest.fn();
+    render(
+      <VideoSettings
+        settings={{ ...baseSettings, codec: "av1" as never }}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("advanced-codec"));
+    const options = await screen.findAllByRole("option");
+    const h265Option = options.find((o) => o.textContent === CODEC.h265);
+    fireEvent.click(h265Option!);
+
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ codec: "h265" }),
+      ),
+    );
   });
 });
