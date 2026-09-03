@@ -72,7 +72,7 @@
 - **합격기준:** ① acer 우선 ② `{"EventName":"Ace","Acer":"me#TAG"}` 픽스처로 우리 팀 에이스 트리거 발화 테스트
   ③ 적 에이스는 트리거 안 됨 테스트.
 
-### G004 — 게임 종료 에지에 디바운스 없음: 폴링 1회 실패로 녹화 중단 (HIGH, 미검증 — codex 착수 전 재확인)
+### G004 — 게임 종료 에지에 디바운스 없음: 폴링 1회 실패로 녹화 중단 (HIGH, 확인됨 — game_monitor.rs:453 즉시 종료)
 
 - **파일:** `src-tauri/src/recording/game_monitor.rs:235-261, 453` / `live_client.rs:99-112` (`check_live_client_basic` 2초 타임아웃 1회)
 - **증상(감사 주장):** 하이브리드 감지가 한 번이라도 `in_game=false`를 내면 즉시
@@ -82,10 +82,9 @@
   `on_game_end`. 시작 전이는 현행 유지(빠른 게 좋음). `Reconnect` phase를 `InProgress`와 구분.
 - **합격기준:** ① 종료 디바운스 N회 ② 단발 타임아웃 시뮬레이션에서 세션 유지 테스트 ③ E5: 게임 중
   네트워크 순단 후 녹화 계속.
-- **codex 주의:** 착수 전 `game_monitor.rs:235-320, 440-470`를 읽고 감사 주장이 현재 코드와 맞는지 확인.
-  틀리면 Claude에 보고.
+- **codex 주의:** 시작 에지(280)는 빠른 게 맞으니 건드리지 말 것. 종료 에지만 디바운스.
 
-### G005 — 로딩 중 리플레이 오분류 → 그 판 클립 0개 (HIGH, 미검증 — codex 착수 전 재확인)
+### G005 — 로딩 중 리플레이 오분류 → 그 판 클립 0개 (HIGH, 확인됨 — game_monitor.rs:297-327 시작 에지에서만 판정, 재평가 없음)
 
 - **파일:** `live_client.rs:1646-1697` (`detect_replay_mode`), `game_monitor.rs:304-322, 838-841`
 - **증상(감사 주장):** `detect_replay_mode`는 `activePlayer`가 `allPlayers`에 없거나 `level == 0`이면
@@ -97,9 +96,8 @@
   게임 시작 후 몇 초 지연(로딩 완료 후). (c) 게임 모드를 첫 유효 데이터 수신 시 1회 재평가.
 - **합격기준:** ① 로딩 픽스처(빈 allPlayers)가 리플레이로 굳지 않음 ② 실제 관전 픽스처는 여전히
   리플레이로 판정 ③ E5: 느리게 로딩되는 판에서 클립 생성됨.
-- **codex 주의:** 착수 전 두 파일 해당 범위 재확인.
 
-### G006 — 자동 감지 in-flight 레이스: GameEnd 직전 한타 클립 유실 (HIGH, 미검증 — codex 착수 전 재확인)
+### G006 — 자동 감지 in-flight 레이스: GameEnd 직전 한타 클립 유실 (HIGH, 확인됨 — game_monitor.rs:409 detached spawn, :461 abort는 모니터만)
 
 - **파일:** `game_monitor.rs:400-435` (특히 라인 409 `tokio::spawn`), `auto_clip_manager.rs:881-915` (`InflightGuard` 893, 태스크 내부)
 - **증상(감사 주장):** 게임 종료 배리어(`wait_for_inflight_clip_tasks`)는 `inflight_clip_tasks` 카운터로
@@ -120,11 +118,11 @@
 - **증상:** 프로덕션 write가 테스트(`auto_clip_manager.rs:2372`)에만 존재. `capture_moment`는
   `secs_before_game_end: None` 하드코딩 → MatchPoint 점수 배수가 절대 적용 안 됨. `moment`/`result`
   유실과 동일 클래스.
-- **수정 방향:** 게임 종료 시각 추정이 가능한 시점(GameEnd 이벤트 수신, 또는 게임 길이 상한 근처)에서
-  각 미저장 클립의 `secs_before_game_end`를 역산해 채운다. 또는 이 배수가 실효가 없다고 판단되면
-  제거(제품 결정 — Claude 경유).
+- **결정 (2026-09-03, 대표님):** **실제 계산 배선.** GameEnd 이벤트 수신 시점에 각 미저장/저장
+  클립의 `event.event_time` 대비 게임 종료 시각으로 `secs_before_game_end`를 역산해 채운다.
+  (게임 길이는 GameEnd 이벤트의 `event_time` 또는 캐시 `game_time`.)
 - **합격기준:** ① 프로덕션 경로에서 값이 채워짐 ② 그 값이 실제 점수를 움직임을 outcome 테스트로 고정
-  (전달만 확인 금지).
+  (전달만 확인 금지 — "MatchPoint 배수 적용된 점수 ≠ 미적용 점수").
 
 ---
 
@@ -148,10 +146,10 @@
   `src-tauri/src/recording/integration_backend/mod.rs:40-44`
 - **증상:** `VideoCodec::Av1`이 열거형에 있고 UI에서 선택 가능하나, 런타임 매핑은
   `if is_h265() { H265 } else { H264 }`이고 `is_h265()`는 `H265`에만 true → **AV1 선택 시 조용히 H.264 녹화.**
-- **수정 방향(제품 결정 — Claude 경유):** (a) UI에서 AV1 제거가 가장 안전 — E5 전 새 인코더 경로는 리스크.
-  (b) 실제 `av1_nvenc`/`av1_qsv` 배선(감으로 튜닝 금지 원칙과 상충하지 않음, 새 기능 추가라 신중).
-  **기본 권장: (a).** 매핑 안 되는 코덱은 선택 불가.
-- **합격기준:** 선택된 코덱과 실제 인코더가 일치 (테스트로 매핑 대조).
+- **결정 (2026-09-03, 대표님):** **(a) UI에서 AV1 제거.** `VideoSettings.tsx`의 코덱 선택지에서 AV1
+  옵션 제거. 열거형 `VideoCodec::Av1`은 남겨도 되나 UI 도달 불가. 매핑 안 되는 코덱은 선택 불가.
+- **합격기준:** ① UI 코덱 선택지 = {H.264, H.265}만 ② 선택된 코덱과 실제 인코더가 일치하는지
+  테스트로 매핑 대조 (미래 회귀 방지).
 
 ### G009 — temp_dir 폴백 경로가 `assetProtocol.scope` 밖 (MEDIUM)
 
@@ -191,15 +189,34 @@
 
 ---
 
-## 제품 결정 필요 (Claude → 대표님, codex 대기)
+## 제품 결정 (2026-09-03 확정)
 
-| ID | 내용 | 선택지 |
-|---|---|---|
-| R001 | 20개 언어 선택 제공, en/ko만 완전(1800키), ja 38%, 나머지 17개 ~22% | (a) 선택기를 ko/en(/ja)로 축소 **권장** (b) 미완성에 "beta" 표기 (c) 그대로 |
-| R003 | YouTube 콜백 포트 9090 고정 — 점유 시 OAuth 전체 실패 | 최소: 포트 충돌 시 명확한 에러+안내. 동적 포트는 Google Web client라 불가 |
-| R002 | YouTube 예약 업로드가 로컬 폴링 스케줄러(publishAt 아님) | UI에 "앱 실행 중이어야 함 / 즉시 공개" 명시. 네이티브 전환은 E5 후 |
-| G008 | AV1 가짜 스위치 | (a) UI에서 제거 **권장** (b) 실제 배선 |
-| G012 | MatchPoint 배수 | (a) 실제 계산 배선 (b) 배수 제거 |
+| ID | 결정 |
+|---|---|
+| **G008** | **UI에서 AV1 제거** (위 G008 참조) |
+| **R001** | **언어 선택기를 ko/en으로 축소.** `src/i18n.ts` 언어 목록 + `LanguageSelector`를 ko/en만.
+  나머지 로케일 파일은 남겨도 되나 선택 불가. `fallbackLng: "en"` 유지. |
+| **G012** | **실제 계산 배선** (위 G012 참조) |
+| R003 | YouTube 콜백 포트 9090 점유 시 명확한 에러 메시지 + 안내 (동적 포트는 Google Web client라 불가). P1 범위. |
+| R002 | YouTube 예약 업로드 UI에 "앱 실행 중이어야 함 / 예약 시각에 즉시 공개" 명시. 네이티브 `publishAt` 전환은 E5 후. |
+
+R001을 새 goal로: `G013 언어 선택기 ko/en 축소`.
+
+---
+
+## codex 착수 순서 (2026-09-03 확정: P0 + P1 전부)
+
+전체 스펙(G001~G013)을 codex가 병렬로. **권장 순서** (Claude 항목별 리뷰 후 main 통합):
+
+1. **필드 교체 (작음, 독립):** G001, G003 — 한 필드 읽는 위치 교체 + 픽스처 교정
+2. **관대한 파싱:** G002 — `Events` per-event 파싱
+3. **점수 배선:** G012 — `secs_before_game_end` 역산
+4. **상태 기계 (신중, 동시성):** G004 → G005 → G006 순. G006은 테스트 설계 시 Claude와 상의
+5. **프론트 (병렬 가능):** G007(video onError), G008(AV1 제거), G013(언어 축소), G009(assetProtocol 폴백)
+6. **YouTube:** G010(토큰 회전 영속화)
+7. **관측:** G011(OBS 진단·측정 export) — 마지막, E5 직전에 준비되면 됨
+
+각 항목 완료 시 `.ksi` 원장 `attempt`/`gate` 갱신은 Claude가.
 
 ---
 

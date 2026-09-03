@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "inconnu",
-  "updated_at": "2026-09-03T15:37:28+09:00",
+  "updated_at": "2026-09-03T15:49:55+09:00",
   "goals": [
     {
       "id": "G001",
@@ -225,6 +225,25 @@
       "ungated_attempts": 0,
       "created_at": "2026-09-03T15:37:13+09:00",
       "updated_at": "2026-09-03T15:37:13+09:00"
+    },
+    {
+      "id": "G013",
+      "title": "언어 선택기를 ko/en으로 축소 — 20개 중 17개가 ~22% 번역이라 로컬라이즈 약속 미이행 (R001 결정)",
+      "completion_criteria": [
+        "src/i18n.ts 언어 목록 + LanguageSelector를 ko/en만",
+        "fallbackLng en 유지",
+        "나머지 로케일 파일은 남기되 선택 불가"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:49:55+09:00",
+      "updated_at": "2026-09-03T15:49:55+09:00"
     }
   ],
   "risks": [
