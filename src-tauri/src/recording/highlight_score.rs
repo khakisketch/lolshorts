@@ -276,15 +276,40 @@ pub fn score(kind: HighlightKind, ctx: &MomentContext) -> HighlightScore {
         apply(timing_multiplier(kind, secs), &mut value, &mut reasons);
     }
 
+    let mut scored = HighlightScore { value, reasons };
+
     // 승부가 갈리기 직전 2분. 마지막 한타는 결과를 아는 채로 보면 더 재미있다.
+    // 게임이 언제 끝날지는 이벤트 감지 시점엔 알 수 없어 `secs_before_game_end` 는
+    // `GameEnd` 를 받은 뒤 역산해 채운다(`AutoClipManager::backfill_match_point`).
     if let Some(remaining) = ctx.secs_before_game_end {
-        if remaining <= 120.0 {
-            value *= 1.20;
-            reasons.push(ScoreReason::MatchPoint);
-        }
+        apply_match_point_bonus(&mut scored, remaining);
     }
 
-    HighlightScore { value, reasons }
+    scored
+}
+
+/// 승부가 갈리기 직전이면 붙는 배수. `secs_before_game_end` 는 이벤트가 게임
+/// 종료보다 이만큼(초) 앞서 일어났다는 뜻이다.
+pub const MATCH_POINT_WINDOW_SECS: f64 = 120.0;
+const MATCH_POINT_MULTIPLIER: f64 = 1.20;
+
+/// 이미 계산된 점수에 MatchPoint 배수를 뒤늦게 적용한다.
+///
+/// `score()` 의 마지막 단계와 **같은 연산**이다. 별도 함수로 뺀 이유: 게임 종료
+/// 시각은 `GameEnd` 이벤트를 받아야 알 수 있는데, 그 전에 이미 저장된 클립은
+/// raw `MomentContext` 가 남아 있지 않아(점수와 이유만 저장) `score()` 를 다시
+/// 돌릴 수 없다. 이 함수는 저장된 점수·이유 위에서 바로 보정한다.
+///
+/// 멱등이다 — 이유에 이미 `MatchPoint` 가 있으면 아무것도 하지 않으므로 두 번
+/// 불려도 배수가 두 번 곱해지지 않는다.
+pub fn apply_match_point_bonus(score: &mut HighlightScore, secs_before_game_end: f64) {
+    if score.reasons.contains(&ScoreReason::MatchPoint) {
+        return;
+    }
+    if (0.0..=MATCH_POINT_WINDOW_SECS).contains(&secs_before_game_end) {
+        score.value *= MATCH_POINT_MULTIPLIER;
+        score.reasons.push(ScoreReason::MatchPoint);
+    }
 }
 
 /// 전투 계열인가 — 단독성·열세 배수를 붙일 대상인가.
@@ -617,6 +642,50 @@ mod tests {
         );
         assert!(s.reasons.contains(&ScoreReason::MatchPoint));
         assert!(s.value > HighlightKind::Ace.base());
+    }
+
+    /// 창 밖(2분 초과)이면 MatchPoint 는 안 붙는다.
+    #[test]
+    fn events_before_the_last_two_minutes_get_no_match_point() {
+        let s = score(
+            HighlightKind::Kill,
+            &MomentContext {
+                secs_before_game_end: Some(MATCH_POINT_WINDOW_SECS + 1.0),
+                ..Default::default()
+            },
+        );
+        assert!(!s.reasons.contains(&ScoreReason::MatchPoint));
+        assert_eq!(s.value, HighlightKind::Kill.base());
+    }
+
+    /// `apply_match_point_bonus` 는 멱등이다 — 뒤늦은 역산이 두 번 돌아도
+    /// 배수가 두 번 곱해지지 않는다.
+    #[test]
+    fn applying_the_match_point_bonus_twice_is_a_no_op() {
+        let mut s = HighlightScore {
+            value: 50.0,
+            reasons: Vec::new(),
+        };
+        apply_match_point_bonus(&mut s, 30.0);
+        let once = s.value;
+        assert_eq!(once, 50.0 * MATCH_POINT_MULTIPLIER);
+        assert_eq!(s.reasons, vec![ScoreReason::MatchPoint]);
+
+        apply_match_point_bonus(&mut s, 30.0);
+        assert_eq!(s.value, once, "두 번째 적용이 배수를 또 곱했다");
+        assert_eq!(s.reasons, vec![ScoreReason::MatchPoint]);
+    }
+
+    /// 게임 종료보다 뒤에 찍힌(remaining 음수) 값은 MatchPoint 로 치지 않는다.
+    #[test]
+    fn a_negative_time_remaining_is_not_a_match_point() {
+        let mut s = HighlightScore {
+            value: 50.0,
+            reasons: Vec::new(),
+        };
+        apply_match_point_bonus(&mut s, -5.0);
+        assert_eq!(s.value, 50.0);
+        assert!(s.reasons.is_empty());
     }
 
     #[test]

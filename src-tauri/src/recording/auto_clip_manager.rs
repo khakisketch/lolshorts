@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::AppError;
 
-use super::highlight_score::HighlightKind;
+use super::highlight_score::{apply_match_point_bonus, HighlightKind, HighlightScore};
 use super::integration_backend::segment_recorder::now_wall_secs;
 use super::integration_backend::{RecordingStatus, WindowsCaptureRecorder};
 use super::live_client::{
@@ -95,6 +95,38 @@ const MAX_MERGE_THRESHOLD_SECS: f64 = 120.0;
 /// Both the timer that closes the window and the check that decides whether it is
 /// closed MUST use this, or a setting above the cap leaves the queue with no
 /// pending timer.
+/// `GameEnd` 를 받은 뒤, 아직 큐에 있는 이벤트의 `moment.secs_before_game_end` 를
+/// 역산해 채운다. 이 값은 게임 종료 시각을 알아야 계산되므로 `capture_moment` 는
+/// `None` 으로 두고, `flush_pending_events` 의 `score()` 가 이 값을 보고 MatchPoint
+/// 배수를 적용한다.
+///
+/// - `game_end_time_secs` 가 유효하지 않으면(0 이하) 아무것도 하지 않는다.
+/// - 이벤트가 게임 종료보다 뒤면(remaining <= 0) 건너뛴다.
+/// - 이미 채워져 있으면(뒤늦은 재호출) 덮어쓰지 않는다.
+/// - `moment` 가 아예 없으면 최소 컨텍스트를 만들어 남은 시간만 싣는다.
+fn backfill_event_moment(event: &mut GameEvent, game_end_time_secs: f64) {
+    if game_end_time_secs.is_nan() || game_end_time_secs <= 0.0 {
+        return;
+    }
+    let remaining = game_end_time_secs - event.event_time as f64;
+    if remaining <= 0.0 {
+        return;
+    }
+    match event.moment.as_mut() {
+        Some(moment) if moment.secs_before_game_end.is_none() => {
+            moment.secs_before_game_end = Some(remaining);
+        }
+        Some(_) => {}
+        None => {
+            event.moment = Some(crate::recording::highlight_score::MomentContext {
+                secs_before_game_end: Some(remaining),
+                game_time_secs: Some(event.event_time as f64),
+                ..Default::default()
+            });
+        }
+    }
+}
+
 fn clamp_merge_threshold_secs(value: f64) -> f64 {
     if value.is_finite() {
         value.clamp(0.0, MAX_MERGE_THRESHOLD_SECS)
@@ -837,13 +869,31 @@ impl AutoClipManager {
             settings.clip_timing.merge_consecutive_events
         };
 
-        let pending: Vec<QueuedEvent> = {
+        let mut pending: Vec<QueuedEvent> = {
             let mut queue = self.event_queue.lock().await;
             queue.drain(..).collect()
         };
 
         if pending.is_empty() {
             return Ok(());
+        }
+
+        // Backstop for `backfill_match_point`: an event that reached the queue AFTER the
+        // `GameEnd` hook ran (its detached processing task was still pending then) would
+        // otherwise be scored here with `secs_before_game_end` still `None`. If a `GameEnd`
+        // is in this batch we know the end time, so fill in any straggler before merging.
+        if let Some(game_end_time) = pending
+            .iter()
+            .filter(|q| matches!(q.trigger, EventTrigger::GameEnd))
+            .map(|q| q.event.event_time as f64)
+            .filter(|t| *t > 0.0)
+            .fold(None, |acc: Option<f64>, t| {
+                Some(acc.map_or(t, |a| f64::max(a, t)))
+            })
+        {
+            for queued in &mut pending {
+                backfill_event_moment(&mut queued.event, game_end_time);
+            }
         }
 
         if !merge_enabled {
@@ -872,6 +922,71 @@ impl AutoClipManager {
 
         // Save immediately without waiting for post-event footage (game is ending).
         self.save_event_window_inner(window, false).await
+    }
+
+    /// `GameEnd` 를 받은 시점에 `secs_before_game_end`(MatchPoint 배수)를 역산해 채운다.
+    ///
+    /// 이 값은 게임 종료 시각을 알아야 계산되는데 이벤트 감지 시점엔 알 수 없어
+    /// `capture_moment` 가 `None` 으로 둔다. 여기서 두 대상을 보정한다:
+    ///
+    /// 1. **아직 큐에 있는 이벤트** — 종료 직전(병합 창 + post-roll 대기 안에 든)
+    ///    이벤트들. moment 를 채워 두면 뒤이은 `flush_pending_events` 의 `score()` 가
+    ///    MatchPoint 를 정상 적용한다.
+    /// 2. **이미 저장된 클립** — 종료 40~120초 전 이벤트는 병합 타이머가 이미
+    ///    저장했을 수 있다. raw `MomentContext` 는 저장돼 있지 않으므로 저장된
+    ///    점수·이유 위에서 `apply_match_point_bonus` 로 직접 보정한다(멱등).
+    async fn backfill_match_point(&self, game_end_time_secs: f64) {
+        if game_end_time_secs.is_nan() || game_end_time_secs <= 0.0 {
+            debug!(
+                "backfill_match_point: 게임 종료 시각이 유효하지 않음 ({:.1}s) — 건너뜀",
+                game_end_time_secs
+            );
+            return;
+        }
+
+        // 1. 큐에 남은 이벤트
+        {
+            let mut queue = self.event_queue.lock().await;
+            for queued in queue.iter_mut() {
+                backfill_event_moment(&mut queued.event, game_end_time_secs);
+            }
+        }
+
+        // 2. 이미 저장된 클립 재점수
+        let game_id = match self.current_game_id.read().await.clone() {
+            Some(id) => id,
+            None => return,
+        };
+        let clips = match self.storage.load_clip_metadata(&game_id) {
+            Ok(clips) => clips,
+            Err(e) => {
+                warn!("backfill_match_point: 저장된 클립을 읽지 못했습니다: {}", e);
+                return;
+            }
+        };
+        for mut clip in clips {
+            let Some(value) = clip.highlight_score else {
+                continue;
+            };
+            let remaining = game_end_time_secs - clip.event_time;
+            let mut scored = HighlightScore {
+                value,
+                reasons: clip.score_reasons.clone(),
+            };
+            apply_match_point_bonus(&mut scored, remaining);
+            if scored.reasons.len() == clip.score_reasons.len() {
+                continue; // 창 밖이거나 이미 붙어 있음 — 변화 없음
+            }
+            info!(
+                "클립 {} MatchPoint 역산: {:.1} -> {:.1} (게임 종료 {:.0}s 전)",
+                clip.file_path, value, scored.value, remaining
+            );
+            clip.highlight_score = Some(scored.value);
+            clip.score_reasons = scored.reasons;
+            if let Err(e) = self.storage.save_clip_metadata(&game_id, &clip) {
+                warn!("클립 {} MatchPoint 역산 저장 실패: {}", clip.file_path, e);
+            }
+        }
     }
 
     /// Handle a game event from Live Client API
@@ -924,6 +1039,15 @@ impl AutoClipManager {
             event.event_name,
             trigger.priority()
         );
+
+        // `secs_before_game_end`(MatchPoint 배수)는 게임 종료 시각을 알아야 계산할 수
+        // 있는데, 이벤트 감지 시점(게임 중)에는 알 수 없어 `capture_moment` 가 `None` 을
+        // 넣는다. `GameEnd` 를 받은 지금이 그 시각을 아는 유일한 순간이다 — 아직 큐에
+        // 있는 이벤트와 이미 저장된 클립을 여기서 역산해 채운다. (`resolve_recordable_trigger`
+        // 앞: 짧은 판이라 GameEnd 클립 자체는 안 남더라도 그 판의 다른 클립은 보정한다.)
+        if matches!(trigger, EventTrigger::GameEnd) {
+            self.backfill_match_point(event.event_time as f64).await;
+        }
 
         // 담을지, 그리고 **어떤 이름으로** 담을지. 하위 상황의 토글이 꺼져 있으면
         // 여기서 부모 이름으로 강등되어 돌아오므로, 아래 모든 단계(우선순위·클립
@@ -2329,6 +2453,102 @@ mod tests {
         manager.flush_pending_events().await.unwrap();
         assert_eq!(storage.load_events(game_id).unwrap().len(), 2);
         assert!(storage.load_clip_metadata(game_id).unwrap().is_empty());
+    }
+
+    /// **G012 outcome: GameEnd 역산이 실제로 저장된 클립의 점수를 움직이는가.**
+    ///
+    /// `secs_before_game_end` 는 게임 종료 시각을 알아야 계산되므로 이벤트 감지
+    /// 시점엔 `None` 이고, MatchPoint 배수(×1.20)·"승부처" 자막이 실게임에서 절대
+    /// 안 나왔다. 이 테스트는 "GameEnd 를 받으면 그 판의 저장된 클립이 재점수되어
+    /// 실제로 값이 오른다" 를 고정한다 — 전달 여부가 아니라 점수를 본다.
+    #[tokio::test]
+    async fn game_end_backfills_match_point_into_a_saved_clip_score() {
+        use crate::recording::highlight_score::ScoreReason;
+        use crate::storage::models::{ClipMetadata, EventType, GameMetadata};
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+        let manager = manager_with_settings(
+            temp_dir.path(),
+            Arc::clone(&storage),
+            RecordingSettings::default(),
+        )
+        .await;
+
+        let game_id = "match_point_backfill";
+        storage
+            .create_game(
+                game_id,
+                &GameMetadata {
+                    game_id: game_id.to_string(),
+                    champion: "Ahri".to_string(),
+                    game_mode: "CLASSIC".to_string(),
+                    start_time: chrono::Utc::now(),
+                    end_time: None,
+                    result: None,
+                    kda: None,
+                },
+            )
+            .unwrap();
+        manager.set_current_game(Some(game_id.to_string())).await;
+
+        // 종료 50초 전에 일어난 킬이 이미 병합 타이머에 의해 저장돼 있다.
+        // 점수 50.0, 이유 없음 — capture 시점엔 MatchPoint 를 알 수 없었다.
+        let near_end = ClipMetadata {
+            file_path: temp_dir
+                .path()
+                .join("near_end.mp4")
+                .to_string_lossy()
+                .into(),
+            thumbnail_path: None,
+            event_type: EventType::ChampionKill,
+            event_time: 1_750.0,
+            priority: 1,
+            duration: 13.0,
+            event_offset_secs: Some(10.0),
+            created_at: chrono::Utc::now(),
+            usage_count: 0,
+            highlight_score: Some(50.0),
+            score_reasons: vec![],
+        };
+        // 게임 초반(종료 1600초 전)에 일어난 킬 — 재점수돼도 변화 없어야 한다.
+        let early = ClipMetadata {
+            file_path: temp_dir.path().join("early.mp4").to_string_lossy().into(),
+            event_time: 200.0,
+            highlight_score: Some(50.0),
+            ..near_end.clone()
+        };
+        storage.save_clip_metadata(game_id, &near_end).unwrap();
+        storage.save_clip_metadata(game_id, &early).unwrap();
+
+        // GameEnd @ 1800s in-game.
+        manager
+            .handle_game_event(EventTrigger::GameEnd, create_test_event("GameEnd", 1_800.0))
+            .await
+            .expect("GameEnd 처리");
+
+        let clips = storage.load_clip_metadata(game_id).unwrap();
+        let by_path = |name: &str| {
+            clips
+                .iter()
+                .find(|c| c.file_path.ends_with(name))
+                .unwrap_or_else(|| panic!("clip {name} 없음"))
+        };
+
+        let near = by_path("near_end.mp4");
+        assert!(
+            near.score_reasons.contains(&ScoreReason::MatchPoint),
+            "종료 50초 전 킬에 MatchPoint 가 붙어야 한다"
+        );
+        assert!(
+            (near.highlight_score.unwrap() - 60.0).abs() < 1e-6,
+            "점수가 ×1.20 되어야 한다: {:?}",
+            near.highlight_score
+        );
+
+        let early = by_path("early.mp4");
+        assert!(!early.score_reasons.contains(&ScoreReason::MatchPoint));
+        assert_eq!(early.highlight_score, Some(50.0), "창 밖 킬은 그대로");
     }
 
     /// Build a manager whose merge window closes after `merge_threshold` seconds.
