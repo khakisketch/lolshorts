@@ -98,7 +98,7 @@ keyring = { version = "3", features = ["windows-native", "apple-native"] }
 
 # Windows-specific
 [target.'cfg(windows)'.dependencies]
-wmi = "0.13"
+wmi = "0.18"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
