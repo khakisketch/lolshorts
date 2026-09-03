@@ -1,7 +1,7 @@
 #![allow(clippy::unnecessary_cast)]
 use anyhow::{Context as AnyhowContext, Result};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
@@ -95,6 +95,14 @@ const MAX_MERGE_THRESHOLD_SECS: f64 = 120.0;
 /// Both the timer that closes the window and the check that decides whether it is
 /// closed MUST use this, or a setting above the cap leaves the queue with no
 /// pending timer.
+fn clamp_merge_threshold_secs(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, MAX_MERGE_THRESHOLD_SECS)
+    } else {
+        0.0
+    }
+}
+
 /// `GameEnd` 를 받은 뒤, 아직 큐에 있는 이벤트의 `moment.secs_before_game_end` 를
 /// 역산해 채운다. 이 값은 게임 종료 시각을 알아야 계산되므로 `capture_moment` 는
 /// `None` 으로 두고, `flush_pending_events` 의 `score()` 가 이 값을 보고 MatchPoint
@@ -124,14 +132,6 @@ fn backfill_event_moment(event: &mut GameEvent, game_end_time_secs: f64) {
                 ..Default::default()
             });
         }
-    }
-}
-
-fn clamp_merge_threshold_secs(value: f64) -> f64 {
-    if value.is_finite() {
-        value.clamp(0.0, MAX_MERGE_THRESHOLD_SECS)
-    } else {
-        0.0
     }
 }
 
@@ -255,6 +255,10 @@ pub struct AutoClipManager {
     /// Whether a merge-window flush timer is already in flight (dedup guard so a burst
     /// of events arms exactly one timer per window).
     merge_flush_armed: Arc<AtomicBool>,
+    /// 마지막 `GameEnd` 이벤트의 인게임 초(`f64::to_bits`). 0 = 미설정.
+    /// `stop_event_monitoring_with_budget` 가 flush 후 MatchPoint 역산을 한 번 더
+    /// 돌릴 때 게임 종료 시각으로 쓴다.
+    last_game_end_secs: Arc<AtomicU64>,
 
     /// AppHandle used to emit `recording-status` / `clip-saved` / `game-event` to the
     /// frontend (overlay + dashboard). `None` until `set_app_handle` is called from
@@ -289,6 +293,7 @@ impl AutoClipManager {
             current_queue_id: Arc::new(TokioRwLock::new(None)),
             saved_clip_count: Arc::new(AtomicUsize::new(0)),
             merge_flush_armed: Arc::new(AtomicBool::new(false)),
+            last_game_end_secs: Arc::new(AtomicU64::new(0)),
             app_handle: Arc::new(TokioMutex::new(None)),
         }
     }
@@ -318,6 +323,7 @@ impl AutoClipManager {
             current_queue_id: Arc::clone(&self.current_queue_id),
             saved_clip_count: Arc::clone(&self.saved_clip_count),
             merge_flush_armed: Arc::clone(&self.merge_flush_armed),
+            last_game_end_secs: Arc::clone(&self.last_game_end_secs),
             app_handle: Arc::clone(&self.app_handle),
         }
     }
@@ -513,6 +519,7 @@ impl AutoClipManager {
         let inflight_clip_tasks = Arc::clone(&self.inflight_clip_tasks);
         let last_game_summary = Arc::clone(&self.last_game_summary);
         let events_write_lock = Arc::clone(&self.events_write_lock);
+        let last_game_end_secs = Arc::clone(&self.last_game_end_secs);
         // FIX #6: Create a fresh cancellation token for each monitoring session
         // so that a previous cancel() doesn't keep the new session cancelled.
         let cancel_token = {
@@ -554,6 +561,7 @@ impl AutoClipManager {
                 let events_write_lock = Arc::clone(&events_write_lock);
                 let inflight_clip_tasks = Arc::clone(&inflight_clip_tasks);
                 let last_game_summary = Arc::clone(&last_game_summary);
+                let last_game_end_secs = Arc::clone(&last_game_end_secs);
                 // Counted BEFORE the spawn so `stop_event_monitoring` can never
                 // observe zero for a task that has been created but not yet polled.
                 let inflight = InflightGuard::new(Arc::clone(&inflight_clip_tasks));
@@ -583,6 +591,7 @@ impl AutoClipManager {
                         current_queue_id,
                         saved_clip_count,
                         merge_flush_armed,
+                        last_game_end_secs,
                         app_handle,
                     };
 
@@ -719,6 +728,18 @@ impl AutoClipManager {
                 flush_budget.as_secs_f64()
             ),
         }
+
+        // 3. Final MatchPoint backfill. `handle_game_event` ran one when `GameEnd`
+        //    arrived, but the merge-flush timers and the flush above SAVE the last
+        //    teamfight clips AFTER that — exactly the moments MatchPoint targets.
+        //    Idempotent, and `current_game_id` is still set (cleared later in
+        //    `finish_auto_capture_session`).
+        let game_end_bits = self.last_game_end_secs.load(Ordering::SeqCst);
+        if game_end_bits != 0 {
+            self.backfill_match_point(f64::from_bits(game_end_bits))
+                .await;
+        }
+        self.last_game_end_secs.store(0, Ordering::SeqCst);
 
         Ok(())
     }
@@ -952,11 +973,14 @@ impl AutoClipManager {
             }
         }
 
-        // 2. 이미 저장된 클립 재점수
+        // 2. 이미 저장된 클립 재점수.
+        //    `thumbnail_lock` 을 잡아 썸네일 태스크의 read-modify-write 와 직렬화한다
+        //    — 둘 다 같은 클립 행을 갱신하므로 lost-update 를 막는다.
         let game_id = match self.current_game_id.read().await.clone() {
             Some(id) => id,
             None => return,
         };
+        let _clip_write_slot = self.thumbnail_lock.lock().await;
         let clips = match self.storage.load_clip_metadata(&game_id) {
             Ok(clips) => clips,
             Err(e) => {
@@ -989,23 +1013,40 @@ impl AutoClipManager {
         }
     }
 
+    /// Count a clip task that is about to be spawned by the auto-detect path.
+    ///
+    /// G006: `game_monitor`'s Live Client callback spawns one task per event.
+    /// The guard MUST be minted here, on the synchronous callback thread, BEFORE
+    /// `tokio::spawn`, so `wait_for_inflight_clip_tasks` (the game-end barrier)
+    /// can never observe zero for a task that has been created but not yet
+    /// polled — that race dropped the highest-value teamfight right before
+    /// GameEnd. The manual path already does the equivalent in
+    /// `start_event_monitoring`; this is `InflightGuard::new` being sync
+    /// (a single `AtomicUsize` increment) that makes it possible.
+    pub(crate) fn begin_clip_task(&self) -> InflightGuard {
+        InflightGuard::new(Arc::clone(&self.inflight_clip_tasks))
+    }
+
     /// Handle a game event from Live Client API
     ///
-    /// This is the public interface called by GameMonitor.
-    /// Converts the event and processes it through the clip pipeline.
-    pub async fn handle_game_event(
+    /// This is the interface called by GameMonitor's auto-detect path.
+    /// Processes the event through the clip pipeline.
+    ///
+    /// `inflight` is the guard minted by [`Self::begin_clip_task`] on the
+    /// callback thread before this task was spawned (G006). Requiring it as a
+    /// parameter makes it impossible to reach the clip pipeline on this path
+    /// without the game-end barrier already counting the work. (The manual path
+    /// counts its tasks BEFORE spawning them in `start_event_monitoring` and
+    /// reaches `process_event` directly, so it is not double-counted here.)
+    pub(crate) async fn handle_game_event(
         &self,
         trigger: EventTrigger,
         event: super::live_client::GameEvent,
+        inflight: InflightGuard,
     ) -> Result<()> {
-        // The auto-detect path — the DEFAULT one — spawns a task per event in
-        // `game_monitor`, so this whole call is detached work the game-end barrier has to
-        // wait for; in immediate mode it runs the post-event sleep and the extraction
-        // itself. Without this guard `stop_event_monitoring` saw zero tasks in flight and
-        // let the caller stop the recorder mid-save. (The manual path counts its tasks
-        // BEFORE spawning them in `start_event_monitoring` and reaches `process_event`
-        // directly, so it is not double-counted here.)
-        let _inflight = InflightGuard::new(Arc::clone(&self.inflight_clip_tasks));
+        // Hold the pre-minted guard for the whole call so the barrier waits for
+        // the post-event sleep and the extraction itself.
+        let _inflight = inflight;
 
         // Already stopping: opening a new save now would either race the barrier or land
         // after the recorder has stopped. The manual path drops late events the same way.
@@ -1046,7 +1087,12 @@ impl AutoClipManager {
         // 있는 이벤트와 이미 저장된 클립을 여기서 역산해 채운다. (`resolve_recordable_trigger`
         // 앞: 짧은 판이라 GameEnd 클립 자체는 안 남더라도 그 판의 다른 클립은 보정한다.)
         if matches!(trigger, EventTrigger::GameEnd) {
-            self.backfill_match_point(event.event_time as f64).await;
+            let game_end_secs = event.event_time as f64;
+            if game_end_secs > 0.0 {
+                self.last_game_end_secs
+                    .store(game_end_secs.to_bits(), Ordering::SeqCst);
+            }
+            self.backfill_match_point(game_end_secs).await;
         }
 
         // 담을지, 그리고 **어떤 이름으로** 담을지. 하위 상황의 토글이 꺼져 있으면
@@ -1962,7 +2008,7 @@ impl AutoClipManager {
                 .parent()
                 .unwrap_or_else(|| std::path::Path::new("."))
                 .to_path_buf();
-            let mut thumbnail_metadata = metadata.clone();
+            let saved_file_path = metadata.file_path.clone();
             tokio::spawn(async move {
                 let _thumbnail_slot = thumbnail_lock.lock().await;
                 match crate::video::thumbnail::generate_event_thumbnail(
@@ -1974,14 +2020,37 @@ impl AutoClipManager {
                 .await
                 {
                     Ok(path) => {
-                        thumbnail_metadata.thumbnail_path =
-                            Some(path.to_string_lossy().to_string());
-                        if let Err(e) = storage.save_clip_metadata(&game_id, &thumbnail_metadata) {
-                            warn!(
-                                "클립 썸네일 메타데이터 갱신 실패({}): {}",
+                        // 저장된 행을 **다시 읽어** thumbnail_path 만 얹는다. 저장 시점에
+                        // 클론해 둔 stale 행을 통째로 upsert 하면, 그 사이에 GameEnd
+                        // 역산(`backfill_match_point`)이 갱신한 점수·이유가 조용히
+                        // 되돌아간다 — 두 writer 가 같은 행을 다투는 lost-update.
+                        // `thumbnail_lock` 은 backfill 의 저장 구간도 함께 잡는다.
+                        match storage.load_clip_metadata(&game_id) {
+                            Ok(clips) => {
+                                if let Some(mut current) =
+                                    clips.into_iter().find(|c| c.file_path == saved_file_path)
+                                {
+                                    current.thumbnail_path =
+                                        Some(path.to_string_lossy().to_string());
+                                    if let Err(e) = storage.save_clip_metadata(&game_id, &current) {
+                                        warn!(
+                                            "클립 썸네일 메타데이터 갱신 실패({}): {}",
+                                            clip_path.display(),
+                                            e
+                                        );
+                                    }
+                                } else {
+                                    warn!(
+                                        "클립 썸네일 갱신: 저장된 행을 찾지 못함({})",
+                                        saved_file_path
+                                    );
+                                }
+                            }
+                            Err(e) => warn!(
+                                "클립 썸네일 갱신: 메타데이터 재조회 실패({}): {}",
                                 clip_path.display(),
                                 e
-                            );
+                            ),
                         }
                     }
                     Err(e) => {
@@ -2031,7 +2100,10 @@ impl Drop for AutoClipManager {
 /// `handle_game_event`) and dropped when that work finishes — including on panic — so the
 /// game-end barrier can never wait forever, nor miss a task that was created but not yet
 /// polled.
-struct InflightGuard(Arc<AtomicUsize>);
+///
+/// `pub(crate)` so `game_monitor`'s auto-detect callback can mint one via
+/// [`AutoClipManager::begin_clip_task`] before it spawns a per-event task (G006).
+pub(crate) struct InflightGuard(Arc<AtomicUsize>);
 
 impl InflightGuard {
     fn new(counter: Arc<AtomicUsize>) -> Self {
@@ -2521,9 +2593,15 @@ mod tests {
         storage.save_clip_metadata(game_id, &near_end).unwrap();
         storage.save_clip_metadata(game_id, &early).unwrap();
 
-        // GameEnd @ 1800s in-game.
+        // GameEnd @ 1800s in-game. The auto-detect path mints the in-flight
+        // guard before spawning the per-event task (G006).
+        let inflight = manager.begin_clip_task();
         manager
-            .handle_game_event(EventTrigger::GameEnd, create_test_event("GameEnd", 1_800.0))
+            .handle_game_event(
+                EventTrigger::GameEnd,
+                create_test_event("GameEnd", 1_800.0),
+                inflight,
+            )
             .await
             .expect("GameEnd 처리");
 
@@ -3191,5 +3269,98 @@ mod tests {
         // The flush path discards immediate-mode leftovers, so no duplicates appear.
         manager.flush_pending_events().await.unwrap();
         assert_eq!(storage.load_events(game_id).unwrap().len(), 1);
+    }
+
+    // ---- G006: auto-detect in-flight race ----
+
+    #[tokio::test]
+    async fn auto_path_counts_the_clip_task_before_it_is_spawned() {
+        // The auto-detect callback used to mint the in-flight guard INSIDE the
+        // spawned task (`handle_game_event`'s first line). Between `tokio::spawn`
+        // and the task's first poll, `wait_for_inflight_clip_tasks` observed zero
+        // and let the recorder stop mid-save — losing the last teamfight before
+        // GameEnd. The guard must be minted on the callback thread, before spawn.
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+        let manager = manager_with_settings(
+            temp_dir.path(),
+            Arc::clone(&storage),
+            RecordingSettings::default(),
+        )
+        .await;
+
+        assert_eq!(manager.inflight_clip_tasks.load(Ordering::SeqCst), 0);
+
+        // Mirror game_monitor's callback: mint the guard, THEN spawn.
+        let guard = manager.begin_clip_task();
+        assert_eq!(
+            manager.inflight_clip_tasks.load(Ordering::SeqCst),
+            1,
+            "the clip task must be counted before `tokio::spawn`, not inside the task"
+        );
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            let _guard = guard;
+            // Spawned but "not yet doing work" until released.
+            rx.await.ok();
+        });
+
+        // The game-end barrier, run right now, must wait for this task.
+        let barrier = tokio::spawn({
+            let m = manager.detached_handle();
+            async move {
+                m.wait_for_inflight_clip_tasks(Duration::from_secs(5)).await;
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            !barrier.is_finished(),
+            "the barrier must still be waiting on the in-flight clip task"
+        );
+
+        tx.send(()).ok();
+        task.await.unwrap();
+        barrier.await.unwrap();
+        assert_eq!(manager.inflight_clip_tasks.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn handle_game_event_releases_its_guard_when_it_returns() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let storage = Arc::new(Storage::new(temp_dir.path()).unwrap());
+
+        let mut settings = RecordingSettings::default();
+        settings.clip_timing.merge_consecutive_events = false;
+        settings.clip_timing.event_timings.insert(
+            "kill".to_string(),
+            crate::settings::models::EventTiming {
+                pre_duration: 5,
+                post_duration: 0,
+            },
+        );
+        let manager = manager_with_settings(temp_dir.path(), Arc::clone(&storage), settings).await;
+
+        let game_id = "g006_hge";
+        seed_game(&storage, game_id);
+        manager.set_current_game(Some(game_id.to_string())).await;
+
+        let guard = manager.begin_clip_task();
+        assert_eq!(manager.inflight_clip_tasks.load(Ordering::SeqCst), 1);
+
+        manager
+            .handle_game_event(
+                EventTrigger::ChampionKill,
+                create_test_event("ChampionKill", 120.0),
+                guard,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            manager.inflight_clip_tasks.load(Ordering::SeqCst),
+            0,
+            "the guard passed to handle_game_event must be released when it returns"
+        );
     }
 }

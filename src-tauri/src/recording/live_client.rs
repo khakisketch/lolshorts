@@ -446,23 +446,39 @@ where
     let raw: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
     let mut events = Vec::with_capacity(raw.len());
     for value in raw {
-        match serde_json::from_value::<GameEvent>(value.clone()) {
+        // `&Value` 자체가 Deserializer 라 clone 불필요.
+        match GameEvent::deserialize(&value) {
             Ok(event) => events.push(event),
             Err(e) => {
                 let name = value
                     .get("EventName")
                     .and_then(|v| v.as_str())
                     .unwrap_or("<unknown>");
-                let id = value.get("EventID").and_then(|v| v.as_u64());
-                warn!(
-                    "Live Client event skipped (EventName={}, EventID={:?}): {} — 나머지 이벤트는 계속 처리",
-                    name, id, e
-                );
+                let id = value.get("EventID").and_then(|v| v.as_i64());
+                // `/eventdata` 는 누적이라 폴링(250ms)마다 같은 깨진 엔트리가 다시
+                // 온다. 매번 warn 하면 한 판 로그가 통째로 묻히므로, 같은
+                // (EventName, EventID) 는 프로세스 수명 동안 한 번만 알린다.
+                let key = format!("{name}#{id:?}");
+                let first_time = WARNED_SKIPPED_EVENTS
+                    .lock()
+                    .map(|mut set| set.insert(key))
+                    .unwrap_or(true);
+                if first_time {
+                    warn!(
+                        "Live Client event skipped (EventName={}, EventID={:?}): {} — 나머지 이벤트는 계속 처리 (이 엔트리는 이후 폴링에서 침묵)",
+                        name, id, e
+                    );
+                }
             }
         }
     }
     Ok(events)
 }
+
+/// `deserialize_lenient_events` 가 이미 경고한 (EventName#EventID) 집합. 누적 피드가
+/// 매 폴링마다 같은 깨진 엔트리를 다시 실어와도 로그를 한 줄로 유지한다.
+static WARNED_SKIPPED_EVENTS: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct GameEvent {
@@ -758,6 +774,80 @@ fn same_player(a: &str, b: &str) -> bool {
         return a_name.eq_ignore_ascii_case(b_name);
     }
     false
+}
+
+/// What kind of Live Client session the current `/allgamedata` snapshot describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionKind {
+    /// A live game the local player is playing.
+    Live,
+    /// A replay or a spectator session (no local control).
+    Replay,
+    /// Not enough data to decide yet — the game is still on the loading screen
+    /// or the very first seconds. The caller must retry, NOT freeze the mode.
+    Loading,
+}
+
+/// Classify a `/allgamedata` snapshot without any network I/O so it can be
+/// unit-tested against real feed shapes.
+///
+/// G005: the loading screen legitimately produces an empty `allPlayers` and
+/// `level == 0` for everyone. Treating either of those as a replay signal froze
+/// slow-loading games into `GameMode::Replay`, and every kill/objective that
+/// game was then dropped as "Replay event ignored". A replay/spectator session
+/// is only asserted on *positive* evidence: a populated roster plus an active
+/// player who is either unnamed/"Spectator" or not one of the participants (or
+/// stuck at level 0 while teammates have already leveled).
+fn classify_session_kind(data: &AllGameData) -> SessionKind {
+    let active = data.active_player.summoner_name.trim();
+    let roster_populated = data
+        .all_players
+        .iter()
+        .any(|p| !p.summoner_name.trim().is_empty());
+
+    // No identity for the local player. Only a *loaded* roster makes this a
+    // replay/spectator session; an empty roster is just an early loading frame.
+    if active.is_empty() || active.eq_ignore_ascii_case("Spectator") {
+        return if roster_populated {
+            SessionKind::Replay
+        } else {
+            SessionKind::Loading
+        };
+    }
+
+    // We have a real active-player name but the roster has not arrived yet —
+    // cannot tell replay from live, so do not commit.
+    if !roster_populated {
+        return SessionKind::Loading;
+    }
+
+    let is_participant = data
+        .all_players
+        .iter()
+        .any(|p| same_player(&p.summoner_name, active));
+
+    // Real name, roster loaded, and we are watching someone who is not us
+    // (or nobody we can match) -> spectator/replay.
+    if !is_participant {
+        return SessionKind::Replay;
+    }
+
+    // We are in the roster. `level == 0` for everyone is the loading screen;
+    // `level == 0` for us while teammates have already leveled is a spectator
+    // camera locked to our seat without control.
+    if data.active_player.level == 0 {
+        let others_leveled = data
+            .all_players
+            .iter()
+            .any(|p| p.level > 0 && !same_player(&p.summoner_name, active));
+        return if others_leveled {
+            SessionKind::Replay
+        } else {
+            SessionKind::Loading
+        };
+    }
+
+    SessionKind::Live
 }
 
 /// Split `Name#TAG` into its parts. Returns `(name, None)` when untagged.
@@ -1658,7 +1748,11 @@ impl LiveClientMonitor {
         let stats = &data.active_player.champion_stats;
         let max_hp = stats.max_health;
         let current_hp = stats.current_health;
-        if max_hp > 0.0 {
+        // `current_hp == 0` 은 아슬아슬 생존이 아니라 **죽음**이다. 캐시가 2초
+        // 주기라 킬 직후 사망 스냅샷(`currentHealth: 0`)을 읽기 쉽고, 그걸
+        // "체력 0%에서 아웃플레이" 로 구우면 자랑거리가 아니다. `highlight_score`
+        // 의 `clutch_multiplier` 가 이미 `ratio <= 0.0` 을 거른다 — 감지도 맞춘다.
+        if max_hp > 0.0 && current_hp > 0.0 {
             let hp_pct = current_hp / max_hp;
             if hp_pct < 0.25 {
                 info!(
@@ -1691,12 +1785,13 @@ impl LiveClientMonitor {
 
     /// Detect if current game session is a replay (not a live game)
     ///
-    /// Detection logic:
-    /// 1. In a live game, the activePlayer matches one of the allPlayers
-    /// 2. In a replay, the activePlayer summoner name is empty or doesn't match any participant
-    /// 3. Additionally, we can check if the game mode or other indicators suggest replay
-    ///
-    /// Returns: Some(true) for replay, Some(false) for live game, None if detection fails
+    /// Returns: Some(true) for replay/spectator, Some(false) for a live game we
+    /// are playing, `None` while the classification is still undetermined (data
+    /// is loading — the caller must retry rather than freeze the mode). See
+    /// [`classify_session_kind`] for the rules. G005: the previous version
+    /// returned `Some(true)` for an empty roster or `level == 0`, both of which
+    /// are normal on the loading screen, so a slow-loading game froze into
+    /// `GameMode::Replay` and had every event discarded.
     pub async fn detect_replay_mode(&self) -> Option<bool> {
         // Fetch game data
         let data = match self.fetch_game_data().await {
@@ -1707,47 +1802,30 @@ impl LiveClientMonitor {
             }
         };
 
-        // Get active player name
-        let active_player_name = &data.active_player.summoner_name;
-
-        // Check 1: Empty or placeholder active player name suggests replay mode
-        if active_player_name.is_empty() || active_player_name == "Spectator" {
-            info!("Replay detected: Active player name is empty or 'Spectator'");
-            return Some(true);
+        match classify_session_kind(&data) {
+            SessionKind::Live => {
+                info!(
+                    "Live game detected: Active player '{}' is a participant",
+                    data.active_player.summoner_name
+                );
+                Some(false)
+            }
+            SessionKind::Replay => {
+                info!(
+                    "Replay/spectator detected for active player '{}'",
+                    data.active_player.summoner_name
+                );
+                Some(true)
+            }
+            SessionKind::Loading => {
+                debug!(
+                    "Replay detection deferred: session data still loading (active='{}', players={})",
+                    data.active_player.summoner_name,
+                    data.all_players.len()
+                );
+                None
+            }
         }
-
-        // Check 2: Active player not in allPlayers list
-        let is_participant = data
-            .all_players
-            .iter()
-            .any(|p| same_player(&p.summoner_name, active_player_name));
-
-        if !is_participant {
-            info!(
-                "Replay detected: Active player '{}' not found in game participants",
-                active_player_name
-            );
-            return Some(true);
-        }
-
-        // Check 3: In spectator mode, activePlayer.level is 0
-        if data.active_player.level == 0 {
-            info!(
-                "Spectator/replay detected: activePlayer.level == 0 for '{}'",
-                active_player_name
-            );
-            return Some(true);
-        }
-
-        // Check 4: In replay mode, currentGold is usually 0 or static
-        // (This is a heuristic - live games have fluctuating gold)
-        // We'll use participant check as primary method
-
-        info!(
-            "Live game detected: Active player '{}' is a participant",
-            active_player_name
-        );
-        Some(false)
     }
 
     /// Task 31: Returns `true` if the current session is a spectator/replay session.
@@ -2886,6 +2964,123 @@ mod riot_id_matching_tests {
     fn split_riot_id_separates_name_and_tag() {
         assert_eq!(split_riot_id("RIVEN1#KR1"), ("RIVEN1", Some("KR1")));
         assert_eq!(split_riot_id("RIVEN1"), ("RIVEN1", None));
+    }
+}
+
+#[cfg(test)]
+mod session_kind_tests {
+    use super::{
+        classify_session_kind, ActivePlayer, AllGameData, Events, GameData, Player, SessionKind,
+    };
+
+    fn player(name: &str, level: u32) -> Player {
+        Player {
+            summoner_name: name.to_string(),
+            champion_name: "Ahri".to_string(),
+            team: "ORDER".to_string(),
+            level,
+            ..Default::default()
+        }
+    }
+
+    fn snapshot(active_name: &str, active_level: u32, roster: Vec<Player>) -> AllGameData {
+        AllGameData {
+            active_player: ActivePlayer {
+                summoner_name: active_name.to_string(),
+                level: active_level,
+                ..Default::default()
+            },
+            all_players: roster,
+            events: Events::default(),
+            game_data: GameData::default(),
+        }
+    }
+
+    #[test]
+    fn empty_roster_is_loading_not_replay() {
+        // G005: the loading screen returns an empty allPlayers. The old logic
+        // (active not in roster -> replay) froze the game into Replay mode.
+        let data = snapshot("Me#KR1", 0, vec![]);
+        assert_eq!(classify_session_kind(&data), SessionKind::Loading);
+    }
+
+    #[test]
+    fn everyone_level_zero_is_loading_not_replay() {
+        // Right after the loading screen nobody has leveled yet.
+        let data = snapshot(
+            "Me#KR1",
+            0,
+            vec![player("Me#KR1", 0), player("Ally", 0), player("Enemy", 0)],
+        );
+        assert_eq!(classify_session_kind(&data), SessionKind::Loading);
+    }
+
+    #[test]
+    fn empty_active_name_with_empty_roster_is_loading() {
+        let data = snapshot("", 0, vec![]);
+        assert_eq!(classify_session_kind(&data), SessionKind::Loading);
+    }
+
+    #[test]
+    fn spectator_active_name_with_loaded_roster_is_replay() {
+        let data = snapshot(
+            "Spectator",
+            5,
+            vec![player("SomePro", 7), player("Rival", 6)],
+        );
+        assert_eq!(classify_session_kind(&data), SessionKind::Replay);
+    }
+
+    #[test]
+    fn empty_active_name_with_loaded_roster_is_replay() {
+        let data = snapshot("", 0, vec![player("SomePro", 7), player("Rival", 6)]);
+        assert_eq!(classify_session_kind(&data), SessionKind::Replay);
+    }
+
+    #[test]
+    fn active_player_not_in_loaded_roster_is_replay() {
+        // Spectating a game we are not part of — roster has real, leveled players.
+        let data = snapshot(
+            "Watcher#KR1",
+            8,
+            vec![player("SomePro#KR1", 9), player("Rival#KR2", 8)],
+        );
+        assert_eq!(classify_session_kind(&data), SessionKind::Replay);
+    }
+
+    #[test]
+    fn our_seat_at_level_zero_while_team_leveled_is_replay() {
+        let data = snapshot(
+            "Me#KR1",
+            0,
+            vec![
+                player("Me#KR1", 0),
+                player("Ally#KR1", 4),
+                player("Enemy#KR2", 5),
+            ],
+        );
+        assert_eq!(classify_session_kind(&data), SessionKind::Replay);
+    }
+
+    #[test]
+    fn participant_with_levels_is_a_live_game() {
+        let data = snapshot(
+            "Me#KR1",
+            3,
+            vec![
+                player("Me#KR1", 3),
+                player("Ally#KR1", 2),
+                player("Enemy#KR2", 4),
+            ],
+        );
+        assert_eq!(classify_session_kind(&data), SessionKind::Live);
+    }
+
+    #[test]
+    fn tag_mismatch_between_active_and_roster_still_matches_participant() {
+        // same_player() is tag-insensitive when exactly one side is tagged.
+        let data = snapshot("Me#KR1", 2, vec![player("Me", 2), player("Enemy", 3)]);
+        assert_eq!(classify_session_kind(&data), SessionKind::Live);
     }
 }
 

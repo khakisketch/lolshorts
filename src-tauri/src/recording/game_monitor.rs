@@ -44,6 +44,53 @@ pub struct UnifiedGameStatus {
     pub session_clip_count: usize,
 }
 
+/// Debounces the game-end edge (G004).
+///
+/// `check_live_client_basic` has a single 2s timeout. One dropped poll returns
+/// `in_game = false`, and the polling loop used to act on it immediately —
+/// aborting the event monitor and running `on_game_end` — so a transient network
+/// blip mid-teamfight tore down an in-progress recording session and lost the
+/// rest of the game. This requires [`Self::THRESHOLD`] consecutive not-in-game
+/// observations before the end transition is confirmed; any single in-game
+/// observation resets the counter.
+///
+/// The START edge is deliberately NOT debounced — detecting a game quickly is
+/// the correct behavior there.
+#[derive(Debug, Default)]
+struct GameEndDebouncer {
+    /// Consecutive "not in game" observations while the last confirmed state was
+    /// "in game".
+    consecutive_absent: u32,
+}
+
+impl GameEndDebouncer {
+    /// Consecutive not-in-game polls required before the game is treated as
+    /// over. With the 1s poll interval this is ~3s of grace.
+    const THRESHOLD: u32 = 3;
+
+    /// Feed one raw observation. `raw_in_game` is what hybrid detection just
+    /// returned; `was_confirmed_in_game` is the last *confirmed* state. Returns
+    /// the confirmed in-game state after this observation.
+    fn observe(&mut self, raw_in_game: bool, was_confirmed_in_game: bool) -> bool {
+        if raw_in_game {
+            self.consecutive_absent = 0;
+            true
+        } else if was_confirmed_in_game {
+            self.consecutive_absent = self.consecutive_absent.saturating_add(1);
+            // Still treated as in-game until the threshold is reached.
+            self.consecutive_absent < Self::THRESHOLD
+        } else {
+            self.consecutive_absent = 0;
+            false
+        }
+    }
+
+    /// Number of consecutive not-in-game observations recorded so far.
+    fn pending(&self) -> u32 {
+        self.consecutive_absent
+    }
+}
+
 /// Game state monitor for automatic recording
 pub struct GameStateMonitor {
     lcu_client: Arc<RwLock<LcuClient>>,
@@ -155,6 +202,9 @@ impl GameStateMonitor {
         // Start monitoring task
         tokio::spawn(async move {
             let mut retry_count = 0;
+            // G004: confirms the game-end edge over several polls so one failed
+            // Live Client probe cannot kill an in-progress recording session.
+            let mut end_debouncer = GameEndDebouncer::default();
             const MAX_RETRIES: u32 = 5;
             const BASE_RETRY_DELAY: Duration = Duration::from_secs(2);
             const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
@@ -260,24 +310,46 @@ impl GameStateMonitor {
                     }
                 };
 
+                let mut last_state = last_game_state_arc.write().await;
+
+                // G004: debounce the game-end edge. A single dropped Live Client
+                // poll returns `in_game = false`; acting on it immediately used
+                // to abort the event monitor and run end-of-game cleanup, losing
+                // the rest of a game on a transient network blip. `confirmed_in_game`
+                // stays true until THRESHOLD consecutive not-in-game polls. The
+                // start edge is unaffected (fast detection is correct there).
+                let confirmed_in_game = end_debouncer.observe(in_game, *last_state);
+                if !in_game && *last_state {
+                    if confirmed_in_game {
+                        debug!(
+                            "Game-end debounce: {}/{} consecutive not-in-game polls (session kept)",
+                            end_debouncer.pending(),
+                            GameEndDebouncer::THRESHOLD
+                        );
+                    } else {
+                        info!(
+                            "Game end confirmed after {} consecutive not-in-game polls",
+                            end_debouncer.pending()
+                        );
+                    }
+                }
+
                 // Update unified status with game info
                 {
                     let mut status = unified_status_arc.write().await;
-                    status.in_game = in_game;
+                    status.in_game = confirmed_in_game;
                     if let Some(ref data) = live_client_data {
                         status.summoner_name = Some(data.summoner_name.clone());
                         status.champion_name = Some(data.champion_name.clone());
                         status.game_time = Some(data.game_time);
-                    } else if !in_game {
+                    } else if !confirmed_in_game {
                         status.summoner_name = None;
                         status.champion_name = None;
                         status.game_time = None;
                     }
                 }
 
-                let mut last_state = last_game_state_arc.write().await;
-
-                if in_game && !*last_state {
+                if confirmed_in_game && !*last_state {
                     // Game started - initialize Live Client Monitor
                     info!("🎮 Game detected! Starting automatic recording...");
 
@@ -406,6 +478,14 @@ impl GameStateMonitor {
 
                                         let auto_clip_manager = Arc::clone(&auto_clip_manager_clone);
                                         let unified_status = Arc::clone(&unified_status_clone);
+                                        // G006: count this event's clip task on the
+                                        // callback thread, BEFORE spawning it, so the
+                                        // game-end barrier (`wait_for_inflight_clip_tasks`)
+                                        // can never observe zero for a task that exists
+                                        // but has not been polled yet — that window
+                                        // dropped the last teamfight before GameEnd.
+                                        // Mirrors the manual path in `start_event_monitoring`.
+                                        let inflight = auto_clip_manager.begin_clip_task();
                                         tokio::spawn(async move {
                                             let mode = current_mode.read().await;
                                             let should_record = match &*mode {
@@ -423,9 +503,17 @@ impl GameStateMonitor {
 
                                             if should_record {
                                                 info!("🎥 Recording event for target");
-                                                if let Err(e) = auto_clip_manager.handle_game_event(trigger, event).await {
+                                                if let Err(e) = auto_clip_manager
+                                                    .handle_game_event(trigger, event, inflight)
+                                                    .await
+                                                {
                                                     error!("Failed to handle game event: {}", e);
                                                 }
+                                            } else {
+                                                // Not recording this event — release the
+                                                // pre-counted guard so the game-end barrier
+                                                // does not wait on a no-op.
+                                                drop(inflight);
                                             }
 
                                             // Keep unified status updated with recording state
@@ -450,8 +538,8 @@ impl GameStateMonitor {
                             warn!("Failed to initialize Live Client Monitor: {}", e);
                         }
                     }
-                } else if !in_game && *last_state {
-                    // Game ended - stop Live Client Monitor
+                } else if !confirmed_in_game && *last_state {
+                    // Game ended (confirmed by the debouncer) - stop Live Client Monitor
                     info!("⏹️ Game ended. Stopping automatic recording...");
 
                     // FIX #1: Abort the spawned monitoring task before game end cleanup
@@ -493,7 +581,9 @@ impl GameStateMonitor {
                     }
                 }
 
-                *last_state = in_game;
+                // Only the *confirmed* state is stored, so `*last_state` never
+                // holds a transient not-in-game reading (G004).
+                *last_state = confirmed_in_game;
                 retry_count = 0;
 
                 // Wait before next check
@@ -562,5 +652,56 @@ mod tests {
     fn live_client_mode_hint_leaves_non_tft_for_replay_detection() {
         assert_eq!(live_client_mode_hint(Some(&live_info("CLASSIC"))), None);
         assert_eq!(live_client_mode_hint(None), None);
+    }
+
+    // ---- G004: game-end debounce ----
+
+    #[test]
+    fn debouncer_keeps_session_through_a_single_dropped_poll() {
+        let mut d = GameEndDebouncer::default();
+        // Detected a game — confirmed in-game.
+        assert!(d.observe(true, false));
+        // One failed Live Client poll: the session MUST be kept.
+        assert!(d.observe(false, true));
+        assert_eq!(d.pending(), 1);
+        // Detection recovers on the next poll — counter clears.
+        assert!(d.observe(true, true));
+        assert_eq!(d.pending(), 0);
+        // A later isolated failure is likewise absorbed.
+        assert!(d.observe(false, true));
+        assert!(d.observe(true, true));
+        assert_eq!(d.pending(), 0);
+    }
+
+    #[test]
+    fn debouncer_confirms_end_after_threshold_consecutive_absences() {
+        let mut d = GameEndDebouncer::default();
+        assert!(d.observe(true, false));
+        assert!(d.observe(false, true)); // 1 — kept
+        assert!(d.observe(false, true)); // 2 — kept
+        assert!(!d.observe(false, true)); // 3 — end confirmed
+        assert_eq!(d.pending(), GameEndDebouncer::THRESHOLD);
+    }
+
+    #[test]
+    fn debouncer_two_absences_then_recovery_never_ends_the_session() {
+        let mut d = GameEndDebouncer::default();
+        assert!(d.observe(true, false));
+        assert!(d.observe(false, true));
+        assert!(d.observe(false, true));
+        // Recovery right before the threshold: still in-game, counter reset.
+        assert!(d.observe(true, true));
+        assert_eq!(d.pending(), 0);
+        // The next absence starts counting from zero again.
+        assert!(d.observe(false, true));
+        assert_eq!(d.pending(), 1);
+    }
+
+    #[test]
+    fn debouncer_is_inert_outside_a_game() {
+        let mut d = GameEndDebouncer::default();
+        assert!(!d.observe(false, false));
+        assert!(!d.observe(false, false));
+        assert_eq!(d.pending(), 0);
     }
 }
