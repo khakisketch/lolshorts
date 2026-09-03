@@ -420,8 +420,48 @@ pub struct Scores {
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Events {
-    #[serde(rename = "Events", default)]
+    #[serde(
+        rename = "Events",
+        default,
+        deserialize_with = "deserialize_lenient_events"
+    )]
     pub events: Vec<GameEvent>,
+}
+
+/// Parse the `/eventdata` feed one event at a time and drop the ones that fail.
+///
+/// The feed is **cumulative** — every poll returns every event since the game
+/// started — so one entry with an unexpected field type (a new event kind Riot
+/// ships mid-season, a bool where a string was expected) used to fail the whole
+/// batch. That failure repeats on every subsequent poll (same bad entry), the
+/// circuit breaker opens, and **that game produces zero event-driven clips**,
+/// with only a `debug!` line to show for it. Skipping the bad entry keeps the
+/// rest of the game's highlights alive; a `warn!` per skip makes it loud.
+fn deserialize_lenient_events<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<GameEvent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+    let mut events = Vec::with_capacity(raw.len());
+    for value in raw {
+        match serde_json::from_value::<GameEvent>(value.clone()) {
+            Ok(event) => events.push(event),
+            Err(e) => {
+                let name = value
+                    .get("EventName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unknown>");
+                let id = value.get("EventID").and_then(|v| v.as_u64());
+                warn!(
+                    "Live Client event skipped (EventName={}, EventID={:?}): {} — 나머지 이벤트는 계속 처리",
+                    name, id, e
+                );
+            }
+        }
+    }
+    Ok(events)
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -2034,16 +2074,32 @@ mod tests {
     /// 테스트가 다루지만, `Result` 가 문자열이 아닌 타입으로 오는 경우는 새 위험이다.
     #[test]
     fn a_non_string_result_does_not_take_down_the_whole_batch() {
-        // 현재 구현은 `Option<String>` 이라 이 페이로드에서 배치가 통째로 실패한다.
-        // 이 테스트는 그 사실을 **기록**한다 — 실제로 이런 페이로드가 관측되면
-        // `serde_json::Value` 로 받아 `as_str()` 하는 관대한 파싱으로 바꿔야 한다.
-        let odd =
-            r#"{"Events":[{"EventID":1,"EventName":"GameEnd","EventTime":1.0,"Result":true}]}"#;
-        let parsed: std::result::Result<Events, _> = serde_json::from_str(odd);
-        assert!(
-            parsed.is_err(),
-            "지금은 실패한다. 이 단언이 깨지면 관대한 파싱이 들어왔다는 뜻이니 주석을 갱신할 것"
-        );
+        // `deserialize_lenient_events` (G002): 필드 타입이 어긋난 이벤트 하나가
+        // 그 판의 나머지 이벤트를 죽이지 않는다. 깨진 것만 스킵되고(로그 경고),
+        // 정상 이벤트는 살아남는다.
+        let mixed = r#"{"Events":[
+            {"EventID":1,"EventName":"ChampionKill","EventTime":100.0,"KillerName":"me#KR1"},
+            {"EventID":2,"EventName":"GameEnd","EventTime":1.0,"Result":true},
+            {"EventID":3,"EventName":"Ace","EventTime":200.0,"Acer":"me#KR1"}
+        ]}"#;
+        let parsed: Events = serde_json::from_str(mixed).expect("배치가 통째로 실패하지 않는다");
+        // 2번(Result 가 bool)만 스킵, 1·3번은 살아남음.
+        assert_eq!(parsed.events.len(), 2);
+        assert_eq!(parsed.events[0].event_id, 1);
+        assert_eq!(parsed.events[1].event_id, 3);
+        assert_eq!(parsed.events[1].acer.as_deref(), Some("me#KR1"));
+    }
+
+    /// 완전히 깨진(객체가 아닌) 엔트리도 배치를 죽이지 않는다.
+    #[test]
+    fn a_garbage_event_entry_is_skipped_not_fatal() {
+        let mixed = r#"{"Events":[
+            "not an object",
+            {"EventID":7,"EventName":"TurretKilled","EventTime":300.0,"KillerName":"me#KR1"}
+        ]}"#;
+        let parsed: Events = serde_json::from_str(mixed).expect("깨진 엔트리는 스킵");
+        assert_eq!(parsed.events.len(), 1);
+        assert_eq!(parsed.events[0].event_id, 7);
     }
 
     #[tokio::test]
