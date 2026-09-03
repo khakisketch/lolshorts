@@ -15,7 +15,17 @@ import { logger } from "@/lib/logger";
 type Resolution = "r1920x1080" | "r2560x1440" | "r3840x2160";
 type FrameRate = "fps30" | "fps60" | "fps120" | "fps144";
 type BitratePreset = "low" | "medium" | "high" | "very_high";
+// The backend enum still carries `Av1`, but it has no runtime encoder mapping
+// (it silently records H.264), so it is not offered in the UI. `codec` may still
+// arrive as "av1" from settings saved by an older build — that is normalized to
+// the safe default before display.
 type VideoCodec = "h264" | "h265" | "av1";
+type SelectableCodec = "h264" | "h265";
+const SELECTABLE_CODECS: readonly SelectableCodec[] = ["h264", "h265"];
+
+const normalizeCodec = (codec: VideoCodec): SelectableCodec =>
+  codec === "h265" ? "h265" : "h264";
+
 type EncoderPreference = "auto" | "nvenc" | "qsv" | "amf" | "software";
 
 interface VideoSettings {
@@ -84,6 +94,19 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
     onChange({ ...settings, [key]: value });
   };
 
+  const selectedCodec = normalizeCodec(settings.codec);
+
+  // Heal settings persisted by an older build that stored the now-removed "av1"
+  // codec — it has no encoder mapping and silently falls back to H.264, so make
+  // that explicit rather than leaving a phantom value in the saved settings.
+  useEffect(() => {
+    if (!SELECTABLE_CODECS.includes(settings.codec as SelectableCodec)) {
+      onChange({ ...settings, codec: selectedCodec });
+    }
+    // Only react to a change in the stored codec value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.codec]);
+
   const getResolutionLabel = (res: Resolution): string => {
     const labels: Record<Resolution, string> = {
       r1920x1080: t(
@@ -129,11 +152,10 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
     return labels[bitrate];
   };
 
-  const getCodecLabel = (codec: VideoCodec): string => {
-    const labels: Record<VideoCodec, string> = {
+  const getCodecLabel = (codec: SelectableCodec): string => {
+    const labels: Record<SelectableCodec, string> = {
       h264: t("settings.recordingConfig.videoSettings.videoCodec.labels.h264"),
       h265: t("settings.recordingConfig.videoSettings.videoCodec.labels.h265"),
-      av1: t("settings.recordingConfig.videoSettings.videoCodec.labels.av1"),
     };
     return labels[codec];
   };
@@ -369,22 +391,21 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
           <div className="flex items-center gap-4">
             <div className="flex-1">
               <Select
-                value={settings.codec}
+                value={selectedCodec}
                 onValueChange={(value) =>
                   updateSetting("codec", value as VideoCodec)
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger data-testid="advanced-codec">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="h264">{getCodecLabel("h264")}</SelectItem>
                   <SelectItem value="h265">{getCodecLabel("h265")}</SelectItem>
-                  <SelectItem value="av1">{getCodecLabel("av1")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {settings.codec === "h265" && (
+            {selectedCodec === "h265" && (
               <Badge variant="secondary">
                 {t(
                   "settings.recordingConfig.videoSettings.videoCodec.recommended",
@@ -392,6 +413,16 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
               </Badge>
             )}
           </div>
+          {selectedCodec === "h265" && (
+            <div className="flex items-start gap-2 mt-3 text-xs text-muted-foreground">
+              <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <span style={{ wordBreak: "keep-all" }}>
+                {t(
+                  "settings.recordingConfig.videoSettings.videoCodec.h265PreviewWarning",
+                )}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -536,7 +567,7 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
               {t(
                 "settings.recordingConfig.videoSettings.currentConfiguration.codec",
               )}
-              : {getCodecLabel(settings.codec)}
+              : {getCodecLabel(selectedCodec)}
             </p>
             <p className="text-muted-foreground">
               •{" "}

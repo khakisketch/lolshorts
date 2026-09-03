@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   ArrowDown,
@@ -30,6 +30,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { AutoEditOutputIntent, AutoEditPlanClip } from "@/types/autoEdit";
 import { formatDuration } from "@/lib/utils";
+import {
+  VideoPreviewError,
+  useVideoPreviewError,
+} from "@/components/video/VideoPreviewError";
 
 interface AutoEditStoryboardProps {
   clips: AutoEditPlanClip[];
@@ -68,6 +72,23 @@ export function AutoEditStoryboard({
   const [activePath, setActivePath] = useState<string | null>(
     clips[0]?.file_path ?? null,
   );
+  const previewRef = useRef<HTMLVideoElement>(null);
+  const {
+    hasError: previewFailed,
+    handleError: handlePreviewError,
+    clearError: clearPreviewError,
+  } = useVideoPreviewError();
+
+  // A newly selected clip should get a clean preview, not the previous clip's
+  // error overlay.
+  useEffect(() => {
+    clearPreviewError();
+  }, [activePath, clearPreviewError]);
+
+  const handlePreviewRetry = useCallback(() => {
+    clearPreviewError();
+    previewRef.current?.load();
+  }, [clearPreviewError]);
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -222,14 +243,24 @@ export function AutoEditStoryboard({
           {Math.max(1, Math.round(estimatedBytes / 1024 / 1024))} MB
         </p>
         {activePath && (
-          // Source gameplay clips have no authored caption track at review time.
-          // eslint-disable-next-line jsx-a11y/media-has-caption
-          <video
-            src={convertFileSrc(activePath)}
-            className="mx-auto max-h-[48vh] w-full bg-black object-contain"
-            controls
-            preload="metadata"
-          />
+          <div className="relative">
+            {/* Source gameplay clips have no authored caption track at review time. */}
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+            <video
+              ref={previewRef}
+              src={convertFileSrc(activePath)}
+              className="mx-auto max-h-[48vh] w-full bg-black object-contain"
+              controls
+              preload="metadata"
+              onError={handlePreviewError}
+            />
+            {previewFailed && (
+              <VideoPreviewError
+                filePath={activePath}
+                onRetry={handlePreviewRetry}
+              />
+            )}
+          </div>
         )}
       </div>
 
@@ -264,17 +295,10 @@ export function AutoEditStoryboard({
                   className="aspect-video w-full rounded-md bg-black"
                   onClick={() => setActivePath(clip.file_path)}
                 >
-                  {clip.thumbnail_path ? (
-                    <img
-                      src={convertFileSrc(clip.thumbnail_path)}
-                      alt=""
-                      className="h-full w-full object-contain"
-                    />
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      {t("results.play")}
-                    </span>
-                  )}
+                  <StoryboardThumbnail
+                    path={clip.thumbnail_path}
+                    fallbackLabel={t("results.play")}
+                  />
                 </button>
                 <div className="min-w-0 space-y-3">
                   <div className="flex items-start justify-between gap-3">
@@ -455,6 +479,35 @@ export function AutoEditStoryboard({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Storyboard thumbnail with a placeholder fallback — a broken or out-of-scope
+ * thumbnail path otherwise renders as a blank tile with no cue.
+ */
+function StoryboardThumbnail({
+  path,
+  fallbackLabel,
+}: {
+  path: string | null | undefined;
+  fallbackLabel: string;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  if (!path || failed) {
+    return (
+      <span className="text-xs text-muted-foreground">{fallbackLabel}</span>
+    );
+  }
+
+  return (
+    <img
+      src={convertFileSrc(path)}
+      alt=""
+      className="h-full w-full object-contain"
+      onError={() => setFailed(true)}
+    />
   );
 }
 

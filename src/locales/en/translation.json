@@ -1425,7 +1425,8 @@
             "h265": "H.265 (Best Efficiency)",
             "av1": "AV1 (Experimental)"
           },
-          "recommended": "Recommended"
+          "recommended": "Recommended",
+          "h265PreviewWarning": "Clips recorded with this codec may not preview inside the app."
         },
         "encoderPreference": {
           "title": "Encoder Preference",
@@ -1597,6 +1598,7 @@
     "deselectAll": "Deselect All",
     "clear": "Clear",
     "continue": "Continue",
+    "retry": "Retry",
     "redirectToPayment": "You'll be redirected to Toss Payments to complete your purchase securely",
     "menu": "Menu",
     "closeMobileMenu": "Close mobile menu",
@@ -2149,7 +2151,9 @@
     "errors": {
       "playbackFailed": "Playback failed",
       "loadFailed": "Failed to load video",
-      "loadFailedDesc": "The video file could not be loaded. It may be corrupted or in an unsupported format."
+      "loadFailedDesc": "The video file could not be loaded. It may be corrupted or in an unsupported format.",
+      "previewUnavailable": "This clip can't be previewed in the app — the file is missing or its codec (H.265) isn't supported.",
+      "openInSystemPlayer": "Open file"
     }
   },
   "support": {

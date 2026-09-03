@@ -1057,6 +1057,7 @@ export function ClipVault({
             {activeClip ? (
               <VideoPlayer
                 src={convertFileSrc(activeClip.path)}
+                filePath={activeClip.path}
                 title={t(
                   clipLabel(activeClip.clip).title.key,
                   clipLabel(activeClip.clip).title.params,

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { useAutoEditResults } from "@/hooks/useAutoEditResults";
@@ -43,6 +43,10 @@ import { useEditorStore } from "@/stores/editorStore";
 import { ShareDialog } from "./ShareDialog";
 import { storageApi } from "@/api/storage";
 import { videoApi } from "@/api/video";
+import {
+  VideoPreviewError,
+  useVideoPreviewError,
+} from "@/components/video/VideoPreviewError";
 
 export function ResultsViewer() {
   const { t } = useTranslation();
@@ -410,30 +414,11 @@ export function ResultsViewer() {
       )}
 
       {activePlayer && (
-        <div
-          className="gaming-panel mx-auto w-full max-w-3xl space-y-3 p-4"
-          data-testid="active-result-player"
-        >
-          {/* Generated gameplay has no authored caption track. */}
-          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-          <video
-            key={activePlayer.result_id}
-            controls
-            preload="metadata"
-            className="max-h-[60vh] w-full bg-black object-contain"
-            src={convertFileSrc(activePlayer.output_path)}
-          />
-          <div className="flex justify-between gap-2 text-sm">
-            <span className="truncate">{activePlayer.output_path}</span>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setActivePlayer(null)}
-            >
-              {t("common.close")}
-            </Button>
-          </div>
-        </div>
+        <HighlightPlayer
+          key={activePlayer.result_id}
+          result={activePlayer}
+          onClose={() => setActivePlayer(null)}
+        />
       )}
 
       {results.length > 0 && (
@@ -487,10 +472,9 @@ export function ResultsViewer() {
                       onClick={() => handlePlay(result)}
                     >
                       {result.thumbnail_path ? (
-                        <img
-                          src={convertFileSrc(result.thumbnail_path)}
+                        <ResultThumbnail
+                          path={result.thumbnail_path}
                           alt={t("results.thumbnailAlt")}
-                          className="absolute inset-0 h-full w-full object-contain"
                         />
                       ) : (
                         <span className="absolute inset-0 flex items-center justify-center">
@@ -611,5 +595,81 @@ export function ResultsViewer() {
         resultId={shareTarget?.result_id}
       />
     </div>
+  );
+}
+
+/**
+ * Finished-short player. H.265 output and out-of-scope files load as a black
+ * frame with working controls, so the `<video>` carries an `onError` overlay
+ * that names the failure and offers retry / open-in-system-player.
+ */
+function HighlightPlayer({
+  result,
+  onClose,
+}: {
+  result: AutoEditResultMetadata;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const { hasError, handleError, clearError } = useVideoPreviewError();
+
+  const handleRetry = useCallback(() => {
+    clearError();
+    videoRef.current?.load();
+  }, [clearError]);
+
+  return (
+    <div
+      className="gaming-panel mx-auto w-full max-w-3xl space-y-3 p-4"
+      data-testid="active-result-player"
+    >
+      <div className="relative">
+        {/* Generated gameplay has no authored caption track. */}
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+        <video
+          ref={videoRef}
+          controls
+          preload="metadata"
+          className="max-h-[60vh] w-full bg-black object-contain"
+          src={convertFileSrc(result.output_path)}
+          onError={handleError}
+        />
+        {hasError && (
+          <VideoPreviewError
+            filePath={result.output_path}
+            onRetry={handleRetry}
+          />
+        )}
+      </div>
+      <div className="flex justify-between gap-2 text-sm">
+        <span className="truncate">{result.output_path}</span>
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          {t("common.close")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Thumbnail that falls back to a placeholder icon when the image fails to load. */
+function ResultThumbnail({ path, alt }: { path: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <span className="absolute inset-0 flex items-center justify-center">
+        <Film className="h-10 w-10 text-muted-foreground" />
+      </span>
+    );
+  }
+
+  return (
+    <img
+      src={convertFileSrc(path)}
+      alt={alt}
+      className="absolute inset-0 h-full w-full object-contain"
+      onError={() => setFailed(true)}
+    />
   );
 }

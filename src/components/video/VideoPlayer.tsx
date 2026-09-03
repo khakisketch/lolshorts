@@ -22,6 +22,10 @@ import {
 import { toast } from "@/components/ui/use-toast";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/utils";
+import {
+  VideoPreviewError,
+  useVideoPreviewError,
+} from "@/components/video/VideoPreviewError";
 
 interface VideoPlayerProps {
   src: string;
@@ -29,6 +33,11 @@ interface VideoPlayerProps {
   autoPlay?: boolean;
   onClose?: () => void;
   className?: string;
+  /**
+   * Absolute path to the clip on disk (before `convertFileSrc`). Enables the
+   * "open file" affordance on the load-error overlay.
+   */
+  filePath?: string | null;
 }
 
 export function VideoPlayer({
@@ -37,6 +46,7 @@ export function VideoPlayer({
   autoPlay = false,
   onClose,
   className = "",
+  filePath,
 }: VideoPlayerProps) {
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -50,6 +60,11 @@ export function VideoPlayer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const {
+    hasError,
+    handleError: markError,
+    clearError,
+  } = useVideoPreviewError();
 
   // Format time helper
   const formatTime = useCallback((seconds: number): string => {
@@ -162,6 +177,7 @@ export function VideoPlayer({
 
     const handleError = () => {
       setIsLoading(false);
+      markError();
       toast({
         title: t("video.errors.loadFailed"),
         description: t("video.errors.loadFailedDesc"),
@@ -180,7 +196,20 @@ export function VideoPlayer({
       video.removeEventListener("ended", handleEnded);
       video.removeEventListener("error", handleError);
     };
-  }, [t]);
+  }, [t, markError]);
+
+  // A new source starts from a clean slate — drop any prior error overlay and
+  // show the loading state again.
+  useEffect(() => {
+    setIsLoading(true);
+    clearError();
+  }, [src, clearError]);
+
+  const handleRetry = useCallback(() => {
+    clearError();
+    setIsLoading(true);
+    videoRef.current?.load();
+  }, [clearError]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -293,8 +322,13 @@ export function VideoPlayer({
         <track kind="captions" label="No captions available" />
       </video>
 
+      {/* Load-error Overlay */}
+      {hasError && (
+        <VideoPreviewError filePath={filePath} onRetry={handleRetry} />
+      )}
+
       {/* Loading Overlay */}
-      {isLoading && (
+      {isLoading && !hasError && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
           <div className="text-white text-center">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto mb-2" />

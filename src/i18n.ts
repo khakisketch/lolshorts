@@ -13,7 +13,14 @@ import { LazyBackend } from "./i18n/lazyBackend";
  * - Bundle optimization: Vite creates separate chunks for each language
  */
 
-// Language configuration
+/**
+ * Language configuration.
+ *
+ * The picker is deliberately limited to Korean and English (product decision
+ * 2026-09-03, spec R001/G013). The other `src/locales/*` bundles are kept on
+ * disk as an English fallback but are not user-selectable; anyone previously on
+ * one of those locales falls back to "en".
+ */
 export const languages = [
   {
     code: "en",
@@ -29,126 +36,6 @@ export const languages = [
     flag: "🇰🇷",
     regions: ["KR"],
   },
-  {
-    code: "ja",
-    name: "Japanese",
-    nativeName: "日本語",
-    flag: "🇯🇵",
-    regions: ["JP"],
-  },
-  {
-    code: "zh-CN",
-    name: "Simplified Chinese",
-    nativeName: "简体中文",
-    flag: "🇨🇳",
-    regions: ["CN"],
-  },
-  {
-    code: "zh-TW",
-    name: "Traditional Chinese",
-    nativeName: "繁體中文",
-    flag: "🇹🇼",
-    regions: ["TW", "HK", "MO"],
-  },
-  {
-    code: "de",
-    name: "German",
-    nativeName: "Deutsch",
-    flag: "🇩🇪",
-    regions: ["EUW"],
-  },
-  {
-    code: "fr",
-    name: "French",
-    nativeName: "Français",
-    flag: "🇫🇷",
-    regions: ["EUW"],
-  },
-  {
-    code: "es",
-    name: "Spanish",
-    nativeName: "Español",
-    flag: "🇪🇸",
-    regions: ["EUW", "LAN", "LAS"],
-  },
-  {
-    code: "it",
-    name: "Italian",
-    nativeName: "Italiano",
-    flag: "🇮🇹",
-    regions: ["EUW"],
-  },
-  {
-    code: "pt-BR",
-    name: "Portuguese (Brazil)",
-    nativeName: "Português (Brasil)",
-    flag: "🇧🇷",
-    regions: ["BR"],
-  },
-  {
-    code: "pl",
-    name: "Polish",
-    nativeName: "Polski",
-    flag: "🇵🇱",
-    regions: ["EUNE"],
-  },
-  {
-    code: "tr",
-    name: "Turkish",
-    nativeName: "Türkçe",
-    flag: "🇹🇷",
-    regions: ["TR"],
-  },
-  {
-    code: "ru",
-    name: "Russian",
-    nativeName: "Русский",
-    flag: "🇷🇺",
-    regions: ["RU"],
-  },
-  {
-    code: "cs",
-    name: "Czech",
-    nativeName: "Čeština",
-    flag: "🇨🇿",
-    regions: ["EUNE"],
-  },
-  {
-    code: "el",
-    name: "Greek",
-    nativeName: "Ελληνικά",
-    flag: "🇬🇷",
-    regions: ["EUNE"],
-  },
-  {
-    code: "hu",
-    name: "Hungarian",
-    nativeName: "Magyar",
-    flag: "🇭🇺",
-    regions: ["EUNE"],
-  },
-  {
-    code: "ro",
-    name: "Romanian",
-    nativeName: "Română",
-    flag: "🇷🇴",
-    regions: ["EUNE"],
-  },
-  {
-    code: "vi",
-    name: "Vietnamese",
-    nativeName: "Tiếng Việt",
-    flag: "🇻🇳",
-    regions: ["VN"],
-  },
-  { code: "th", name: "Thai", nativeName: "ไทย", flag: "🇹🇭", regions: ["TH"] },
-  {
-    code: "fil",
-    name: "Filipino",
-    nativeName: "Filipino",
-    flag: "🇵🇭",
-    regions: ["PH"],
-  },
 ];
 
 i18n
@@ -160,29 +47,10 @@ i18n
     fallbackLng: "en", // Default language
     debug: false,
 
-    // Supported languages (used by LanguageDetector)
-    supportedLngs: [
-      "en",
-      "ko",
-      "ja",
-      "zh-CN",
-      "zh-TW",
-      "de",
-      "fr",
-      "es",
-      "it",
-      "pt-BR",
-      "pl",
-      "tr",
-      "ru",
-      "cs",
-      "el",
-      "hu",
-      "ro",
-      "vi",
-      "th",
-      "fil",
-    ],
+    // Supported languages (used by LanguageDetector). Restricted to ko/en so a
+    // detected browser locale like "ja" resolves to the "en" fallback instead of
+    // selecting an unlisted bundle.
+    supportedLngs: ["en", "ko"],
 
     // Only load 'translation' namespace
     ns: ["translation"],

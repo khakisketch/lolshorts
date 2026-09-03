@@ -1475,7 +1475,8 @@
             "h265": "H.265 (최고 효율성)",
             "av1": "AV1 (실험적)"
           },
-          "recommended": "권장"
+          "recommended": "권장",
+          "h265PreviewWarning": "이 코덱으로 녹화한 클립은 앱 내 미리보기가 안 될 수 있습니다."
         },
         "encoderPreference": {
           "title": "인코더 선호도",
@@ -1647,6 +1648,7 @@
     "deselectAll": "모두 선택 해제",
     "clear": "지우기",
     "continue": "계속",
+    "retry": "다시 시도",
     "redirectToPayment": "토스 페이먼츠로 이동하여 안전하게 결제를 완료합니다",
     "menu": "메뉴",
     "closeMobileMenu": "모바일 메뉴 닫기",
@@ -2199,7 +2201,9 @@
     "errors": {
       "playbackFailed": "재생 실패",
       "loadFailed": "비디오 로드 실패",
-      "loadFailedDesc": "비디오 파일을 로드할 수 없습니다. 파일이 손상되었거나 지원되지 않는 형식일 수 있습니다."
+      "loadFailedDesc": "비디오 파일을 로드할 수 없습니다. 파일이 손상되었거나 지원되지 않는 형식일 수 있습니다.",
+      "previewUnavailable": "이 클립은 앱에서 미리볼 수 없습니다 — 파일이 없거나 코덱(H.265)을 지원하지 않습니다.",
+      "openInSystemPlayer": "파일 열기"
     }
   },
   "clip": {
