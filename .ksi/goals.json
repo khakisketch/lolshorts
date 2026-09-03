@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "inconnu",
-  "updated_at": "2026-09-03T16:15:49+09:00",
+  "updated_at": "2026-09-03T18:13:07+09:00",
   "goals": [
     {
       "id": "G001",
@@ -126,14 +126,14 @@
       ],
       "status": "in_progress",
       "attempt": 1,
-      "evidence": null,
+      "evidence": "commit 3f8c537: VideoPreviewError 오버레이 4곳 + 썸네일 img onError. jest 490. reviewer 배치 대기",
       "verdict": null,
       "invalidation_reason": null,
       "parent": null,
       "blocked_by": null,
-      "ungated_attempts": 0,
+      "ungated_attempts": 1,
       "created_at": "2026-09-03T15:37:11+09:00",
-      "updated_at": "2026-09-03T16:11:30+09:00"
+      "updated_at": "2026-09-03T18:13:06+09:00"
     },
     {
       "id": "G008",
@@ -144,14 +144,14 @@
       ],
       "status": "in_progress",
       "attempt": 1,
-      "evidence": null,
+      "evidence": "commit 3f8c537: AV1 UI 제거 + normalizeCodec 치유 + H.265 경고. reviewer 배치 대기",
       "verdict": null,
       "invalidation_reason": null,
       "parent": null,
       "blocked_by": null,
-      "ungated_attempts": 0,
+      "ungated_attempts": 1,
       "created_at": "2026-09-03T15:37:12+09:00",
-      "updated_at": "2026-09-03T16:11:31+09:00"
+      "updated_at": "2026-09-03T18:13:06+09:00"
     },
     {
       "id": "G009",
@@ -217,14 +217,14 @@
       ],
       "status": "in_progress",
       "attempt": 1,
-      "evidence": null,
+      "evidence": "commit 98d848e: apply_match_point_bonus 추출 + backfill_match_point(GameEnd) + outcome 테스트(50→60). clippy 0, 745 tests. reviewer 배치 대기",
       "verdict": null,
       "invalidation_reason": null,
       "parent": null,
       "blocked_by": null,
-      "ungated_attempts": 0,
+      "ungated_attempts": 1,
       "created_at": "2026-09-03T15:37:13+09:00",
-      "updated_at": "2026-09-03T16:11:32+09:00"
+      "updated_at": "2026-09-03T18:13:05+09:00"
     },
     {
       "id": "G013",
@@ -236,14 +236,14 @@
       ],
       "status": "in_progress",
       "attempt": 1,
-      "evidence": null,
+      "evidence": "commit 3f8c537: languages+supportedLngs ko/en, languageOptions.test. reviewer 배치 대기",
       "verdict": null,
       "invalidation_reason": null,
       "parent": null,
       "blocked_by": null,
-      "ungated_attempts": 0,
+      "ungated_attempts": 1,
       "created_at": "2026-09-03T15:49:55+09:00",
-      "updated_at": "2026-09-03T16:11:33+09:00"
+      "updated_at": "2026-09-03T18:13:07+09:00"
     }
   ],
   "risks": [

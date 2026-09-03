@@ -31,3 +31,7 @@
 {"ts": "2026-09-03T16:11:33+09:00", "event": "completion_attempt", "goal": "G001", "evidence": "commit 213a619: active_player.champion_stats + 픽스처 교정 + 회귀테스트. clippy 0, live_client 36 tests. reviewer 배치 검증 대기"}
 {"ts": "2026-09-03T16:11:34+09:00", "event": "completion_attempt", "goal": "G003", "evidence": "commit 213a619: acer.or(killer_name) + make_named_event 필드 라우팅 + 회귀테스트. reviewer 배치 검증 대기"}
 {"ts": "2026-09-03T16:15:49+09:00", "event": "completion_attempt", "goal": "G002", "evidence": "commit: deserialize_lenient_events, 741 tests pass. reviewer 배치 검증 대기"}
+{"ts": "2026-09-03T18:13:05+09:00", "event": "completion_attempt", "goal": "G012", "evidence": "commit 98d848e: apply_match_point_bonus 추출 + backfill_match_point(GameEnd) + outcome 테스트(50→60). clippy 0, 745 tests. reviewer 배치 대기"}
+{"ts": "2026-09-03T18:13:06+09:00", "event": "completion_attempt", "goal": "G007", "evidence": "commit 3f8c537: VideoPreviewError 오버레이 4곳 + 썸네일 img onError. jest 490. reviewer 배치 대기"}
+{"ts": "2026-09-03T18:13:06+09:00", "event": "completion_attempt", "goal": "G008", "evidence": "commit 3f8c537: AV1 UI 제거 + normalizeCodec 치유 + H.265 경고. reviewer 배치 대기"}
+{"ts": "2026-09-03T18:13:07+09:00", "event": "completion_attempt", "goal": "G013", "evidence": "commit 3f8c537: languages+supportedLngs ko/en, languageOptions.test. reviewer 배치 대기"}
