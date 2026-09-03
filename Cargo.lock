@@ -2871,7 +2871,7 @@ dependencies = [
  "mp4",
  "num_cpus",
  "oauth2",
- "objc2 0.5.2",
+ "objc2 0.6.4",
  "once_cell",
  "parking_lot",
  "rand 0.8.6",
