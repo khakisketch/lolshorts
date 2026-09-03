@@ -1,0 +1,16 @@
+{"ts": "2026-09-03T15:36:21+09:00", "event": "init", "project": "inconnu"}
+{"ts": "2026-09-03T15:36:44+09:00", "event": "registered", "goal": "G001", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:36:44+09:00", "event": "registered", "goal": "G002", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:36:45+09:00", "event": "registered", "goal": "G003", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:36:45+09:00", "event": "registered", "goal": "G004", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:36:46+09:00", "event": "registered", "goal": "G005", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:36:46+09:00", "event": "registered", "goal": "G006", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:37:11+09:00", "event": "registered", "goal": "G007", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:37:12+09:00", "event": "registered", "goal": "G008", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:37:12+09:00", "event": "registered", "goal": "G009", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:37:12+09:00", "event": "registered", "goal": "G010", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:37:13+09:00", "event": "registered", "goal": "G011", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:37:13+09:00", "event": "registered", "goal": "G012", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:37:28+09:00", "event": "risk_add", "goal": "R001", "lens": "other", "severity": "medium"}
+{"ts": "2026-09-03T15:37:28+09:00", "event": "risk_add", "goal": "R002", "lens": "time-axis", "severity": "low"}
+{"ts": "2026-09-03T15:37:28+09:00", "event": "risk_add", "goal": "R003", "lens": "other", "severity": "medium"}

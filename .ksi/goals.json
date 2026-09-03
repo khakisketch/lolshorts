@@ -1,0 +1,274 @@
+{
+  "version": 1,
+  "project": "inconnu",
+  "updated_at": "2026-09-03T15:37:28+09:00",
+  "goals": [
+    {
+      "id": "G001",
+      "title": "check_low_hp_outplay가 죽은 allPlayers[].championStats에서 체력을 읽어 LowHpOutplay 트리거가 프로덕션에서 절대 발화 안 함",
+      "completion_criteria": [
+        "active_player.champion_stats에서 읽도록 수정",
+        "allPlayers는 activePlayer일 때만 유효함을 픽스처 테스트로 고정",
+        "실게임 로그에 'Low HP outplay detected' 출현 확인(E5)"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:36:44+09:00",
+      "updated_at": "2026-09-03T15:36:44+09:00"
+    },
+    {
+      "id": "G002",
+      "title": "fetch_event_list 전체 배치 파싱 — 이벤트 하나가 예상 밖 타입이면 그 판 전체 이벤트 클립 0개, 조용히",
+      "completion_criteria": [
+        "Events 배열을 per-event 관대한 파싱(Value→filter_map)으로 전환",
+        "알 수 없는/깨진 이벤트는 warn 후 스킵하고 나머지는 처리",
+        "a_non_string_result_does_not_take_down_the_whole_batch 테스트를 '이제 통과'로 갱신"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:36:44+09:00",
+      "updated_at": "2026-09-03T15:36:44+09:00"
+    },
+    {
+      "id": "G003",
+      "title": "Ace 트리거가 event.killer_name을 읽음 — 실제 payload는 Acer 필드라 항상 None, last-kill-team 휴리스틱으로 폴백해 엉뚱한 팀 에이스 클립",
+      "completion_criteria": [
+        "event.acer.or(killer_name) 우선순위로 수정",
+        "make_named_event 픽스처를 실제 피드 shape(Acer 키)로 교정",
+        "recent_kills 폴백은 유지하되 2차로"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:36:45+09:00",
+      "updated_at": "2026-09-03T15:36:45+09:00"
+    },
+    {
+      "id": "G004",
+      "title": "게임 종료 에지 감지에 디바운스 없음 — 폴링 1회 실패로 게임 중 녹화가 통째로 중단",
+      "completion_criteria": [
+        "연속 N회(예: 3) in_game=false 확인 후에만 on_game_end",
+        "check_live_client_basic 단일 타임아웃 실패가 종료를 유발하지 않음",
+        "재연결 시 세션 유지 E5 확인"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:36:45+09:00",
+      "updated_at": "2026-09-03T15:36:45+09:00"
+    },
+    {
+      "id": "G005",
+      "title": "게임 로딩 중 detect_replay_mode 오분류 → GameMode::Replay로 굳어 그 판 모든 이벤트 무시, 클립 0개",
+      "completion_criteria": [
+        "로딩 상태(allPlayers 비었거나 level 0)를 리플레이와 구분",
+        "게임 모드를 시작 후 재평가하거나 리플레이 판정을 지연",
+        "is_spectating 조기 종료 가드 완화"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:36:46+09:00",
+      "updated_at": "2026-09-03T15:36:46+09:00"
+    },
+    {
+      "id": "G006",
+      "title": "자동 감지 경로가 tokio::spawn 전에 in-flight 카운트를 안 올림 — GameEnd 직전 한타(최고가치) 클립 유실 레이스",
+      "completion_criteria": [
+        "game_monitor가 spawn 전에 InflightGuard 생성(수동 경로처럼)",
+        "wait_for_inflight_clip_tasks가 spawn된 태스크를 놓치지 않음",
+        "종료 직전 이벤트 저장 성공 E5 확인"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:36:46+09:00",
+      "updated_at": "2026-09-03T15:36:46+09:00"
+    },
+    {
+      "id": "G007",
+      "title": "editor/results/storyboard의 <video>에 onError 없음 — H.265 클립이나 누락 파일이 검은 화면+무피드백 (H.265가 선택가능 'recommended'라 실사용 시 발현)",
+      "completion_criteria": [
+        "VideoPreview/ResultsViewer/AutoEditStoryboard/ClipVault 프리뷰 video에 onError 핸들러+사용자 메시지",
+        "H.265 미리보기 불가를 코덱 선택 컨트롤에 경고 표시"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:37:11+09:00",
+      "updated_at": "2026-09-03T15:37:11+09:00"
+    },
+    {
+      "id": "G008",
+      "title": "설정 코덱 'AV1'이 가짜 스위치 — 런타임 매핑이 is_h265()만 봐서 AV1 선택 시 조용히 H.264 녹화",
+      "completion_criteria": [
+        "AV1을 UI에서 제거하거나 실제 av1_nvenc/av1_qsv 경로 배선",
+        "매핑되지 않는 코덱 선택 불가"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:37:12+09:00",
+      "updated_at": "2026-09-03T15:37:12+09:00"
+    },
+    {
+      "id": "G009",
+      "title": "temp_dir 폴백 경로(권한 실패 시 recordings/storage)가 assetProtocol.scope 밖 — 폴백 활성 시 모든 썸네일/프리뷰 검은 화면",
+      "completion_criteria": [
+        "폴백 디렉터리를 scope에 포함하거나, 폴백 활성 시 사용자에게 명시 경고+복구 동선",
+        "convertFileSrc 실패 감지"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:37:12+09:00",
+      "updated_at": "2026-09-03T15:37:12+09:00"
+    },
+    {
+      "id": "G010",
+      "title": "YouTube: refresh/rotate된 토큰이 키링에 재영속화 안 됨 — Google이 refresh token 회전 시 조용히 재로그인 강제",
+      "completion_criteria": [
+        "get_valid_token/refresh_token 성공 직후 save_credentials_for_user 호출",
+        "refresh 실패(invalid_grant) 시 자격증명 정리+auth status 반영"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:37:12+09:00",
+      "updated_at": "2026-09-03T15:37:12+09:00"
+    },
+    {
+      "id": "G011",
+      "title": "OBS-01/02: 개인정보 안전 진단 + E5 측정 export — 실게임 1판이 최대 데이터를 내도록",
+      "completion_criteria": [
+        "세션별 capture_backend/mode·FPS·drop·bitrate·메모리·저장지연·에러코드만 수집(경로·토큰·영상명 redaction)",
+        "게임 종료 시 redacted 번들+성능 CSV/JSON 원클릭 export"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:37:13+09:00",
+      "updated_at": "2026-09-03T15:37:13+09:00"
+    },
+    {
+      "id": "G012",
+      "title": "secs_before_game_end(MatchPoint 배수)가 프로덕션에서 절대 채워지지 않음 — 테스트에만 write 존재",
+      "completion_criteria": [
+        "마무리 단계에서 secs_before_game_end 실제 계산·기록",
+        "또는 MatchPoint 배수 제거 결정",
+        "점수에 반영됨을 outcome 테스트로 고정"
+      ],
+      "status": "proposed",
+      "attempt": 1,
+      "evidence": null,
+      "verdict": null,
+      "invalidation_reason": null,
+      "parent": null,
+      "blocked_by": null,
+      "ungated_attempts": 0,
+      "created_at": "2026-09-03T15:37:13+09:00",
+      "updated_at": "2026-09-03T15:37:13+09:00"
+    }
+  ],
+  "risks": [
+    {
+      "id": "R001",
+      "title": "20개 언어 선택 제공하나 en/ko만 완전(1800키), ja 38%, 나머지 17개 ~22% — 로컬라이즈 약속 미이행",
+      "lens": "other",
+      "severity": "medium",
+      "status": "open",
+      "note": "제품 결정 필요: (a) 선택기를 ko/en/ja로 축소 (b) 미완성 언어에 'beta' 표기 (c) 그대로 두고 fallback 의존. 코드 결함 아님 — 범위 결정",
+      "accept_reason": null,
+      "resolve_evidence": null,
+      "reopen_reason": null,
+      "previous_status": null,
+      "created_at": "2026-09-03T15:37:28+09:00",
+      "updated_at": "2026-09-03T15:37:28+09:00"
+    },
+    {
+      "id": "R002",
+      "title": "YouTube 예약 업로드가 네이티브 publishAt 아닌 60초 로컬 폴링 스케줄러 — 앱 꺼지면 미실행, privacy_status 즉시 적용(사전 private 후 자동 공개 불가)",
+      "lens": "time-axis",
+      "severity": "low",
+      "status": "open",
+      "note": "E5 후 개선 배치. 지금은 UI에 '로컬 스케줄러이며 앱 실행 중이어야 함' 명시로 완화",
+      "accept_reason": null,
+      "resolve_evidence": null,
+      "reopen_reason": null,
+      "previous_status": null,
+      "created_at": "2026-09-03T15:37:28+09:00",
+      "updated_at": "2026-09-03T15:37:28+09:00"
+    },
+    {
+      "id": "R003",
+      "title": "YouTube 콜백 포트 9090 고정 — 점유 시 OAuth 전체 실패. Google Web application 클라이언트라 동적 포트 불가",
+      "lens": "other",
+      "severity": "medium",
+      "status": "open",
+      "note": "공개 배포 후 지원 문의 예상. 포트 충돌 시 명확한 에러 메시지+대안 안내 최소 조치",
+      "accept_reason": null,
+      "resolve_evidence": null,
+      "reopen_reason": null,
+      "previous_status": null,
+      "created_at": "2026-09-03T15:37:28+09:00",
+      "updated_at": "2026-09-03T15:37:28+09:00"
+    }
+  ]
+}

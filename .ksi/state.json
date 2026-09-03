@@ -1,0 +1,68 @@
+{
+  "modules": {
+    "src-tauri/src/recording/live_client.rs": {
+      "status": "risk",
+      "note": "이벤트 파싱·체력·Ace 필드에 '조용히 죽은 신호' 3건(G001-003). 캡처·연결·circuit breaker는 견고",
+      "audit_ref": "G001",
+      "at_sha": "3c84812",
+      "at_module_sha": "d54dfbc",
+      "at": "2026-09-03T15:37:58+09:00"
+    },
+    "src-tauri/src/recording/game_monitor.rs": {
+      "status": "risk",
+      "note": "게임 상태가 bool 에지 감지기 — 디바운스 없음(G004), 로딩→리플레이 오분류(G005), inflight 레이스(G006)",
+      "audit_ref": "G004",
+      "at_sha": "3c84812",
+      "at_module_sha": "d54dfbc",
+      "at": "2026-09-03T15:37:59+09:00"
+    },
+    "src-tauri/src/recording/integration_backend/segment_recorder.rs": {
+      "status": "green",
+      "note": "ddagrab+GDI 폴백·클립윈도우·concat·인코더 상한 하드닝됨. ddagrab+nvenc 로컬 실행 확인. wall-clock 앵커는 시계조정에 취약(low)",
+      "audit_ref": "G001",
+      "at_sha": "3c84812",
+      "at_module_sha": "4add468",
+      "at": "2026-09-03T15:37:59+09:00"
+    },
+    "src-tauri/src/video/auto_composer/caption.rs": {
+      "status": "green",
+      "note": "expansion=none+이스케이프로 % 버그 방어, ko/en 로케일, 테스트 고정",
+      "audit_ref": "G001",
+      "at_sha": "3c84812",
+      "at_module_sha": "d54dfbc",
+      "at": "2026-09-03T15:38:00+09:00"
+    },
+    "supabase/functions/quota + migrations": {
+      "status": "green",
+      "note": "job_id 멱등 consume RPC, service-role 전용, RLS 컬럼레벨 GRANT, SECURITY DEFINER search_path 고정. 정적 가드레일 PASS. SB-01~04(소유권·advisor)는 대표님",
+      "audit_ref": "G001",
+      "at_sha": "3c84812",
+      "at_module_sha": null,
+      "at": "2026-09-03T15:38:01+09:00"
+    },
+    "src-tauri/src/youtube": {
+      "status": "risk",
+      "note": "OAuth(PKCE·state·redirect검증) 견고하나 토큰 회전 미영속화(G010), 스케줄러 Running 고착·취소불가·쿼터 raw JSON(P2)",
+      "audit_ref": "G010",
+      "at_sha": "3c84812",
+      "at_module_sha": "4add468",
+      "at": "2026-09-03T15:38:01+09:00"
+    },
+    "src frontend (IPC/states/i18n)": {
+      "status": "risk",
+      "note": "IPC 계약층 견고(ipcArgs). video onError 누락(G007)·AV1 가짜스위치(G008)·assetProtocol 폴백 갭(G009)·i18n raw코드 노출·17개 언어 미완성(R001)",
+      "audit_ref": "G007",
+      "at_sha": "3c84812",
+      "at_module_sha": null,
+      "at": "2026-09-03T15:38:02+09:00"
+    },
+    "src-tauri/src/updater.rs + auth": {
+      "status": "green",
+      "note": "서명 fail-closed·아티팩트 Rust보유·busy가드·에러코드 i18n. 롤백 없음은 Tauri 구조적 한계(low). auth PII 로그 제거됨(단 entitlement warn에 user_id 잔존 low)",
+      "audit_ref": "G010",
+      "at_sha": "3c84812",
+      "at_module_sha": null,
+      "at": "2026-09-03T15:38:02+09:00"
+    }
+  }
+}
