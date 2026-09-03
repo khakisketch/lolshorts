@@ -128,7 +128,7 @@ core-foundation-sys = "0.8"
 core-video-sys = "0.1"
 
 # Objective-C interop for macOS
-objc2 = "0.5"
+objc2 = "0.6"
 block2 = "0.5"
 
 # Note: objc2-* crates may need to be replaced or version adjusted based on availability
