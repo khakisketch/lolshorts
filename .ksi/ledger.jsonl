@@ -15,3 +15,4 @@
 {"ts": "2026-09-03T15:37:28+09:00", "event": "risk_add", "goal": "R002", "lens": "time-axis", "severity": "low"}
 {"ts": "2026-09-03T15:37:28+09:00", "event": "risk_add", "goal": "R003", "lens": "other", "severity": "medium"}
 {"ts": "2026-09-03T15:49:55+09:00", "event": "registered", "goal": "G013", "status": "proposed", "parent": null}
+{"ts": "2026-09-03T15:50:21+09:00", "event": "risk_resolved", "goal": "R001", "from_status": "open", "reason": null, "evidence_ref": "G013"}

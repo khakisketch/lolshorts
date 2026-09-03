@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "inconnu",
-  "updated_at": "2026-09-03T15:49:55+09:00",
+  "updated_at": "2026-09-03T15:50:21+09:00",
   "goals": [
     {
       "id": "G001",
@@ -252,14 +252,14 @@
       "title": "20개 언어 선택 제공하나 en/ko만 완전(1800키), ja 38%, 나머지 17개 ~22% — 로컬라이즈 약속 미이행",
       "lens": "other",
       "severity": "medium",
-      "status": "open",
+      "status": "resolved",
       "note": "제품 결정 필요: (a) 선택기를 ko/en/ja로 축소 (b) 미완성 언어에 'beta' 표기 (c) 그대로 두고 fallback 의존. 코드 결함 아님 — 범위 결정",
       "accept_reason": null,
-      "resolve_evidence": null,
+      "resolve_evidence": "G013",
       "reopen_reason": null,
-      "previous_status": null,
+      "previous_status": "open",
       "created_at": "2026-09-03T15:37:28+09:00",
-      "updated_at": "2026-09-03T15:37:28+09:00"
+      "updated_at": "2026-09-03T15:50:21+09:00"
     },
     {
       "id": "R002",
