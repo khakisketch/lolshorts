@@ -1,9 +1,27 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::utils::security;
 use crate::AppState;
 use tauri_plugin_dialog::DialogExt;
+
+/// Drop the Windows `\\?\` verbatim prefix that `Path::canonicalize` adds.
+///
+/// Tauri's `assetProtocol.scope` globs resolve `$DATA`/`$TEMP` to plain
+/// `C:\…` paths, so a `\\?\C:\…` staged-media path fails the scope check and
+/// the import preview never renders. Only strip when the prefix is followed by
+/// a drive letter (the safe, non-UNC case).
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        if let Some(rest) = path.to_string_lossy().strip_prefix(r"\\?\") {
+            let bytes = rest.as_bytes();
+            if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+                return PathBuf::from(rest);
+            }
+        }
+    }
+    path.to_path_buf()
+}
 
 const MAX_VIDEO_BYTES: u64 = 50 * 1024 * 1024 * 1024;
 const MAX_AUDIO_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -31,10 +49,11 @@ fn validate_source(source_path: &str, kind: StagedMediaKind) -> Result<PathBuf, 
         StagedMediaKind::Audio => security::validate_audio_path(source_path),
         StagedMediaKind::Image => security::validate_image_path(source_path),
     };
-    validated
+    let canonical = validated
         .map_err(|_| "MEDIA_STAGE_INVALID_SOURCE".to_string())?
         .canonicalize()
-        .map_err(|_| "MEDIA_STAGE_SOURCE_UNAVAILABLE".to_string())
+        .map_err(|_| "MEDIA_STAGE_SOURCE_UNAVAILABLE".to_string())?;
+    Ok(strip_verbatim_prefix(&canonical))
 }
 
 fn size_limit(kind: StagedMediaKind) -> u64 {
@@ -66,11 +85,13 @@ async fn stage_selected_media(
         .ok_or_else(|| "MEDIA_STAGE_INVALID_SOURCE".to_string())?
         .to_string();
 
-    let app_root = state
-        .storage
-        .base_path()
-        .canonicalize()
-        .unwrap_or_else(|_| state.storage.base_path().to_path_buf());
+    let app_root = strip_verbatim_prefix(
+        &state
+            .storage
+            .base_path()
+            .canonicalize()
+            .unwrap_or_else(|_| state.storage.base_path().to_path_buf()),
+    );
     if source.starts_with(&app_root) {
         return Ok(StagedMedia {
             path: source.to_string_lossy().to_string(),
@@ -168,6 +189,24 @@ mod tests {
     fn media_kinds_have_bounded_sizes() {
         assert!(size_limit(StagedMediaKind::Image) < size_limit(StagedMediaKind::Audio));
         assert!(size_limit(StagedMediaKind::Audio) < size_limit(StagedMediaKind::Video));
+    }
+
+    #[test]
+    fn verbatim_prefix_is_dropped_for_drive_paths() {
+        // assetProtocol scope globs never match a `\\?\`-prefixed path.
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\C:\Users\me\clip.mp4")),
+            PathBuf::from(r"C:\Users\me\clip.mp4")
+        );
+        // Plain paths and UNC shares are left untouched.
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"C:\Users\me\clip.mp4")),
+            PathBuf::from(r"C:\Users\me\clip.mp4")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\UNC\server\share\clip.mp4")),
+            PathBuf::from(r"\\?\UNC\server\share\clip.mp4")
+        );
     }
 
     #[test]

@@ -44,7 +44,13 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https: asset: http://asset.localhost; media-src 'self' blob: asset: http://asset.localhost; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$DATA/lolshorts/**"]
+        "scope": [
+          "$DATA/lolshorts/**",
+          "$TEMP/lolshorts-recovery/**",
+          "$TEMP/lolshorts-recordings/**",
+          "$TEMP/lolshorts_auto_edit/**",
+          "$TEMP/lolshorts-*/**"
+        ]
       }
     }
   },
