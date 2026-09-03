@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "inconnu",
-  "updated_at": "2026-09-03T15:50:21+09:00",
+  "updated_at": "2026-09-03T16:15:49+09:00",
   "goals": [
     {
       "id": "G001",
@@ -11,16 +11,16 @@
         "allPlayers는 activePlayer일 때만 유효함을 픽스처 테스트로 고정",
         "실게임 로그에 'Low HP outplay detected' 출현 확인(E5)"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
-      "evidence": null,
+      "evidence": "commit 213a619: active_player.champion_stats + 픽스처 교정 + 회귀테스트. clippy 0, live_client 36 tests. reviewer 배치 검증 대기",
       "verdict": null,
       "invalidation_reason": null,
       "parent": null,
       "blocked_by": null,
-      "ungated_attempts": 0,
+      "ungated_attempts": 1,
       "created_at": "2026-09-03T15:36:44+09:00",
-      "updated_at": "2026-09-03T15:36:44+09:00"
+      "updated_at": "2026-09-03T16:11:33+09:00"
     },
     {
       "id": "G002",
@@ -30,16 +30,16 @@
         "알 수 없는/깨진 이벤트는 warn 후 스킵하고 나머지는 처리",
         "a_non_string_result_does_not_take_down_the_whole_batch 테스트를 '이제 통과'로 갱신"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
-      "evidence": null,
+      "evidence": "commit: deserialize_lenient_events, 741 tests pass. reviewer 배치 검증 대기",
       "verdict": null,
       "invalidation_reason": null,
       "parent": null,
       "blocked_by": null,
-      "ungated_attempts": 0,
+      "ungated_attempts": 1,
       "created_at": "2026-09-03T15:36:44+09:00",
-      "updated_at": "2026-09-03T15:36:44+09:00"
+      "updated_at": "2026-09-03T16:15:49+09:00"
     },
     {
       "id": "G003",
@@ -49,16 +49,16 @@
         "make_named_event 픽스처를 실제 피드 shape(Acer 키)로 교정",
         "recent_kills 폴백은 유지하되 2차로"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
-      "evidence": null,
+      "evidence": "commit 213a619: acer.or(killer_name) + make_named_event 필드 라우팅 + 회귀테스트. reviewer 배치 검증 대기",
       "verdict": null,
       "invalidation_reason": null,
       "parent": null,
       "blocked_by": null,
-      "ungated_attempts": 0,
+      "ungated_attempts": 1,
       "created_at": "2026-09-03T15:36:45+09:00",
-      "updated_at": "2026-09-03T15:36:45+09:00"
+      "updated_at": "2026-09-03T16:11:34+09:00"
     },
     {
       "id": "G004",
@@ -68,7 +68,7 @@
         "check_live_client_basic 단일 타임아웃 실패가 종료를 유발하지 않음",
         "재연결 시 세션 유지 E5 확인"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
       "evidence": null,
       "verdict": null,
@@ -77,7 +77,7 @@
       "blocked_by": null,
       "ungated_attempts": 0,
       "created_at": "2026-09-03T15:36:45+09:00",
-      "updated_at": "2026-09-03T15:36:45+09:00"
+      "updated_at": "2026-09-03T16:11:29+09:00"
     },
     {
       "id": "G005",
@@ -87,7 +87,7 @@
         "게임 모드를 시작 후 재평가하거나 리플레이 판정을 지연",
         "is_spectating 조기 종료 가드 완화"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
       "evidence": null,
       "verdict": null,
@@ -96,7 +96,7 @@
       "blocked_by": null,
       "ungated_attempts": 0,
       "created_at": "2026-09-03T15:36:46+09:00",
-      "updated_at": "2026-09-03T15:36:46+09:00"
+      "updated_at": "2026-09-03T16:11:29+09:00"
     },
     {
       "id": "G006",
@@ -106,7 +106,7 @@
         "wait_for_inflight_clip_tasks가 spawn된 태스크를 놓치지 않음",
         "종료 직전 이벤트 저장 성공 E5 확인"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
       "evidence": null,
       "verdict": null,
@@ -115,7 +115,7 @@
       "blocked_by": null,
       "ungated_attempts": 0,
       "created_at": "2026-09-03T15:36:46+09:00",
-      "updated_at": "2026-09-03T15:36:46+09:00"
+      "updated_at": "2026-09-03T16:11:30+09:00"
     },
     {
       "id": "G007",
@@ -124,7 +124,7 @@
         "VideoPreview/ResultsViewer/AutoEditStoryboard/ClipVault 프리뷰 video에 onError 핸들러+사용자 메시지",
         "H.265 미리보기 불가를 코덱 선택 컨트롤에 경고 표시"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
       "evidence": null,
       "verdict": null,
@@ -133,7 +133,7 @@
       "blocked_by": null,
       "ungated_attempts": 0,
       "created_at": "2026-09-03T15:37:11+09:00",
-      "updated_at": "2026-09-03T15:37:11+09:00"
+      "updated_at": "2026-09-03T16:11:30+09:00"
     },
     {
       "id": "G008",
@@ -142,7 +142,7 @@
         "AV1을 UI에서 제거하거나 실제 av1_nvenc/av1_qsv 경로 배선",
         "매핑되지 않는 코덱 선택 불가"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
       "evidence": null,
       "verdict": null,
@@ -151,7 +151,7 @@
       "blocked_by": null,
       "ungated_attempts": 0,
       "created_at": "2026-09-03T15:37:12+09:00",
-      "updated_at": "2026-09-03T15:37:12+09:00"
+      "updated_at": "2026-09-03T16:11:31+09:00"
     },
     {
       "id": "G009",
@@ -160,7 +160,7 @@
         "폴백 디렉터리를 scope에 포함하거나, 폴백 활성 시 사용자에게 명시 경고+복구 동선",
         "convertFileSrc 실패 감지"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
       "evidence": null,
       "verdict": null,
@@ -169,7 +169,7 @@
       "blocked_by": null,
       "ungated_attempts": 0,
       "created_at": "2026-09-03T15:37:12+09:00",
-      "updated_at": "2026-09-03T15:37:12+09:00"
+      "updated_at": "2026-09-03T16:11:31+09:00"
     },
     {
       "id": "G010",
@@ -178,7 +178,7 @@
         "get_valid_token/refresh_token 성공 직후 save_credentials_for_user 호출",
         "refresh 실패(invalid_grant) 시 자격증명 정리+auth status 반영"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
       "evidence": null,
       "verdict": null,
@@ -187,7 +187,7 @@
       "blocked_by": null,
       "ungated_attempts": 0,
       "created_at": "2026-09-03T15:37:12+09:00",
-      "updated_at": "2026-09-03T15:37:12+09:00"
+      "updated_at": "2026-09-03T16:11:32+09:00"
     },
     {
       "id": "G011",
@@ -215,7 +215,7 @@
         "또는 MatchPoint 배수 제거 결정",
         "점수에 반영됨을 outcome 테스트로 고정"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
       "evidence": null,
       "verdict": null,
@@ -224,7 +224,7 @@
       "blocked_by": null,
       "ungated_attempts": 0,
       "created_at": "2026-09-03T15:37:13+09:00",
-      "updated_at": "2026-09-03T15:37:13+09:00"
+      "updated_at": "2026-09-03T16:11:32+09:00"
     },
     {
       "id": "G013",
@@ -234,7 +234,7 @@
         "fallbackLng en 유지",
         "나머지 로케일 파일은 남기되 선택 불가"
       ],
-      "status": "proposed",
+      "status": "in_progress",
       "attempt": 1,
       "evidence": null,
       "verdict": null,
@@ -243,7 +243,7 @@
       "blocked_by": null,
       "ungated_attempts": 0,
       "created_at": "2026-09-03T15:49:55+09:00",
-      "updated_at": "2026-09-03T15:49:55+09:00"
+      "updated_at": "2026-09-03T16:11:33+09:00"
     }
   ],
   "risks": [

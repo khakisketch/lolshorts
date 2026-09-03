@@ -16,3 +16,18 @@
 {"ts": "2026-09-03T15:37:28+09:00", "event": "risk_add", "goal": "R003", "lens": "other", "severity": "medium"}
 {"ts": "2026-09-03T15:49:55+09:00", "event": "registered", "goal": "G013", "status": "proposed", "parent": null}
 {"ts": "2026-09-03T15:50:21+09:00", "event": "risk_resolved", "goal": "R001", "from_status": "open", "reason": null, "evidence_ref": "G013"}
+{"ts": "2026-09-03T16:11:28+09:00", "event": "started", "goal": "G001"}
+{"ts": "2026-09-03T16:11:28+09:00", "event": "started", "goal": "G002"}
+{"ts": "2026-09-03T16:11:29+09:00", "event": "started", "goal": "G003"}
+{"ts": "2026-09-03T16:11:29+09:00", "event": "started", "goal": "G004"}
+{"ts": "2026-09-03T16:11:29+09:00", "event": "started", "goal": "G005"}
+{"ts": "2026-09-03T16:11:30+09:00", "event": "started", "goal": "G006"}
+{"ts": "2026-09-03T16:11:30+09:00", "event": "started", "goal": "G007"}
+{"ts": "2026-09-03T16:11:31+09:00", "event": "started", "goal": "G008"}
+{"ts": "2026-09-03T16:11:31+09:00", "event": "started", "goal": "G009"}
+{"ts": "2026-09-03T16:11:32+09:00", "event": "started", "goal": "G010"}
+{"ts": "2026-09-03T16:11:32+09:00", "event": "started", "goal": "G012"}
+{"ts": "2026-09-03T16:11:33+09:00", "event": "started", "goal": "G013"}
+{"ts": "2026-09-03T16:11:33+09:00", "event": "completion_attempt", "goal": "G001", "evidence": "commit 213a619: active_player.champion_stats + 픽스처 교정 + 회귀테스트. clippy 0, live_client 36 tests. reviewer 배치 검증 대기"}
+{"ts": "2026-09-03T16:11:34+09:00", "event": "completion_attempt", "goal": "G003", "evidence": "commit 213a619: acer.or(killer_name) + make_named_event 필드 라우팅 + 회귀테스트. reviewer 배치 검증 대기"}
+{"ts": "2026-09-03T16:15:49+09:00", "event": "completion_attempt", "goal": "G002", "evidence": "commit: deserialize_lenient_events, 741 tests pass. reviewer 배치 검증 대기"}
