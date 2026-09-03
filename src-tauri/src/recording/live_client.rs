@@ -1438,7 +1438,12 @@ impl LiveClientMonitor {
                     return None;
                 }
 
-                let mut acing_team = match event.killer_name.as_deref() {
+                // 라이엇 Live Client 는 Ace 를 완성한 플레이어를 `Acer` 키로 싣는다
+                // (→ `event.acer`). 예전에는 `killer_name` 을 읽어 실 피드에서 늘 `None`
+                // 이었고, 그래서 아래 `recent_champion_kills` 폴백만 돌아 마지막 킬이
+                // 적팀이면 우리 팀 에이스가 버려지거나 적 에이스가 클립으로 남았다.
+                let acer_name = event.acer.as_deref().or(event.killer_name.as_deref());
+                let mut acing_team = match acer_name {
                     Some(acer) => {
                         let cache = self.game_state_cache.read().await;
                         cache.data.as_ref().and_then(|data| {
@@ -1594,26 +1599,35 @@ impl LiveClientMonitor {
     /// than the cached value we read here.
     async fn check_low_hp_outplay(&self, player_name: &str) -> bool {
         let cache = self.game_state_cache.read().await;
-        if let Some(ref data) = cache.data {
-            if let Some(player) = data
-                .all_players
-                .iter()
-                .find(|p| same_player(&p.summoner_name, player_name))
-            {
-                let max_hp = player.champion_stats.max_health;
-                let current_hp = player.champion_stats.current_health;
-                if max_hp > 0.0 {
-                    let hp_pct = current_hp / max_hp;
-                    if hp_pct < 0.25 {
-                        info!(
-                            "Low HP outplay detected: {:.0}/{:.0} HP ({:.0}%)",
-                            current_hp,
-                            max_hp,
-                            hp_pct * 100.0
-                        );
-                        return true;
-                    }
-                }
+        let Some(ref data) = cache.data else {
+            return false;
+        };
+
+        // 체력은 **`activePlayer`** 에서만 읽는다 — `allPlayers[]` 에는 `championStats`
+        // 가 없어(라이엇 API 설계) serde 기본값 0.0 이 되고, `capture_moment` 를
+        // 고칠 때 이 경로가 같이 안 고쳐져 `LowHpOutplay` 트리거가 프로덕션에서
+        // 한 번도 발화한 적이 없었다. `player_name` 은 항상 로컬 플레이어
+        // (`self.player_name` = `active_player.summoner_name`)이므로 그대로 읽는다.
+        // 픽스처가 태그 형식을 달리 줄 때만 대비해 이름도 대조한다.
+        if !data.active_player.summoner_name.is_empty()
+            && !same_player(&data.active_player.summoner_name, player_name)
+        {
+            return false;
+        }
+
+        let stats = &data.active_player.champion_stats;
+        let max_hp = stats.max_health;
+        let current_hp = stats.current_health;
+        if max_hp > 0.0 {
+            let hp_pct = current_hp / max_hp;
+            if hp_pct < 0.25 {
+                info!(
+                    "Low HP outplay detected: {:.0}/{:.0} HP ({:.0}%)",
+                    current_hp,
+                    max_hp,
+                    hp_pct * 100.0
+                );
+                return true;
             }
         }
         false
@@ -2257,25 +2271,31 @@ mod tests {
         }
     }
 
-    /// Helper for events whose only relevant field is the actor bound into
-    /// `killer_name` (FirstBlood's `Recipient`, Ace's `Acer` — see the alias
-    /// on the struct field).
+    /// Helper for events whose only relevant field is the acting player. Routes
+    /// the actor into the SAME field the real Live Client payload uses:
+    /// `FirstBlood` → `Recipient`, `Ace` → `Acer`, everything else → `KillerName`.
+    /// (Putting every actor in `killer_name` would let a test pass through a
+    /// fallback branch instead of the real field — the exact "fake green" that
+    /// hid the Ace trigger reading `killer_name` instead of `acer`.)
     fn make_named_event(
         event_id: u32,
         event_time: f32,
         event_name: &str,
         actor: Option<&str>,
     ) -> GameEvent {
-        GameEvent {
+        let actor = actor.map(|a| a.to_string());
+        let mut event = GameEvent {
             event_id,
             event_name: event_name.to_string(),
             event_time,
-            killer_name: actor.map(|a| a.to_string()),
-            victim_name: None,
-            assisters: None,
-            dragon_type: None,
             ..Default::default()
+        };
+        match event_name {
+            "FirstBlood" => event.recipient = actor,
+            "Ace" => event.acer = actor,
+            _ => event.killer_name = actor,
         }
+        event
     }
 
     #[tokio::test]
@@ -2283,7 +2303,9 @@ mod tests {
         let monitor = create_test_monitor();
         let player_name = "TestPlayer";
 
-        // Set up game state cache with player at 15% HP
+        // 체력은 `activePlayer.championStats` 에만 있다(라이엇 API 설계).
+        // `allPlayers[]` 에는 값이 없어 항상 0 이므로, 저체력을 그쪽에 넣는
+        // 픽스처는 실제 피드 shape 와 다르고 트리거를 검증하지 못한다.
         {
             let mut cache = monitor.game_state_cache.write().await;
             cache.update(AllGameData {
@@ -2292,7 +2314,10 @@ mod tests {
                     champion_name: "Yasuo".to_string(),
                     level: 10,
                     current_gold: 3000.0,
-                    champion_stats: ChampionStats::default(),
+                    champion_stats: ChampionStats {
+                        current_health: 150.0,
+                        max_health: 1000.0, // 15% HP
+                    },
                 },
                 all_players: vec![
                     Player {
@@ -2302,10 +2327,8 @@ mod tests {
                         level: 10,
                         scores: Scores::default(),
                         is_dead: false,
-                        champion_stats: ChampionStats {
-                            current_health: 150.0,
-                            max_health: 1000.0, // 15% HP
-                        },
+                        // 실제 피드처럼 비어 있음.
+                        champion_stats: ChampionStats::default(),
                     },
                     Player {
                         summoner_name: "Enemy".to_string(),
@@ -2327,6 +2350,48 @@ mod tests {
         assert_eq!(trigger, Some(EventTrigger::LowHpOutplay));
     }
 
+    /// 저체력이 `allPlayers[]` 에만 있고 `activePlayer` 는 비어 있으면(= 실제 피드
+    /// shape) `LowHpOutplay` 는 발화하면 안 된다. `check_low_hp_outplay` 가 죽은
+    /// `allPlayers[].championStats` 를 읽어 트리거가 프로덕션에서 한 번도 발화하지
+    /// 않던 회귀를 고정한다.
+    #[tokio::test]
+    async fn low_hp_outplay_ignores_all_players_champion_stats() {
+        let monitor = create_test_monitor();
+        let player_name = "TestPlayer";
+        {
+            let mut cache = monitor.game_state_cache.write().await;
+            cache.update(AllGameData {
+                active_player: ActivePlayer {
+                    summoner_name: player_name.to_string(),
+                    champion_stats: ChampionStats::default(), // 실제 피드: 아직 미수신 아님, 그냥 값이 없음이 아니라 여기가 SSOT
+                    ..Default::default()
+                },
+                all_players: vec![Player {
+                    summoner_name: player_name.to_string(),
+                    team: "ORDER".to_string(),
+                    is_dead: false,
+                    // allPlayers 에 championStats 가 생겼다면 이 테스트와
+                    // check_low_hp_outplay / capture_moment 를 함께 갱신할 것.
+                    champion_stats: ChampionStats {
+                        current_health: 50.0,
+                        max_health: 1000.0, // 5% — 그러나 여기서 읽으면 안 된다
+                    },
+                    ..Default::default()
+                }],
+                events: Events::default(),
+                game_data: GameData::default(),
+            });
+        }
+
+        let event = make_kill_event(1, 300.0, player_name, "Enemy", vec![]);
+        let trigger = monitor.detect_trigger(&event, player_name).await;
+        assert_eq!(
+            trigger,
+            Some(EventTrigger::ChampionKill),
+            "activePlayer 체력이 없으면 저체력 판정 없이 일반 킬이어야 한다"
+        );
+    }
+
     #[tokio::test]
     async fn test_detect_no_low_hp_outplay_with_high_hp() {
         let monitor = create_test_monitor();
@@ -2341,7 +2406,10 @@ mod tests {
                     champion_name: "Yasuo".to_string(),
                     level: 10,
                     current_gold: 3000.0,
-                    champion_stats: ChampionStats::default(),
+                    champion_stats: ChampionStats {
+                        current_health: 800.0,
+                        max_health: 1000.0, // 80% HP
+                    },
                 },
                 all_players: vec![Player {
                     summoner_name: player_name.to_string(),
@@ -2350,10 +2418,7 @@ mod tests {
                     level: 10,
                     scores: Scores::default(),
                     is_dead: false,
-                    champion_stats: ChampionStats {
-                        current_health: 800.0,
-                        max_health: 1000.0, // 80% HP
-                    },
+                    champion_stats: ChampionStats::default(),
                 }],
                 events: Events::default(),
                 game_data: GameData::default(),
@@ -2553,6 +2618,59 @@ mod tests {
         let event = make_named_event(1, 700.0, "Ace", Some("Ally"));
         let trigger = monitor.detect_trigger(&event, player_name).await;
         assert_eq!(trigger, Some(EventTrigger::Ace));
+    }
+
+    /// The old code read `event.killer_name`, which is `None` in a real `Ace`
+    /// payload (actor is under `Acer`), so it always fell through to the
+    /// "most recent kill's team" heuristic. When that last kill was the enemy's,
+    /// our own ace was dropped. Lock that `acer` is read first.
+    #[tokio::test]
+    async fn ace_resolves_from_acer_field_not_the_last_kill_team() {
+        let monitor = create_test_monitor();
+        let player_name = "TestPlayer";
+        {
+            let mut cache = monitor.game_state_cache.write().await;
+            cache.update(AllGameData {
+                active_player: ActivePlayer {
+                    summoner_name: player_name.to_string(),
+                    ..Default::default()
+                },
+                all_players: vec![
+                    Player {
+                        summoner_name: player_name.to_string(),
+                        team: "ORDER".to_string(),
+                        ..Default::default()
+                    },
+                    Player {
+                        summoner_name: "Enemy".to_string(),
+                        team: "CHAOS".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                events: Events::default(),
+                game_data: GameData::default(),
+            });
+        }
+
+        // The most recent recorded kill was the ENEMY's — the fallback would
+        // resolve CHAOS and drop our ace.
+        {
+            let mut recent = monitor.recent_champion_kills.lock().await;
+            recent.push((std::time::SystemTime::now(), "CHAOS".to_string()));
+        }
+
+        // Our team's ace: actor is in `Acer`, `KillerName` is absent.
+        let event = make_named_event(1, 701.0, "Ace", Some(player_name));
+        assert!(
+            event.killer_name.is_none(),
+            "실 피드처럼 KillerName 은 비어 있어야 한다"
+        );
+        let trigger = monitor.detect_trigger(&event, player_name).await;
+        assert_eq!(
+            trigger,
+            Some(EventTrigger::Ace),
+            "Acer 로 우리 팀 에이스를 인식해야 한다 — last-kill 폴백에 넘어가면 안 된다"
+        );
     }
 
     #[tokio::test]
