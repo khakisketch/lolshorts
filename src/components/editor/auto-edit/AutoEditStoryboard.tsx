@@ -77,6 +77,7 @@ export function AutoEditStoryboard({
     hasError: previewFailed,
     handleError: handlePreviewError,
     clearError: clearPreviewError,
+    checkDecodable,
   } = useVideoPreviewError();
 
   // A newly selected clip should get a clean preview, not the previous clip's
@@ -253,6 +254,7 @@ export function AutoEditStoryboard({
               controls
               preload="metadata"
               onError={handlePreviewError}
+              onLoadedMetadata={(e) => checkDecodable(e.currentTarget)}
             />
             {previewFailed && (
               <VideoPreviewError

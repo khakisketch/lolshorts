@@ -64,6 +64,7 @@ export function VideoPlayer({
     hasError,
     handleError: markError,
     clearError,
+    checkDecodable,
   } = useVideoPreviewError();
 
   // Format time helper
@@ -163,6 +164,7 @@ export function VideoPlayer({
     if (!video) return;
 
     const handleLoadedMetadata = () => {
+      checkDecodable(video);
       setDuration(video.duration);
       setIsLoading(false);
     };
@@ -196,7 +198,7 @@ export function VideoPlayer({
       video.removeEventListener("ended", handleEnded);
       video.removeEventListener("error", handleError);
     };
-  }, [t, markError]);
+  }, [t, markError, checkDecodable]);
 
   // A new source starts from a clean slate — drop any prior error overlay and
   // show the loading state again.

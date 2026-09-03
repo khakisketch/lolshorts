@@ -19,7 +19,8 @@ export function VideoPreview() {
   const [isMuted, setIsMuted] = useState(false);
   const [currentVideoTime, setCurrentVideoTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const { hasError, handleError, clearError } = useVideoPreviewError();
+  const { hasError, handleError, clearError, checkDecodable } =
+    useVideoPreviewError();
 
   const {
     selectedClipId,
@@ -100,6 +101,7 @@ export function VideoPreview() {
 
   const handleLoadedMetadata = useCallback(() => {
     if (videoRef.current) {
+      checkDecodable(videoRef.current);
       setDuration(videoRef.current.duration);
       // Start playback position at the trim-in point rather than 0.
       if (trimStart > 0) {
@@ -109,7 +111,7 @@ export function VideoPreview() {
     }
     // Only re-run when the clip (and thus trimStart) actually changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClip]);
+  }, [selectedClip, checkDecodable]);
 
   const handlePlayPause = useCallback(() => {
     if (isPlaying) {

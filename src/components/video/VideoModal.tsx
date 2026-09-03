@@ -20,6 +20,12 @@ interface VideoModalProps {
   src: string;
   title?: string;
   autoPlay?: boolean;
+  /**
+   * Absolute clip path (pre-`convertFileSrc`). Enables the "open file"
+   * affordance on the load-error overlay — the home clip preview is the main
+   * place a user meets an un-previewable clip.
+   */
+  filePath?: string | null;
 }
 
 export function VideoModal({
@@ -28,6 +34,7 @@ export function VideoModal({
   src,
   title,
   autoPlay = false,
+  filePath,
 }: VideoModalProps) {
   const [focusElement, setFocusElement] = useState<HTMLElement | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -83,6 +90,7 @@ export function VideoModal({
         <div className="flex h-full min-h-0 flex-col">
           <VideoPlayer
             src={src}
+            filePath={filePath}
             title={title}
             autoPlay={autoPlay}
             onClose={onClose}

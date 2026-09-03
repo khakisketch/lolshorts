@@ -61,6 +61,7 @@ export function Home() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  const [videoFilePath, setVideoFilePath] = useState<string | null>(null);
   const [videoTitle, setVideoTitle] = useState("");
 
   /**
@@ -421,6 +422,7 @@ export function Home() {
                   onToggle={() => toggle(clip.file_path)}
                   onPlay={() => {
                     setVideoSrc(convertFileSrc(clip.file_path));
+                    setVideoFilePath(clip.file_path);
                     setVideoTitle(text);
                   }}
                 />
@@ -475,8 +477,12 @@ export function Home() {
 
       <VideoModal
         isOpen={videoSrc !== null}
-        onClose={() => setVideoSrc(null)}
+        onClose={() => {
+          setVideoSrc(null);
+          setVideoFilePath(null);
+        }}
         src={videoSrc ?? ""}
+        filePath={videoFilePath}
         title={videoTitle}
       />
     </div>

@@ -79,5 +79,20 @@ export function useVideoPreviewError() {
   const [hasError, setHasError] = useState(false);
   const handleError = useCallback(() => setHasError(true), []);
   const clearError = useCallback(() => setHasError(false), []);
-  return { hasError, handleError, clearError };
+  /**
+   * Call from `onLoadedMetadata`. Chromium/WebView2 has no HEVC decoder, so an
+   * H.265 clip often does NOT fire `error` — it demuxes the AAC audio track and
+   * skips the video, leaving working controls over a black frame. A decoded
+   * video stream always reports a non-zero `videoWidth`; zero means the frame
+   * will never paint, which is the same dead end as a load failure.
+   */
+  const checkDecodable = useCallback(
+    (video: HTMLVideoElement | null | undefined) => {
+      if (video && video.readyState >= 1 && video.videoWidth === 0) {
+        setHasError(true);
+      }
+    },
+    [],
+  );
+  return { hasError, handleError, clearError, checkDecodable };
 }

@@ -612,7 +612,8 @@ function HighlightPlayer({
 }) {
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { hasError, handleError, clearError } = useVideoPreviewError();
+  const { hasError, handleError, clearError, checkDecodable } =
+    useVideoPreviewError();
 
   const handleRetry = useCallback(() => {
     clearError();
@@ -634,6 +635,7 @@ function HighlightPlayer({
           className="max-h-[60vh] w-full bg-black object-contain"
           src={convertFileSrc(result.output_path)}
           onError={handleError}
+          onLoadedMetadata={(e) => checkDecodable(e.currentTarget)}
         />
         {hasError && (
           <VideoPreviewError
