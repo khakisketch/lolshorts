@@ -23,6 +23,8 @@ import {
   Search,
   Scissors,
   Sparkles,
+  Square,
+  SquareCheck,
   Trash2,
 } from "lucide-react";
 import { storageApi } from "@/api/storage";
@@ -764,11 +766,11 @@ export function ClipVault({
                     className="mb-3 last:mb-0"
                   >
                     <div className="overflow-hidden rounded-lg border border-white/10 bg-black/20">
-                      <div className="flex items-stretch gap-1 p-1">
+                      <div className="flex flex-col gap-0.5 p-1">
                         <button
                           type="button"
                           id={`clip-vault-trigger-${group.game_id}`}
-                          className="flex min-h-[64px] min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gaming-cyan"
+                          className="flex min-h-[56px] w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gaming-cyan"
                           onClick={() => toggleGameExpanded(group.game_id)}
                           aria-expanded={isExpanded}
                           aria-controls={`clip-vault-content-${group.game_id}`}
@@ -796,10 +798,10 @@ export function ClipVault({
                                 </span>
                               )}
                             </h3>
-                            <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-                              <span className="inline-flex items-center gap-1">
+                            <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                              <span className="inline-flex items-center gap-1 whitespace-nowrap">
                                 <Calendar
-                                  className="h-3 w-3"
+                                  className="h-3 w-3 shrink-0"
                                   aria-hidden="true"
                                 />
                                 {group.game?.start_time
@@ -844,9 +846,9 @@ export function ClipVault({
                             )}
                           </span>
                         </button>
-                        <div className="flex shrink-0 items-center gap-0.5">
+                        <div className="flex items-center gap-0.5 pl-6">
                           <Button
-                            size="sm"
+                            size="icon"
                             variant="ghost"
                             onClick={() => toggleGroup(group)}
                             aria-pressed={allSelected}
@@ -861,9 +863,17 @@ export function ClipVault({
                                 : t("results.clips.selectGame")
                             }
                           >
-                            {allSelected
-                              ? t("results.clips.clearGameSelection")
-                              : t("results.clips.selectGame")}
+                            {allSelected ? (
+                              <SquareCheck
+                                className="h-4 w-4 text-gaming-cyan"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <Square
+                                className="h-4 w-4"
+                                aria-hidden="true"
+                              />
+                            )}
                           </Button>
                           <Button
                             size="icon"
